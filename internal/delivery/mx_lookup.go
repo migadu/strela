@@ -1,0 +1,224 @@
+package delivery
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"time"
+
+	"fune/internal/config"
+	"fune/internal/queue"
+
+	"go.uber.org/zap"
+)
+
+// MXLookup handles MX record lookups with caching
+type MXLookup struct {
+	queue       *queue.Queue
+	dnsResolver *DNSResolver
+	logger      *zap.Logger
+	cacheTTL    time.Duration // MX cache TTL (for successful lookups)
+	negativeTTL time.Duration // Negative cache TTL (for failures)
+}
+
+// MXRecord represents a single MX record
+type MXRecord struct {
+	Host     string `json:"host"`
+	Priority uint16 `json:"priority"`
+}
+
+// NewMXLookup creates a new MX lookup service
+func NewMXLookup(q *queue.Queue, cfg *config.DeliveryConfig, logger *zap.Logger) *MXLookup {
+	return &MXLookup{
+		queue:       q,
+		dnsResolver: NewDNSResolver(cfg, logger),
+		logger:      logger,
+		cacheTTL:    time.Duration(cfg.MXCacheTTLSeconds) * time.Second,
+		negativeTTL: time.Duration(cfg.DNSCacheNegativeTTL) * time.Second,
+	}
+}
+
+// Lookup performs MX lookup for a domain with caching
+func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, error) {
+	// Try cache first
+	cached, err := m.getFromCache(domain)
+	if err == nil && cached != nil {
+		m.logger.Debug("MX cache hit",
+			zap.String("domain", domain),
+			zap.Int("records", len(cached)))
+		// Ensure cached records are sorted by priority
+		sort.Slice(cached, func(i, j int) bool {
+			return cached[i].Priority < cached[j].Priority
+		})
+		return cached, nil
+	}
+
+	// Cache miss - perform DNS lookup
+	m.logger.Debug("MX cache miss, performing DNS lookup",
+		zap.String("domain", domain))
+
+	records, err := m.lookupDNS(ctx, domain)
+	if err != nil {
+		m.logger.Error("MX lookup failed",
+			zap.String("domain", domain),
+			zap.Error(err))
+		return nil, err
+	}
+
+	// Sort by priority (lower is higher priority)
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Priority < records[j].Priority
+	})
+
+	// Store in cache
+	if err := m.storeInCache(domain, records); err != nil {
+		m.logger.Warn("failed to cache MX records",
+			zap.String("domain", domain),
+			zap.Error(err))
+	}
+
+	m.logger.Info("MX lookup successful",
+		zap.String("domain", domain),
+		zap.Int("records", len(records)))
+
+	return records, nil
+}
+
+// lookupDNS performs the actual DNS MX lookup using custom resolver
+func (m *MXLookup) lookupDNS(ctx context.Context, domain string) ([]*MXRecord, error) {
+	// Use custom DNS resolver with timeout
+	mxRecords, err := m.dnsResolver.LookupMX(ctx, domain)
+	if err != nil {
+		// Store negative result in cache
+		m.storeNegativeCache(domain)
+		return nil, fmt.Errorf("DNS lookup failed: %w", err)
+	}
+
+	if len(mxRecords) == 0 {
+		m.storeNegativeCache(domain)
+		return nil, fmt.Errorf("no MX records found for domain %s", domain)
+	}
+
+	records := make([]*MXRecord, len(mxRecords))
+	for i, mx := range mxRecords {
+		records[i] = &MXRecord{
+			Host:     mx.Host,
+			Priority: mx.Pref,
+		}
+	}
+
+	return records, nil
+}
+
+// storeNegativeCache stores a negative DNS response with shorter TTL
+func (m *MXLookup) storeNegativeCache(domain string) {
+	// Store empty result with negative TTL
+	emptyRecords := []*MXRecord{}
+	recordsJSON, _ := json.Marshal(emptyRecords)
+
+	// Use negative TTL (shorter) for failed lookups
+	ttlSeconds := int(m.negativeTTL.Seconds())
+	if err := m.queue.StoreMXCache(domain, string(recordsJSON), ttlSeconds); err != nil {
+		m.logger.Warn("failed to cache negative DNS response",
+			zap.String("domain", domain),
+			zap.Error(err))
+	} else {
+		m.logger.Debug("cached negative DNS response",
+			zap.String("domain", domain),
+			zap.Int("ttl", ttlSeconds))
+	}
+}
+
+// getFromCache retrieves MX records from cache
+func (m *MXLookup) getFromCache(domain string) ([]*MXRecord, error) {
+	recordsJSON, cachedAt, ttlSeconds, err := m.queue.GetMXCache(domain)
+	if err != nil {
+		return nil, err // Cache miss
+	}
+
+	// Parse cached_at timestamp (SQLite CURRENT_TIMESTAMP uses RFC3339)
+	cached, err := time.Parse(time.RFC3339, cachedAt)
+	if err != nil {
+		// Try alternative format for backwards compatibility
+		cached, err = time.Parse("2006-01-02 15:04:05", cachedAt)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Check if cache is expired
+	if time.Since(cached) > time.Duration(ttlSeconds)*time.Second {
+		m.logger.Debug("MX cache expired",
+			zap.String("domain", domain),
+			zap.Duration("age", time.Since(cached)))
+		return nil, fmt.Errorf("cache expired")
+	}
+
+	// Parse JSON records
+	var records []*MXRecord
+	if err := json.Unmarshal([]byte(recordsJSON), &records); err != nil {
+		return nil, err
+	}
+
+	return records, nil
+}
+
+// storeInCache stores MX records in cache
+func (m *MXLookup) storeInCache(domain string, records []*MXRecord) error {
+	recordsJSON, err := json.Marshal(records)
+	if err != nil {
+		return err
+	}
+
+	return m.queue.StoreMXCache(domain, string(recordsJSON), int(m.cacheTTL.Seconds()))
+}
+
+// InvalidateCache removes a domain from cache
+func (m *MXLookup) InvalidateCache(domain string) error {
+	err := m.queue.InvalidateMXCache(domain)
+	if err != nil {
+		m.logger.Error("failed to invalidate cache",
+			zap.String("domain", domain),
+			zap.Error(err))
+		return err
+	}
+
+	m.logger.Debug("cache invalidated",
+		zap.String("domain", domain))
+
+	return nil
+}
+
+// CleanupExpiredCache removes expired entries from cache
+func (m *MXLookup) CleanupExpiredCache() (int, error) {
+	rowsAffected, err := m.queue.CleanupExpiredMXCache()
+	if err != nil {
+		return 0, err
+	}
+
+	if rowsAffected > 0 {
+		m.logger.Info("cleaned up expired MX cache entries",
+			zap.Int64("count", rowsAffected))
+	}
+
+	return int(rowsAffected), nil
+}
+
+// ReloadConfig updates DNS resolver configuration (hot reload)
+func (m *MXLookup) ReloadConfig(newConfig *config.DeliveryConfig) error {
+	m.logger.Info("reloading DNS resolver configuration")
+
+	// Update cache TTLs
+	m.cacheTTL = time.Duration(newConfig.MXCacheTTLSeconds) * time.Second
+	m.negativeTTL = time.Duration(newConfig.DNSCacheNegativeTTL) * time.Second
+
+	// Recreate DNS resolver with new settings
+	m.dnsResolver = NewDNSResolver(newConfig, m.logger)
+
+	m.logger.Info("DNS resolver configuration reloaded",
+		zap.Duration("cache_ttl", m.cacheTTL),
+		zap.Duration("negative_ttl", m.negativeTTL))
+
+	return nil
+}

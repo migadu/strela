@@ -1,0 +1,91 @@
+# Fune SMTP Delivery Service Configuration
+#
+# Hot Reload: Send SIGHUP signal to reload configuration without downtime
+#   kill -HUP <pid>  OR  systemctl reload fune  OR  fune-admin reload
+#
+# Reloadable: source_ips, ip_selection, rate limits, circuit breaker, DNS, TLS certs, HTTP timeouts
+# Non-reloadable: database_path, listen address, worker_count, webhook_url (require restart)
+
+[server]
+pid_file = "fune.pid"  # Path to PID file for process management
+
+[http]
+listen = ":8080"
+auth_token = "your-secret-token-here"  # Leave empty to disable authentication
+max_body_size_bytes = 36700160         # 35 MB - prevents DoS from large requests
+read_timeout_seconds = 30              # Maximum time to read request (default: 30s) [HOT RELOAD]
+write_timeout_seconds = 30             # Maximum time to write response (default: 30s) [HOT RELOAD]
+idle_timeout_seconds = 120             # Maximum idle time for keep-alive (default: 120s) [HOT RELOAD]
+
+# TLS/HTTPS configuration [CERTIFICATES AUTO-RELOAD ON EACH CONNECTION]
+tls_enabled = false                    # Enable HTTPS with TLS
+tls_cert_file = "/path/to/cert.pem"    # TLS certificate file (required if tls_enabled)
+tls_key_file = "/path/to/key.pem"      # TLS private key file (required if tls_enabled)
+# Example with Let's Encrypt:
+# tls_cert_file = "/etc/letsencrypt/live/example.com/fullchain.pem"
+# tls_key_file = "/etc/letsencrypt/live/example.com/privkey.pem"
+# Note: Certificates reload automatically - just replace files, no SIGHUP needed!
+
+# Metrics configuration
+metrics_enabled = true                 # Enable Prometheus metrics endpoint (recommended for production)
+metrics_path = "/metrics"              # Path for metrics endpoint (default: /metrics)
+
+[queue]
+database_path = "./queue.db"    # Each instance has its own database
+worker_count = 10               # Concurrent delivery workers per instance
+batch_size = 5                  # Messages to process per worker iteration
+cleanup_interval_seconds = 60   # How often to check for expired messages
+poll_interval_seconds = 30      # Fallback poll interval (workers are notified immediately)
+
+[delivery]
+# Multiple source IPs for outbound delivery (supports both IPv4 and IPv6) [HOT RELOAD]
+# IPv6 addresses should be in standard notation
+source_ips = ["192.168.1.100", "192.168.1.101", "2001:db8::1"]
+ip_selection = "round-robin"   # Options: "round-robin", "random", "hash-domain" [HOT RELOAD]
+# Note: Delivery attempts IPv6 first, then falls back to IPv4
+
+# MX lookup and connection settings
+mx_cache_ttl_seconds = 3600        # Cache MX records for 1 hour (successful lookups)
+connection_timeout_seconds = 30
+smtp_timeout_seconds = 60
+max_ips_per_mx = 5                 # Maximum IPs to try per MX host (protects against malicious multihomed hosts)
+
+# Rate limiting per destination domain (prevents spam-like behavior)
+min_delivery_interval_seconds = 2  # Minimum seconds between deliveries to same domain
+throttle_retry_delay_seconds = 5   # Retry delay for rate-limited messages
+
+# Circuit breaker configuration (stops accepting requests during delivery failures)
+circuit_breaker_enabled = true            # Enable circuit breaker (recommended for production)
+circuit_breaker_failure_threshold = 5     # Consecutive local failures before opening circuit
+circuit_breaker_success_threshold = 2     # Consecutive successes in half-open to close circuit
+circuit_breaker_open_timeout_seconds = 60 # Seconds to wait before trying half-open state
+
+# DNS resolver configuration
+# Custom DNS servers for MX lookups (optional, uses system default if not specified)
+# Supports both IPv4 and IPv6 DNS servers (IPv6 must use bracket notation)
+dns_resolvers = ["8.8.8.8:53", "[2001:4860:4860::8888]:53"]  # Google DNS (IPv4 and IPv6)
+# dns_resolvers = ["1.1.1.1:53", "[2606:4700:4700::1111]:53"]  # Cloudflare DNS (IPv4 and IPv6)
+# dns_resolvers = []  # Empty to use system default resolver
+dns_timeout_seconds = 5            # Timeout for individual DNS queries
+dns_cache_negative_ttl = 60        # Cache failed lookups (NXDOMAIN) for 1 minute
+# Note: DNS resolver automatically queries both AAAA (IPv6) and A (IPv4) records
+
+# Retry configuration
+max_message_age_hours = 48
+initial_retry_delay_seconds = 300      # 5 minutes
+max_retry_delay_seconds = 43200        # 12 hours
+backoff_multiplier = 2.0
+greylist_retry_delay_seconds = 120     # 2 minutes for 421 responses
+
+[callbacks]
+webhook_url = "https://worker.example.com/api/delivery-event"
+auth_token = "webhook-secret-token"
+timeout_seconds = 10
+max_callback_age_hours = 48            # Maximum age before giving up (same as message age)
+initial_retry_delay_seconds = 30       # Initial retry delay (30 seconds)
+max_retry_delay_seconds = 3600         # Maximum retry delay (1 hour) - caps exponential backoff
+backoff_multiplier = 2.0               # Exponential backoff multiplier (doubles each retry)
+batch_size = 10                        # Callbacks to process per iteration
+
+# Callback retry pattern: 30s, 60s, 120s, 240s, 480s, 960s, 1800s, 3600s (max), ...
+# Total retries depend on max_callback_age_hours - retries until age exceeds limit
