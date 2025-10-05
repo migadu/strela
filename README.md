@@ -6,11 +6,17 @@ A production-ready, queue-based SMTP delivery service with direct MX delivery, r
 
 - **Queue-Based Architecture**: Accepts messages via HTTP, returns immediately (202 Accepted), processes in background
 - **Direct MX Delivery**: Bypasses SMTP relay, delivers directly to recipient's MX servers
-- **Multiple Source IPs**: Rotate through multiple outbound IPs with configurable strategies
+- **DKIM Signing**: Optional DKIM signature support with 1024/2048-bit RSA keys
+- **Multiple Source IPs**: Rotate through multiple outbound IPs with configurable strategies (round-robin, random, hash-domain)
 - **Exponential Backoff Retry**: Intelligent retry with 5min → 12h cap over 48 hours
-- **Webhook Callbacks**: Notifies CloudFlare Worker on all terminal states (delivered, hard_bounce, temp_expired, expired)
-- **Comprehensive Logging**: Structured JSON logging with zap
+- **Circuit Breaker**: Automatic health monitoring and graceful degradation
+- **Hot Reload**: Configuration reload without downtime (SIGHUP)
+- **Webhook Callbacks**: Notifies webhook URL on all terminal states with exponential backoff retry
+- **Panic Recovery**: Comprehensive panic handling to prevent server crashes
+- **Prometheus Metrics**: Built-in metrics endpoint for monitoring
+- **Console Logging**: Beautiful color-coded console output with structured logging
 - **Graceful Shutdown**: Completes in-flight deliveries before shutting down
+- **Admin CLI**: Management tool for queue inspection and server control
 - **Shared-Nothing**: Each instance has its own SQLite database, scales horizontally
 
 ## Architecture
@@ -36,16 +42,51 @@ Terminal States:
 ```
 fune/
 ├── cmd/
-│   └── fune-server/          # Main application entry point
+│   ├── fune-server/          # Main application entry point
+│   └── fune-admin/           # Admin CLI tool
 ├── internal/
+│   ├── admin/                # Admin operations
 │   ├── callback/             # Webhook callback system
-│   ├── config/               # Configuration management
-│   ├── delivery/             # SMTP delivery engine
+│   ├── config/               # Configuration management (hot reload)
+│   ├── delivery/             # SMTP delivery engine with circuit breaker
+│   ├── dkim/                 # DKIM signing support
 │   ├── handler/              # HTTP request handlers
+│   ├── metrics/              # Prometheus metrics
 │   ├── queue/                # SQLite queue operations
+│   ├── recovery/             # Panic recovery utilities
 │   └── worker/               # Background queue processor
 ├── integration_test.go       # Integration tests
 └── config.toml.example       # Example configuration
+```
+
+## Quick Start
+
+```bash
+# Build
+make all
+
+# Copy example config
+cp config.toml.example config.toml
+
+# Edit config with your settings
+nano config.toml
+
+# Run server
+./fune-server
+
+# Check status (in another terminal)
+./fune-admin queue
+
+# Send a test message
+curl -X POST http://localhost:8080/v1/messages \
+  -H "Authorization: Bearer your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": "sender@example.com",
+    "to": "recipient@example.com",
+    "subject": "Test",
+    "text": "Hello World"
+  }'
 ```
 
 ## Installation
@@ -57,20 +98,19 @@ cd fune
 # Install dependencies
 go mod download
 
-# Copy example config
-cp config.toml.example config.toml
+# Build all binaries
+make all
 
-# Edit config with your settings
-nano config.toml
+# This creates:
+# - fune-server (main server)
+# - fune-admin (admin CLI)
 
-# Build
-go build -o bin/fune-server ./cmd/fune-server
-
-# Run
-./bin/fune-server
+# Check versions
+./fune-server --version
+./fune-admin version
 
 # Run tests
-go test -v ./integration_test.go
+go test -v ./...
 ```
 
 ## Configuration
@@ -125,8 +165,42 @@ retry_delay_seconds = 30
   "to": "recipient@example.com",
   "subject": "Test Subject",
   "text": "Plain text body",
-  "html": "<p>HTML body</p>"
+  "html": "<p>HTML body</p>",
+  "dkim_private_key": "-----BEGIN RSA PRIVATE KEY-----\n...",
+  "dkim_selector": "default",
+  "dkim_domain": "example.com"
 }
+```
+
+**DKIM fields (optional):**
+- `dkim_private_key`: PEM-encoded RSA private key (1024 or 2048 bits, PKCS#1 or PKCS#8)
+- `dkim_selector`: DKIM selector (e.g., "default", "mail")
+- `dkim_domain`: Domain for DKIM signature (defaults to sender's domain if omitted)
+
+**DKIM Example:**
+```bash
+# Generate DKIM key pair
+openssl genrsa -out dkim_private.pem 2048
+openssl rsa -in dkim_private.pem -pubout -out dkim_public.pem
+
+# Extract public key for DNS (remove headers and join lines)
+sed '/^-----/d' dkim_public.pem | tr -d '\n'
+
+# Add DNS TXT record:
+# default._domainkey.example.com  TXT  "v=DKIM1; k=rsa; p=MIIBIjANB..."
+
+# Send with DKIM signature
+curl -X POST http://localhost:8080/v1/messages \
+  -H "Authorization: Bearer your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": "sender@example.com",
+    "to": "recipient@example.com",
+    "subject": "DKIM Signed",
+    "text": "This email is DKIM signed",
+    "dkim_private_key": "'"$(cat dkim_private.pem)"'",
+    "dkim_selector": "default"
+  }'
 ```
 
 **Form Request:**
@@ -259,20 +333,42 @@ Three strategies available:
 
 ## Monitoring
 
-All events are logged in structured JSON format:
+### Logging
 
-```json
-{
-  "level":"info",
-  "ts":1705315800.123,
-  "msg":"message delivered successfully",
-  "message_id":"msg_679d8a4c2f4h3k9d2j",
-  "to":"recipient@example.com",
-  "mx_host":"mx1.example.com",
-  "source_ip":"192.168.1.100",
-  "attempts":1,
-  "duration_ms":1523
-}
+Console output with color-coded log levels:
+
+```
+2025-10-05 22:47:41  INFO   fune-server/main.go:58   starting fune SMTP delivery service  {"version": "v1.0.0", "commit": "abc123"}
+2025-10-05 22:47:41  INFO   delivery/delivery.go:138 message delivered successfully  {"message_id": "msg_abc", "to": "user@example.com", "mx_host": "mx1.example.com", "attempts": 1}
+2025-10-05 22:47:42  WARN   worker/worker.go:201     temporary delivery failure, will retry  {"message_id": "msg_xyz", "error": "mailbox busy"}
+```
+
+### Prometheus Metrics
+
+Available at `/metrics` endpoint:
+
+- `fune_queue_size` - Current queue size
+- `fune_delivery_attempts_total` - Total delivery attempts by outcome
+- `fune_delivery_duration_seconds` - Delivery duration histogram
+- `fune_circuit_breaker_state` - Circuit breaker state (0=closed, 1=open, 2=half-open)
+
+### Admin CLI
+
+```bash
+# Queue statistics
+./fune-admin queue -db queue.db
+
+# Top domains in queue
+./fune-admin queue-domains -db queue.db
+
+# Recent failures
+./fune-admin failures -db queue.db
+
+# Reload configuration
+./fune-admin reload -pid fune.pid
+
+# Get version
+./fune-admin version
 ```
 
 ## Deployment
@@ -335,7 +431,7 @@ sudo systemctl status fune
 - Proper DNS setup:
   - PTR (reverse DNS) records for all source IPs
   - SPF records for sender domains
-  - DKIM signing (future enhancement)
+  - DKIM DNS records (if using DKIM signing)
 
 ## Testing
 
@@ -351,7 +447,12 @@ Run with coverage:
 go test -v -cover ./...
 ```
 
-Current test coverage: **127 unit tests** across all components.
+Current test coverage: **130+ unit tests** across all components including DKIM, panic recovery, and circuit breaker.
+
+Run with race detector:
+```bash
+go test -race ./...
+```
 
 ## License
 

@@ -1,5 +1,21 @@
-worker/*.db*
-bin/*
-logs/*
+# Build artifacts
 fune-server
 fune-admin
+fune-linux-amd64
+fune-admin-linux-amd64
+fune-freebsd-amd64
+fune-admin-freebsd-amd64
+bin/*
+
+# Runtime files
+*.db
+*.db-*
+*.pid
+logs/*
+
+# Config (use config.toml.example as template)
+config.toml
+
+# Development
+*.pem
+*.key
