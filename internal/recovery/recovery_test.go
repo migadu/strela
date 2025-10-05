@@ -11,6 +11,24 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// safeBuffer is a thread-safe bytes.Buffer wrapper
+type safeBuffer struct {
+	buf bytes.Buffer
+	mu  sync.Mutex
+}
+
+func (sb *safeBuffer) Write(p []byte) (n int, err error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.Write(p)
+}
+
+func (sb *safeBuffer) String() string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.String()
+}
+
 func TestRecoverPanic(t *testing.T) {
 	// Create a logger that writes to a buffer
 	var buf bytes.Buffer
@@ -38,9 +56,9 @@ func TestRecoverPanic(t *testing.T) {
 }
 
 func TestSafeGo(t *testing.T) {
-	var buf bytes.Buffer
+	buf := &safeBuffer{}
 	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-	core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zapcore.DebugLevel)
+	core := zapcore.NewCore(encoder, zapcore.AddSync(buf), zapcore.DebugLevel)
 	logger := zap.New(core)
 
 	var wg sync.WaitGroup
@@ -53,9 +71,14 @@ func TestSafeGo(t *testing.T) {
 	})
 
 	wg.Wait()
-	time.Sleep(100 * time.Millisecond) // Give logger time to flush
 
-	// Check that panic was logged
+	// Sync logger to ensure all log entries are flushed
+	logger.Sync()
+
+	// Small sleep to ensure all writes complete
+	time.Sleep(10 * time.Millisecond)
+
+	// Check that panic was logged (thread-safe read)
 	logOutput := buf.String()
 	if !strings.Contains(logOutput, "panic recovered") {
 		t.Errorf("Expected 'panic recovered' in log, got: %s", logOutput)

@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fune/internal/config"
@@ -598,7 +599,7 @@ func extractSMTPError(err error) (int, string) {
 type IPRotator struct {
 	ips      []string
 	strategy string
-	counter  int
+	counter  uint32 // atomic counter for round-robin
 	random   *rand.Rand
 }
 
@@ -624,8 +625,9 @@ func (r *IPRotator) SelectIP(domain string) string {
 
 	switch r.strategy {
 	case "round-robin":
-		ip := r.ips[r.counter%len(r.ips)]
-		r.counter++
+		// Use atomic operations for thread-safe counter
+		count := atomic.AddUint32(&r.counter, 1) - 1
+		ip := r.ips[int(count)%len(r.ips)]
 		return ip
 
 	case "random":
@@ -640,8 +642,8 @@ func (r *IPRotator) SelectIP(domain string) string {
 
 	default:
 		// Default to round-robin
-		ip := r.ips[r.counter%len(r.ips)]
-		r.counter++
+		count := atomic.AddUint32(&r.counter, 1) - 1
+		ip := r.ips[int(count)%len(r.ips)]
 		return ip
 	}
 }

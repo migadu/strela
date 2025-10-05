@@ -23,6 +23,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Version information, injected at build time
@@ -43,8 +44,12 @@ func main() {
 		fmt.Printf("  built:  %s\n", date)
 		os.Exit(0)
 	}
-	// Initialize logger
-	logger, err := zap.NewProduction()
+	// Initialize console logger with human-readable format
+	loggerConfig := zap.NewDevelopmentConfig()
+	loggerConfig.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05")
+	loggerConfig.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+
+	logger, err := loggerConfig.Build()
 	if err != nil {
 		panic("failed to initialize logger: " + err.Error())
 	}
