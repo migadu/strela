@@ -3,7 +3,11 @@ package main_test
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +23,7 @@ import (
 	"fune/internal/callback"
 	"fune/internal/config"
 	"fune/internal/delivery"
+	"fune/internal/dkim"
 	"fune/internal/handler"
 	"fune/internal/queue"
 	"fune/internal/worker"
@@ -48,12 +53,12 @@ func TestFullMessageFlow(t *testing.T) {
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
 		IPSelection:               "round-robin",
-		MXCacheTTLSeconds:        3600,
-		ConnectionTimeoutSeconds: 30,
-		SMTPTimeoutSeconds:       60,
-		InitialRetryDelaySeconds: 300,
-		MaxRetryDelaySeconds:     43200,
-		BackoffMultiplier:        2.0,
+		MXCacheTTLSeconds:         3600,
+		ConnectionTimeoutSeconds:  30,
+		SMTPTimeoutSeconds:        60,
+		InitialRetryDelaySeconds:  300,
+		MaxRetryDelaySeconds:      43200,
+		BackoffMultiplier:         2.0,
 		GreylistRetryDelaySeconds: 120,
 	}
 
@@ -189,13 +194,13 @@ func TestFullMessageFlow(t *testing.T) {
 	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger)
 
 	callbackCfg := &config.CallbacksConfig{
-		WebhookURL:        "http://localhost:9999/webhook",
-		TimeoutSeconds:    10,
+		WebhookURL:               "http://localhost:9999/webhook",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
 		BackoffMultiplier:        2.0,
-		BatchSize:         10,
+		BatchSize:                10,
 	}
 	callbackHandler := callback.NewCallbackHandler(q, callbackCfg, logger)
 
@@ -422,21 +427,21 @@ func TestWorkerLifecycle(t *testing.T) {
 	defer q.Close()
 
 	deliveryCfg := &config.DeliveryConfig{
-		MaxMessageAgeHours:           48,
-		SourceIPs:                    []string{},
-		IPSelection:                  "round-robin",
-		MXCacheTTLSeconds:            3600,
-		ConnectionTimeoutSeconds:     5,
-		SMTPTimeoutSeconds:           10,
-		InitialRetryDelaySeconds:     2,
-		MaxRetryDelaySeconds:         10,
-		BackoffMultiplier:            2.0,
-		GreylistRetryDelaySeconds:    2,
-		MaxIPsPerMX:                  5,
-		MinDeliveryIntervalSeconds:   0,
-		ThrottleRetryDelaySeconds:    1,
-		DNSTimeoutSeconds:            5,
-		DNSCacheNegativeTTL:          60,
+		MaxMessageAgeHours:         48,
+		SourceIPs:                  []string{},
+		IPSelection:                "round-robin",
+		MXCacheTTLSeconds:          3600,
+		ConnectionTimeoutSeconds:   5,
+		SMTPTimeoutSeconds:         10,
+		InitialRetryDelaySeconds:   2,
+		MaxRetryDelaySeconds:       10,
+		BackoffMultiplier:          2.0,
+		GreylistRetryDelaySeconds:  2,
+		MaxIPsPerMX:                5,
+		MinDeliveryIntervalSeconds: 0,
+		ThrottleRetryDelaySeconds:  1,
+		DNSTimeoutSeconds:          5,
+		DNSCacheNegativeTTL:        60,
 	}
 
 	queueCfg := &config.QueueConfig{
@@ -630,19 +635,19 @@ func TestDeliveryRetry(t *testing.T) {
 	defer q.Close()
 
 	deliveryCfg := &config.DeliveryConfig{
-		MaxMessageAgeHours:           1, // Short expiry for testing
-		InitialRetryDelaySeconds:     1,
-		MaxRetryDelaySeconds:         10,
-		BackoffMultiplier:            2.0,
-		GreylistRetryDelaySeconds:    1,
-		ConnectionTimeoutSeconds:     5,
-		SMTPTimeoutSeconds:           10,
-		MXCacheTTLSeconds:            3600,
-		MaxIPsPerMX:                  5,
-		MinDeliveryIntervalSeconds:   0,
-		ThrottleRetryDelaySeconds:    1,
-		DNSTimeoutSeconds:            5,
-		DNSCacheNegativeTTL:          60,
+		MaxMessageAgeHours:         1, // Short expiry for testing
+		InitialRetryDelaySeconds:   1,
+		MaxRetryDelaySeconds:       10,
+		BackoffMultiplier:          2.0,
+		GreylistRetryDelaySeconds:  1,
+		ConnectionTimeoutSeconds:   5,
+		SMTPTimeoutSeconds:         10,
+		MXCacheTTLSeconds:          3600,
+		MaxIPsPerMX:                5,
+		MinDeliveryIntervalSeconds: 0,
+		ThrottleRetryDelaySeconds:  1,
+		DNSTimeoutSeconds:          5,
+		DNSCacheNegativeTTL:        60,
 	}
 
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
@@ -789,21 +794,21 @@ func TestConcurrentWorkers(t *testing.T) {
 
 	// Create worker pool
 	deliveryCfg := &config.DeliveryConfig{
-		MaxMessageAgeHours:           48,
-		SourceIPs:                    []string{},
-		IPSelection:                  "round-robin",
-		MXCacheTTLSeconds:            3600,
-		ConnectionTimeoutSeconds:     5,
-		SMTPTimeoutSeconds:           10,
-		InitialRetryDelaySeconds:     300,
-		MaxRetryDelaySeconds:         43200,
-		BackoffMultiplier:            2.0,
-		GreylistRetryDelaySeconds:    120,
-		MaxIPsPerMX:                  5,
-		MinDeliveryIntervalSeconds:   0,
-		ThrottleRetryDelaySeconds:    5,
-		DNSTimeoutSeconds:            5,
-		DNSCacheNegativeTTL:          60,
+		MaxMessageAgeHours:         48,
+		SourceIPs:                  []string{},
+		IPSelection:                "round-robin",
+		MXCacheTTLSeconds:          3600,
+		ConnectionTimeoutSeconds:   5,
+		SMTPTimeoutSeconds:         10,
+		InitialRetryDelaySeconds:   300,
+		MaxRetryDelaySeconds:       43200,
+		BackoffMultiplier:          2.0,
+		GreylistRetryDelaySeconds:  120,
+		MaxIPsPerMX:                5,
+		MinDeliveryIntervalSeconds: 0,
+		ThrottleRetryDelaySeconds:  5,
+		DNSTimeoutSeconds:          5,
+		DNSCacheNegativeTTL:        60,
 	}
 
 	queueCfg := &config.QueueConfig{
@@ -814,13 +819,13 @@ func TestConcurrentWorkers(t *testing.T) {
 	}
 
 	callbackCfg := &config.CallbacksConfig{
-		WebhookURL:        "http://localhost:9999/webhook",
-		TimeoutSeconds:    10,
+		WebhookURL:               "http://localhost:9999/webhook",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
 		BackoffMultiplier:        2.0,
-		BatchSize:         10,
+		BatchSize:                10,
 	}
 
 	mxLookup := delivery.NewMXLookup(q, deliveryCfg, logger)
@@ -846,4 +851,273 @@ func TestConcurrentWorkers(t *testing.T) {
 	t.Logf("Messages remaining in pending state: %d", len(messages))
 
 	t.Log("✓ Concurrent worker test complete")
+}
+
+// generateTestRSAKey generates a test RSA private key of specified size
+func generateTestRSAKey(bits int) (string, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return "", err
+	}
+
+	// Encode as PKCS#1 PEM for 2048, PKCS#8 for 1024 (test both formats)
+	var pemBlock *pem.Block
+	if bits == 2048 {
+		pemBlock = &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+		}
+	} else {
+		pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+		if err != nil {
+			return "", err
+		}
+		pemBlock = &pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: pkcs8Bytes,
+		}
+	}
+
+	return string(pem.EncodeToMemory(pemBlock)), nil
+}
+
+// TestDKIMSigningEndToEnd tests complete DKIM signing flow from HTTP to delivery
+func TestDKIMSigningEndToEnd(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	defer logger.Sync()
+
+	dbPath := "./test_dkim.db"
+	defer os.Remove(dbPath)
+
+	q, err := queue.NewQueue(dbPath, logger)
+	if err != nil {
+		t.Fatalf("Failed to create queue: %v", err)
+	}
+	defer q.Close()
+
+	// Generate test RSA keys
+	testPrivateKey2048, err := generateTestRSAKey(2048)
+	if err != nil {
+		t.Fatalf("Failed to generate 2048-bit key: %v", err)
+	}
+
+	testPrivateKey1024, err := generateTestRSAKey(1024)
+	if err != nil {
+		t.Fatalf("Failed to generate 1024-bit key: %v", err)
+	}
+
+	deliveryCfg := &config.DeliveryConfig{
+		MaxMessageAgeHours:        48,
+		SourceIPs:                 []string{},
+		IPSelection:               "round-robin",
+		MXCacheTTLSeconds:         3600,
+		ConnectionTimeoutSeconds:  30,
+		SMTPTimeoutSeconds:        60,
+		InitialRetryDelaySeconds:  300,
+		MaxRetryDelaySeconds:      43200,
+		BackoffMultiplier:         2.0,
+		GreylistRetryDelaySeconds: 120,
+	}
+
+	cfg := &config.Config{}
+	cfg.SetDefaults()
+	httpCfg := &cfg.HTTP
+	httpCfg.AuthToken = "test-token"
+
+	httpHandler := handler.NewQueueMessageHandler(q, deliveryCfg, httpCfg, nil, logger)
+
+	// Test 1: Enqueue message with DKIM signature (2048-bit key)
+	t.Log("=== Test 1: 2048-bit RSA DKIM Key ===")
+	requestBody := map[string]string{
+		"from":             "sender@example.com",
+		"to":               "recipient@example.com",
+		"subject":          "DKIM Test - 2048 bit",
+		"text":             "This message should be DKIM signed",
+		"dkim_private_key": testPrivateKey2048,
+		"dkim_selector":    "default",
+		"dkim_domain":      "example.com",
+	}
+
+	bodyBytes, _ := json.Marshal(requestBody)
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	w := httptest.NewRecorder()
+	httpHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("Expected status 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]string
+	json.Unmarshal(w.Body.Bytes(), &response)
+	messageID := response["message_id"]
+	t.Logf("✓ Message enqueued with ID: %s", messageID)
+
+	// Verify DKIM fields stored in queue
+	messages, _ := q.GetNextMessages(10)
+	if len(messages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(messages))
+	}
+
+	msg := messages[0]
+	if msg.DKIMPrivateKey != testPrivateKey2048 {
+		t.Error("DKIM private key not stored correctly")
+	}
+	if msg.DKIMSelector != "default" {
+		t.Errorf("DKIM selector mismatch: %s", msg.DKIMSelector)
+	}
+	if msg.DKIMDomain != "example.com" {
+		t.Errorf("DKIM domain mismatch: %s", msg.DKIMDomain)
+	}
+	t.Log("✓ DKIM fields correctly stored in queue")
+
+	// Test signing the message
+	signedMessage, err := dkim.SignMessage(msg.RawMessage, msg.DKIMPrivateKey, msg.DKIMSelector, msg.DKIMDomain)
+	if err != nil {
+		t.Fatalf("Failed to sign message: %v", err)
+	}
+
+	// Verify DKIM-Signature header present
+	signedStr := string(signedMessage)
+	if !strings.Contains(signedStr, "DKIM-Signature:") {
+		t.Error("Signed message missing DKIM-Signature header")
+	}
+	if !strings.Contains(signedStr, "s=default") {
+		t.Error("DKIM signature missing selector")
+	}
+	if !strings.Contains(signedStr, "d=example.com") {
+		t.Error("DKIM signature missing domain")
+	}
+	t.Log("✓ DKIM signature successfully added to message")
+	t.Logf("✓ Signed message size: %d bytes (original: %d bytes)", len(signedMessage), len(msg.RawMessage))
+
+	// Clean up queue
+	q.DeleteMessage(messageID)
+
+	// Test 2: Enqueue message with 1024-bit DKIM key
+	t.Log("\n=== Test 2: 1024-bit RSA DKIM Key ===")
+	requestBody["dkim_private_key"] = testPrivateKey1024
+	requestBody["subject"] = "DKIM Test - 1024 bit"
+
+	bodyBytes, _ = json.Marshal(requestBody)
+	req = httptest.NewRequest("POST", "/v1/messages", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	w = httptest.NewRecorder()
+	httpHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("Expected status 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	json.Unmarshal(w.Body.Bytes(), &response)
+	messageID = response["message_id"]
+	t.Logf("✓ Message with 1024-bit key enqueued: %s", messageID)
+
+	messages, _ = q.GetNextMessages(10)
+	msg = messages[0]
+
+	signedMessage, err = dkim.SignMessage(msg.RawMessage, msg.DKIMPrivateKey, msg.DKIMSelector, msg.DKIMDomain)
+	if err != nil {
+		t.Fatalf("Failed to sign with 1024-bit key: %v", err)
+	}
+	t.Log("✓ 1024-bit DKIM key accepted and signing works")
+
+	q.DeleteMessage(messageID)
+
+	// Test 3: Invalid DKIM key should be rejected
+	t.Log("\n=== Test 3: Invalid DKIM Key Rejection ===")
+	requestBody["dkim_private_key"] = "invalid-key-data"
+
+	bodyBytes, _ = json.Marshal(requestBody)
+	req = httptest.NewRequest("POST", "/v1/messages", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	w = httptest.NewRecorder()
+	httpHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for invalid key, got %d: %s", w.Code, w.Body.String())
+	} else {
+		t.Log("✓ Invalid DKIM key correctly rejected with 400")
+	}
+
+	// Test 4: Message without DKIM key (optional)
+	t.Log("\n=== Test 4: Message Without DKIM (Optional) ===")
+	requestBody = map[string]string{
+		"from":    "sender@example.com",
+		"to":      "recipient@example.com",
+		"subject": "No DKIM",
+		"text":    "This message has no DKIM signature",
+	}
+
+	bodyBytes, _ = json.Marshal(requestBody)
+	req = httptest.NewRequest("POST", "/v1/messages", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	w = httptest.NewRecorder()
+	httpHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("Expected status 202, got %d", w.Code)
+	}
+
+	json.Unmarshal(w.Body.Bytes(), &response)
+	messageID = response["message_id"]
+
+	messages, _ = q.GetNextMessages(10)
+	msg = messages[0]
+
+	if msg.DKIMPrivateKey != "" {
+		t.Error("DKIM private key should be empty for unsigned message")
+	}
+	t.Log("✓ Message without DKIM correctly accepted")
+
+	// Test 5: Default DKIM domain to sender's domain
+	t.Log("\n=== Test 5: Default DKIM Domain ===")
+	requestBody = map[string]string{
+		"from":             "test@mydomain.com",
+		"to":               "recipient@example.com",
+		"subject":          "DKIM with default domain",
+		"text":             "Testing default domain",
+		"dkim_private_key": testPrivateKey2048,
+		"dkim_selector":    "mail",
+		// Note: dkim_domain not specified, should default to mydomain.com
+	}
+
+	bodyBytes, _ = json.Marshal(requestBody)
+	req = httptest.NewRequest("POST", "/v1/messages", bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	w = httptest.NewRecorder()
+	httpHandler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("Expected status 202, got %d", w.Code)
+	}
+
+	// Clear old messages and get new one
+	q.DeleteMessage(messageID)
+	messages, _ = q.GetNextMessages(10)
+	msg = messages[0]
+
+	if msg.DKIMDomain != "mydomain.com" {
+		t.Errorf("DKIM domain should default to sender domain 'mydomain.com', got: %s", msg.DKIMDomain)
+	} else {
+		t.Log("✓ DKIM domain correctly defaulted to sender's domain")
+	}
+
+	t.Log("\n=== DKIM Integration Test Complete ===")
+	t.Log("✓ 2048-bit RSA keys supported")
+	t.Log("✓ 1024-bit RSA keys supported")
+	t.Log("✓ Invalid keys rejected at enqueue time")
+	t.Log("✓ DKIM is optional (messages work without it)")
+	t.Log("✓ DKIM domain defaults to sender's domain")
+	t.Log("✓ DKIM signatures correctly added to messages")
 }

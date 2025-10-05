@@ -52,7 +52,7 @@ func TestRetryScheduler_CalculateNextRetry_Greylist(t *testing.T) {
 
 func TestRetryScheduler_CalculateNextRetry_ExponentialBackoff(t *testing.T) {
 	cfg := &config.DeliveryConfig{
-		InitialRetryDelaySeconds:  300,  // 5 minutes
+		InitialRetryDelaySeconds:  300,   // 5 minutes
 		MaxRetryDelaySeconds:      43200, // 12 hours
 		BackoffMultiplier:         2.0,
 		GreylistRetryDelaySeconds: 120,

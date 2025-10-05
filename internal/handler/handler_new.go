@@ -65,7 +65,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			zap.String("remote_addr", r.RemoteAddr))
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{
-			"error": "Service temporarily unavailable due to delivery failures",
+			"error":       "Service temporarily unavailable due to delivery failures",
 			"retry_after": "60",
 		})
 		return

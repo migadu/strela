@@ -1,3 +1,5 @@
 worker/*.db*
 bin/*
 logs/*
+fune-admin
+fune-server

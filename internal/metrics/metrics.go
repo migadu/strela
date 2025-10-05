@@ -23,7 +23,7 @@ type Metrics struct {
 	HTTPDuration *prometheus.HistogramVec
 
 	// Circuit breaker metrics
-	CircuitBreakerState      prometheus.Gauge
+	CircuitBreakerState       prometheus.Gauge
 	CircuitBreakerTransitions *prometheus.CounterVec
 }
 

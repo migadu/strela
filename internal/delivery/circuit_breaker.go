@@ -34,11 +34,11 @@ type CircuitBreaker struct {
 	metrics          CircuitBreakerMetrics
 
 	// State
-	state             CircuitState
-	consecutiveFailures int
+	state                CircuitState
+	consecutiveFailures  int
 	consecutiveSuccesses int
-	lastFailureTime   time.Time
-	lastStateChange   time.Time
+	lastFailureTime      time.Time
+	lastStateChange      time.Time
 }
 
 // NewCircuitBreaker creates a new circuit breaker
@@ -154,11 +154,11 @@ func (cb *CircuitBreaker) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"state":                stateStr,
-		"consecutive_failures": cb.consecutiveFailures,
+		"state":                 stateStr,
+		"consecutive_failures":  cb.consecutiveFailures,
 		"consecutive_successes": cb.consecutiveSuccesses,
-		"last_failure_time":    cb.lastFailureTime,
-		"last_state_change":    cb.lastStateChange,
+		"last_failure_time":     cb.lastFailureTime,
+		"last_state_change":     cb.lastStateChange,
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fune/internal/config"
+	"fune/internal/dkim"
 	"fune/internal/queue"
 
 	"github.com/emersion/go-smtp"
@@ -21,9 +22,9 @@ import (
 
 // DestinationThrottle tracks last delivery attempt per domain to prevent spam-like behavior
 type DestinationThrottle struct {
-	mu            sync.RWMutex
-	lastAttempts  map[string]time.Time
-	minInterval   time.Duration
+	mu           sync.RWMutex
+	lastAttempts map[string]time.Time
+	minInterval  time.Duration
 }
 
 func NewDestinationThrottle(minIntervalSeconds int) *DestinationThrottle {
@@ -94,13 +95,13 @@ type Deliverer struct {
 
 // DeliveryResult contains the result of a delivery attempt
 type DeliveryResult struct {
-	Success       bool
-	SMTPCode      int
-	SMTPResponse  string
-	MXHost        string
-	SourceIP      string
-	Error         *DeliveryError
-	DurationMs    int64
+	Success      bool
+	SMTPCode     int
+	SMTPResponse string
+	MXHost       string
+	SourceIP     string
+	Error        *DeliveryError
+	DurationMs   int64
 }
 
 // NewDeliverer creates a new delivery engine
@@ -176,9 +177,9 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 			zap.Error(err))
 
 		result := &DeliveryResult{
-			Success:      false,
-			Error:        ClassifyError(0, "", err),
-			DurationMs:   time.Since(startTime).Milliseconds(),
+			Success:    false,
+			Error:      ClassifyError(0, "", err),
+			DurationMs: time.Since(startTime).Milliseconds(),
 		}
 		d.recordDeliveryMetrics(result)
 		return result
@@ -519,8 +520,37 @@ func (d *Deliverer) tryDeliveryToIP(ctx context.Context, msg *queue.QueuedMessag
 		}
 	}
 
+	// Prepare message - sign with DKIM if credentials provided
+	messageToSend := msg.RawMessage
+	if msg.DKIMPrivateKey != "" {
+		d.logger.Debug("signing message with DKIM",
+			zap.String("message_id", msg.MessageID),
+			zap.String("dkim_selector", msg.DKIMSelector),
+			zap.String("dkim_domain", msg.DKIMDomain))
+
+		signedMessage, err := dkim.SignMessage(msg.RawMessage, msg.DKIMPrivateKey, msg.DKIMSelector, msg.DKIMDomain)
+		if err != nil {
+			dataWriter.Close()
+			d.logger.Error("DKIM signing failed",
+				zap.String("message_id", msg.MessageID),
+				zap.Error(err))
+			return &DeliveryResult{
+				Success:  false,
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error: &DeliveryError{
+					Category: ErrorPermanent,
+					Message:  fmt.Sprintf("DKIM signing failed: %v", err),
+				},
+			}
+		}
+		messageToSend = signedMessage
+		d.logger.Debug("DKIM signature added successfully",
+			zap.String("message_id", msg.MessageID))
+	}
+
 	// Write message data
-	if _, err := io.Copy(dataWriter, bytes.NewReader(msg.RawMessage)); err != nil {
+	if _, err := io.Copy(dataWriter, bytes.NewReader(messageToSend)); err != nil {
 		dataWriter.Close()
 		return &DeliveryResult{
 			Success:  false,
@@ -566,10 +596,10 @@ func extractSMTPError(err error) (int, string) {
 
 // IPRotator handles source IP selection
 type IPRotator struct {
-	ips       []string
-	strategy  string
-	counter   int
-	random    *rand.Rand
+	ips      []string
+	strategy string
+	counter  int
+	random   *rand.Rand
 }
 
 // NewIPRotator creates a new IP rotator

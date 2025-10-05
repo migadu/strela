@@ -32,14 +32,14 @@ func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 	}
 
 	callbackConfig := &config.CallbacksConfig{
-		WebhookURL:        "https://example.com/webhook",
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               "https://example.com/webhook",
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
 		BackoffMultiplier:        2.0,
-		BatchSize:         10,
+		BatchSize:                10,
 	}
 
 	queueCfg := &config.QueueConfig{

@@ -63,9 +63,9 @@ type DeliveryConfig struct {
 	ThrottleRetryDelaySeconds  int `toml:"throttle_retry_delay_seconds"`  // Delay before retrying throttled message
 
 	// Circuit breaker configuration
-	CircuitBreakerEnabled         bool `toml:"circuit_breaker_enabled"`          // Enable circuit breaker (default: true)
-	CircuitBreakerFailureThreshold int  `toml:"circuit_breaker_failure_threshold"` // Consecutive failures before opening (default: 5)
-	CircuitBreakerSuccessThreshold int  `toml:"circuit_breaker_success_threshold"` // Successes in half-open to close (default: 2)
+	CircuitBreakerEnabled          bool `toml:"circuit_breaker_enabled"`              // Enable circuit breaker (default: true)
+	CircuitBreakerFailureThreshold int  `toml:"circuit_breaker_failure_threshold"`    // Consecutive failures before opening (default: 5)
+	CircuitBreakerSuccessThreshold int  `toml:"circuit_breaker_success_threshold"`    // Successes in half-open to close (default: 2)
 	CircuitBreakerOpenTimeoutSecs  int  `toml:"circuit_breaker_open_timeout_seconds"` // Seconds before trying half-open (default: 60)
 
 	// DNS resolver configuration
@@ -75,14 +75,14 @@ type DeliveryConfig struct {
 }
 
 type CallbacksConfig struct {
-	WebhookURL                string  `toml:"webhook_url"`
-	AuthToken                 string  `toml:"auth_token"`
-	TimeoutSeconds            int     `toml:"timeout_seconds"`
-	MaxCallbackAgeHours       int     `toml:"max_callback_age_hours"`       // Maximum age before giving up (similar to max_message_age_hours)
-	InitialRetryDelaySeconds  int     `toml:"initial_retry_delay_seconds"`  // Initial retry delay (e.g., 30s)
-	MaxRetryDelaySeconds      int     `toml:"max_retry_delay_seconds"`      // Maximum retry delay (e.g., 3600s = 1 hour)
-	BackoffMultiplier         float64 `toml:"backoff_multiplier"`           // Exponential backoff multiplier (e.g., 2.0)
-	BatchSize                 int     `toml:"batch_size"`                   // Number of callbacks to process per iteration
+	WebhookURL               string  `toml:"webhook_url"`
+	AuthToken                string  `toml:"auth_token"`
+	TimeoutSeconds           int     `toml:"timeout_seconds"`
+	MaxCallbackAgeHours      int     `toml:"max_callback_age_hours"`      // Maximum age before giving up (similar to max_message_age_hours)
+	InitialRetryDelaySeconds int     `toml:"initial_retry_delay_seconds"` // Initial retry delay (e.g., 30s)
+	MaxRetryDelaySeconds     int     `toml:"max_retry_delay_seconds"`     // Maximum retry delay (e.g., 3600s = 1 hour)
+	BackoffMultiplier        float64 `toml:"backoff_multiplier"`          // Exponential backoff multiplier (e.g., 2.0)
+	BatchSize                int     `toml:"batch_size"`                  // Number of callbacks to process per iteration
 }
 
 // SetDefaults sets default values for optional config fields

@@ -21,9 +21,9 @@ type MetricsRecorder interface {
 type Queue struct {
 	db               *sql.DB
 	logger           *zap.Logger
-	notifyCh         chan struct{}  // Channel to notify workers of new messages
-	callbackNotifyCh chan struct{}  // Channel to notify callback processor of new callbacks
-	writeMu          sync.Mutex     // Mutex to serialize write operations
+	notifyCh         chan struct{}   // Channel to notify workers of new messages
+	callbackNotifyCh chan struct{}   // Channel to notify callback processor of new callbacks
+	writeMu          sync.Mutex      // Mutex to serialize write operations
 	metrics          MetricsRecorder // Optional metrics recorder
 }
 
@@ -33,10 +33,10 @@ type QueuedMessage struct {
 	MessageID string
 
 	// Message data
-	FromAddr  string
-	ToAddr    string
-	ToDomain  string
-	Subject   string
+	FromAddr   string
+	ToAddr     string
+	ToDomain   string
+	Subject    string
 	RawMessage []byte
 
 	// DKIM signing (optional)
@@ -84,11 +84,11 @@ type DeliveryAttempt struct {
 	MXHost   string
 	SourceIP string
 
-	SMTPCode     int
-	SMTPResponse string
-	Error        string
-	Success      bool
-	DurationMs   int64
+	SMTPCode      int
+	SMTPResponse  string
+	Error         string
+	Success       bool
+	DurationMs    int64
 	ErrorCategory string
 }
 
@@ -101,8 +101,8 @@ func NewQueue(dbPath string, logger *zap.Logger) (*Queue, error) {
 
 	// Set connection pool settings for WAL mode
 	// WAL mode supports one writer + multiple concurrent readers
-	db.SetMaxOpenConns(10)  // Allow multiple concurrent read connections
-	db.SetMaxIdleConns(5)   // Keep some idle connections for reuse
+	db.SetMaxOpenConns(10)   // Allow multiple concurrent read connections
+	db.SetMaxIdleConns(5)    // Keep some idle connections for reuse
 	db.SetConnMaxLifetime(0) // Connections don't expire
 
 	q := &Queue{
@@ -684,7 +684,6 @@ func (q *Queue) GetMessage(messageID string) (*QueuedMessage, error) {
 
 	return msg, nil
 }
-
 
 // ExtractDomain extracts domain from email address
 func ExtractDomain(email string) string {

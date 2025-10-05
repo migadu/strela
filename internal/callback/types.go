@@ -6,8 +6,8 @@ type DeliveryEventCallback struct {
 	Event     string `json:"event"` // "delivered", "hard_bounce", "temp_expired", "expired"
 
 	// Message details
-	Email   string `json:"email"`   // to_addr
-	From    string `json:"from"`    // from_addr
+	Email   string `json:"email"` // to_addr
+	From    string `json:"from"`  // from_addr
 	Subject string `json:"subject"`
 
 	// Timing

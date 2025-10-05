@@ -22,14 +22,14 @@ func setupTestCallbackHandler(t *testing.T) (*CallbackHandler, *queue.Queue, fun
 	q, cleanup := queue.SetupTestQueue(t)
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        "https://example.com/webhook",
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               "https://example.com/webhook",
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
 		BackoffMultiplier:        2.0,
-		BatchSize:         10,
+		BatchSize:                10,
 	}
 
 	handler := NewCallbackHandler(q, cfg, logger)
@@ -261,9 +261,9 @@ func TestCallbackHandler_SendHTTPCallback_Success(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        server.URL,
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               server.URL,
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
@@ -297,9 +297,9 @@ func TestCallbackHandler_SendHTTPCallback_Failure(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        server.URL,
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               server.URL,
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
@@ -333,9 +333,9 @@ func TestCallbackHandler_SendCallback_Success(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        server.URL,
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               server.URL,
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
@@ -380,9 +380,9 @@ func TestCallbackHandler_SendCallback_RetryOnFailure(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        server.URL,
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               server.URL,
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
@@ -430,9 +430,9 @@ func TestCallbackHandler_SendCallback_GiveUpAfterMaxAttempts(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        server.URL,
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               server.URL,
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      1, // Short age for test
 		InitialRetryDelaySeconds: 1,
 		MaxRetryDelaySeconds:     10,
@@ -473,14 +473,14 @@ func TestCallbackHandler_SendCallback_InvalidPayload(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        "https://example.com/webhook",
-		AuthToken:         "test-token",
-		TimeoutSeconds:    10,
+		WebhookURL:               "https://example.com/webhook",
+		AuthToken:                "test-token",
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,
 		BackoffMultiplier:        2.0,
-		BatchSize:         10,
+		BatchSize:                10,
 	}
 
 	handler := NewCallbackHandler(q, cfg, logger)
@@ -544,9 +544,9 @@ func TestCallbackHandler_WithoutAuthToken(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.CallbacksConfig{
-		WebhookURL:        server.URL,
-		AuthToken:         "", // No auth token
-		TimeoutSeconds:    10,
+		WebhookURL:               server.URL,
+		AuthToken:                "", // No auth token
+		TimeoutSeconds:           10,
 		MaxCallbackAgeHours:      48,
 		InitialRetryDelaySeconds: 30,
 		MaxRetryDelaySeconds:     3600,

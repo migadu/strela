@@ -301,7 +301,7 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 			nextRetry := time.Now().Add(retryDelay)
 
 			// Don't schedule retry if it would exceed max age
-			if time.Until(nextRetry) > maxAge - age {
+			if time.Until(nextRetry) > maxAge-age {
 				c.logger.Warn("callback retry would exceed max age, marking as complete",
 					zap.String("message_id", cb.MessageID),
 					zap.Duration("age", age),

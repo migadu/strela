@@ -40,11 +40,11 @@ type SenderStats struct {
 
 // ThroughputStats represents delivery throughput statistics
 type ThroughputStats struct {
-	Last1Hour    int64
-	Last6Hours   int64
-	Last24Hours  int64
-	Last7Days    int64
-	SuccessRate  float64 // Percentage of successful deliveries
+	Last1Hour     int64
+	Last6Hours    int64
+	Last24Hours   int64
+	Last7Days     int64
+	SuccessRate   float64 // Percentage of successful deliveries
 	TotalAttempts int64
 }
 
