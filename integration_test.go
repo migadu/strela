@@ -428,21 +428,21 @@ func TestWorkerLifecycle(t *testing.T) {
 	defer q.Close()
 
 	deliveryCfg := &config.DeliveryConfig{
-		MaxMessageAgeHours:         48,
-		SourceIPs:                  []string{},
-		IPSelection:                "round-robin",
-		MXCacheTTLSeconds:          3600,
-		ConnectionTimeoutSeconds:   5,
-		SMTPTimeoutSeconds:         10,
-		InitialRetryDelaySeconds:   2,
-		MaxRetryDelaySeconds:       10,
-		BackoffMultiplier:          2.0,
-		GreylistRetryDelaySeconds:  2,
-		MaxIPsPerMX:                5,
-		MinDeliveryIntervalSeconds: 0,
-		ThrottleRetryDelaySeconds:  1,
-		DNSTimeoutSeconds:          5,
-		DNSCacheNegativeTTL:        60,
+		MaxMessageAgeHours:        48,
+		SourceIPs:                 []string{},
+		IPSelection:               "round-robin",
+		MXCacheTTLSeconds:         3600,
+		ConnectionTimeoutSeconds:  5,
+		SMTPTimeoutSeconds:        10,
+		InitialRetryDelaySeconds:  2,
+		MaxRetryDelaySeconds:      10,
+		BackoffMultiplier:         2.0,
+		GreylistRetryDelaySeconds: 2,
+		MaxIPsPerMX:               5,
+		PerDomainIntervalSeconds:  0,
+		PerDomainRetrySeconds:     1,
+		DNSTimeoutSeconds:         5,
+		DNSCacheNegativeTTL:       60,
 	}
 
 	queueCfg := &config.QueueConfig{
@@ -637,19 +637,19 @@ func TestDeliveryRetry(t *testing.T) {
 	defer q.Close()
 
 	deliveryCfg := &config.DeliveryConfig{
-		MaxMessageAgeHours:         1, // Short expiry for testing
-		InitialRetryDelaySeconds:   1,
-		MaxRetryDelaySeconds:       10,
-		BackoffMultiplier:          2.0,
-		GreylistRetryDelaySeconds:  1,
-		ConnectionTimeoutSeconds:   5,
-		SMTPTimeoutSeconds:         10,
-		MXCacheTTLSeconds:          3600,
-		MaxIPsPerMX:                5,
-		MinDeliveryIntervalSeconds: 0,
-		ThrottleRetryDelaySeconds:  1,
-		DNSTimeoutSeconds:          5,
-		DNSCacheNegativeTTL:        60,
+		MaxMessageAgeHours:        1, // Short expiry for testing
+		InitialRetryDelaySeconds:  1,
+		MaxRetryDelaySeconds:      10,
+		BackoffMultiplier:         2.0,
+		GreylistRetryDelaySeconds: 1,
+		ConnectionTimeoutSeconds:  5,
+		SMTPTimeoutSeconds:        10,
+		MXCacheTTLSeconds:         3600,
+		MaxIPsPerMX:               5,
+		PerDomainIntervalSeconds:  0,
+		PerDomainRetrySeconds:     1,
+		DNSTimeoutSeconds:         5,
+		DNSCacheNegativeTTL:       60,
 	}
 
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
@@ -707,15 +707,15 @@ func TestDestinationThrottling(t *testing.T) {
 	defer logger.Sync()
 
 	deliveryCfg := &config.DeliveryConfig{
-		MinDeliveryIntervalSeconds: 2, // 2 second throttle
-		MaxIPsPerMX:                5,
-		MXCacheTTLSeconds:          3600,
-		ConnectionTimeoutSeconds:   30,
-		SMTPTimeoutSeconds:         60,
+		PerDomainIntervalSeconds: 2, // 2 second throttle
+		MaxIPsPerMX:              5,
+		MXCacheTTLSeconds:        3600,
+		ConnectionTimeoutSeconds: 30,
+		SMTPTimeoutSeconds:       60,
 	}
 
 	// Create throttle tracker
-	throttle := delivery.NewDestinationThrottle(deliveryCfg.MinDeliveryIntervalSeconds)
+	throttle := delivery.NewDestinationThrottle(deliveryCfg.PerDomainIntervalSeconds)
 
 	domain := "example.com"
 
@@ -796,21 +796,21 @@ func TestConcurrentWorkers(t *testing.T) {
 
 	// Create worker pool
 	deliveryCfg := &config.DeliveryConfig{
-		MaxMessageAgeHours:         48,
-		SourceIPs:                  []string{},
-		IPSelection:                "round-robin",
-		MXCacheTTLSeconds:          3600,
-		ConnectionTimeoutSeconds:   5,
-		SMTPTimeoutSeconds:         10,
-		InitialRetryDelaySeconds:   300,
-		MaxRetryDelaySeconds:       43200,
-		BackoffMultiplier:          2.0,
-		GreylistRetryDelaySeconds:  120,
-		MaxIPsPerMX:                5,
-		MinDeliveryIntervalSeconds: 0,
-		ThrottleRetryDelaySeconds:  5,
-		DNSTimeoutSeconds:          5,
-		DNSCacheNegativeTTL:        60,
+		MaxMessageAgeHours:        48,
+		SourceIPs:                 []string{},
+		IPSelection:               "round-robin",
+		MXCacheTTLSeconds:         3600,
+		ConnectionTimeoutSeconds:  5,
+		SMTPTimeoutSeconds:        10,
+		InitialRetryDelaySeconds:  300,
+		MaxRetryDelaySeconds:      43200,
+		BackoffMultiplier:         2.0,
+		GreylistRetryDelaySeconds: 120,
+		MaxIPsPerMX:               5,
+		PerDomainIntervalSeconds:  0,
+		PerDomainRetrySeconds:     5,
+		DNSTimeoutSeconds:         5,
+		DNSCacheNegativeTTL:       60,
 	}
 
 	queueCfg := &config.QueueConfig{

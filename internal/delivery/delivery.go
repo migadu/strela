@@ -135,7 +135,7 @@ func NewDeliverer(config *config.DeliveryConfig, mxLookup *MXLookup, logger *zap
 		mxLookup:          mxLookup,
 		logger:            logger,
 		ipRotator:         NewIPRotator(config.SourceIPs, config.IPSelection),
-		throttle:          NewDestinationThrottle(config.MinDeliveryIntervalSeconds),
+		throttle:          NewDestinationThrottle(config.PerDomainIntervalSeconds),
 		circuitBreaker:    circuitBreaker,
 		reputationTracker: reputationTracker,
 	}
@@ -157,7 +157,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 			zap.String("message_id", msg.MessageID),
 			zap.String("domain", msg.ToDomain),
 			zap.Duration("wait_time", waitTime),
-			zap.Int("min_interval_seconds", d.config.MinDeliveryIntervalSeconds))
+			zap.Int("min_interval_seconds", d.config.PerDomainIntervalSeconds))
 
 		result := &DeliveryResult{
 			Success: false,
@@ -723,7 +723,7 @@ func (d *Deliverer) ReloadConfig(newConfig *config.DeliveryConfig) error {
 	d.ipRotator = NewIPRotator(newConfig.SourceIPs, newConfig.IPSelection)
 
 	// Update throttle settings
-	d.throttle = NewDestinationThrottle(newConfig.MinDeliveryIntervalSeconds)
+	d.throttle = NewDestinationThrottle(newConfig.PerDomainIntervalSeconds)
 
 	// Update circuit breaker settings if enabled
 	if newConfig.CircuitBreakerEnabled {

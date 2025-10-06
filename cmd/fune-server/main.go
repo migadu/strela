@@ -16,6 +16,7 @@ import (
 	"fune/internal/callback"
 	"fune/internal/config"
 	"fune/internal/delivery"
+	"fune/internal/gossip"
 	"fune/internal/handler"
 	"fune/internal/metrics"
 	"fune/internal/queue"
@@ -151,6 +152,30 @@ func main() {
 		logger.Info("metrics initialized", zap.String("path", cfg.HTTP.MetricsPath))
 	}
 
+	// Initialize gossip service (if enabled)
+	gossipCfg := &gossip.Config{
+		Enabled:        cfg.Gossip.Enabled,
+		BindPort:       cfg.Gossip.BindPort,
+		JoinAddresses:  cfg.Gossip.JoinAddresses,
+		NodeID:         cfg.Gossip.NodeID,
+		IdempotencyTTL: time.Duration(cfg.HTTP.IdempotencyTTLHours) * time.Hour,
+	}
+
+	g, err := gossip.NewGossip(gossipCfg, logger)
+	if err != nil {
+		logger.Fatal("failed to initialize gossip", zap.Error(err))
+	}
+	if g != nil {
+		defer g.Shutdown()
+		logger.Info("gossip service initialized",
+			zap.Bool("enabled", cfg.Gossip.Enabled),
+			zap.Int("bind_port", cfg.Gossip.BindPort),
+			zap.Strings("join_addresses", cfg.Gossip.JoinAddresses))
+	}
+
+	// Track server start time for uptime reporting
+	serverStartTime := time.Now()
+
 	// Initialize queue
 	q, err := queue.NewQueue(cfg.Server.DatabasePath, logger)
 	if err != nil {
@@ -258,6 +283,11 @@ func main() {
 	// Initialize HTTP handler with circuit breaker reference
 	httpHandler := handler.NewQueueMessageHandler(q, &cfg.Delivery, &cfg.HTTP, deliverer.GetCircuitBreaker(), logger)
 
+	// Wire gossip service to HTTP handler
+	if g != nil {
+		httpHandler.SetGossip(g)
+	}
+
 	// Wrap with metrics middleware if enabled
 	var finalHandler http.Handler = httpHandler
 	if m != nil {
@@ -272,6 +302,47 @@ func main() {
 	if m != nil && cfg.HTTP.MetricsPath != "" {
 		mux.Handle(cfg.HTTP.MetricsPath, promhttp.Handler())
 		logger.Info("metrics endpoint registered", zap.String("path", cfg.HTTP.MetricsPath))
+	}
+
+	// Add cluster status endpoint if gossip is enabled
+	if g != nil {
+		clusterHandler := handler.NewClusterStatusHandler(g, logger)
+		mux.Handle("/admin/cluster/status", clusterHandler)
+		logger.Info("cluster status endpoint registered", zap.String("path", "/admin/cluster/status"))
+	}
+
+	// Start periodic node status broadcasting if gossip is enabled
+	if g != nil {
+		recovery.SafeGo(logger, "gossip status broadcaster", func() {
+			ticker := time.NewTicker(10 * time.Second) // Broadcast every 10 seconds
+			defer ticker.Stop()
+
+			for range ticker.C {
+				// Get current queue depth (queued + sending messages)
+				queueDepth, err := q.GetQueueDepth()
+				if err != nil {
+					logger.Error("failed to get queue depth for gossip", zap.Error(err))
+					queueDepth = 0 // Use 0 on error
+				}
+
+				// Get active workers (we don't track this dynamically yet, use configured count)
+				activeWorkers := cfg.Queue.WorkerCount
+
+				// Calculate uptime
+				uptime := time.Since(serverStartTime)
+
+				// Broadcast status to cluster
+				if err := g.BroadcastNodeStatus(queueDepth, activeWorkers, uptime); err != nil {
+					logger.Error("failed to broadcast node status", zap.Error(err))
+				} else {
+					logger.Debug("broadcast node status to cluster",
+						zap.Int64("queue_depth", queueDepth),
+						zap.Int("active_workers", activeWorkers),
+						zap.Duration("uptime", uptime))
+				}
+			}
+		})
+		logger.Info("gossip status broadcaster started")
 	}
 
 	// Setup HTTP server with TLS certificate hot reload support

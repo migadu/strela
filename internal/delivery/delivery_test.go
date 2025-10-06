@@ -455,7 +455,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 	initialCfg := &config.DeliveryConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
 		IPSelection:                    "round-robin",
-		MinDeliveryIntervalSeconds:     2,
+		PerDomainIntervalSeconds:       2,
 		CircuitBreakerEnabled:          true,
 		CircuitBreakerFailureThreshold: 5,
 		CircuitBreakerSuccessThreshold: 2,
@@ -478,7 +478,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 	newCfg := &config.DeliveryConfig{
 		SourceIPs:                      []string{"192.168.1.100", "192.168.1.101", "192.168.1.102"},
 		IPSelection:                    "random",
-		MinDeliveryIntervalSeconds:     5,
+		PerDomainIntervalSeconds:       5,
 		CircuitBreakerEnabled:          true,
 		CircuitBreakerFailureThreshold: 10,
 		CircuitBreakerSuccessThreshold: 3,

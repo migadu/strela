@@ -30,6 +30,13 @@ A production-ready, queue-based SMTP delivery service with direct MX delivery, i
 - **TLS Support**: Optional HTTPS for API, opportunistic STARTTLS for SMTP
 - **Idempotency**: Optional idempotency key support to prevent duplicate deliveries
 
+### Cluster Support (Optional)
+- **Gossip Protocol**: Distributed coordination using HashiCorp memberlist
+- **Distributed Idempotency**: Best-effort duplicate prevention across cluster nodes
+- **Cluster Monitoring**: Real-time visibility into queue depth and load across all nodes
+- **Admin API**: `/admin/cluster/status` endpoint for cluster health
+- **CLI Tools**: `fune-admin cluster-status` command for cluster inspection
+
 ## Quick Start
 
 ```bash
@@ -93,6 +100,49 @@ See [config.toml.example](config.toml.example) for all options including:
 - Idempotency settings
 - IP reputation tracking
 - Prometheus metrics
+- Gossip protocol for clustering
+
+### Cluster Setup (Optional)
+
+Enable gossip protocol for distributed coordination across multiple nodes:
+
+```toml
+[gossip]
+enabled = true
+bind_port = 7946
+join_addresses = ["fune-1:7946", "fune-2:7946", "fune-3:7946"]
+node_id = "fune-1"  # Unique per node (defaults to hostname)
+```
+
+**Features:**
+- **Distributed Idempotency**: Prevents duplicate processing when requests hit different nodes
+- **Load Monitoring**: Real-time visibility into queue depth across the cluster
+- **Cluster Health**: Monitor node status, uptime, and active workers
+
+**View cluster status:**
+```bash
+# Query any node in the cluster
+./fune-admin cluster-status -server http://fune-1:8080
+
+# Or via API
+curl http://fune-1:8080/admin/cluster/status
+```
+
+**Recommended load balancer setup with HAProxy:**
+```haproxy
+frontend fune_api
+    bind *:80
+    default_backend fune_servers
+
+backend fune_servers
+    balance hdr(X-Idempotency-Key)
+    hash-type consistent
+    server fune-1 fune-1:8080 check
+    server fune-2 fune-2:8080 check
+    server fune-3 fune-3:8080 check
+```
+
+This directs requests with the same idempotency key to the same node, while gossip provides additional safety for race conditions and failover scenarios.
 
 ### Hot Reload
 

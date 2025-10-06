@@ -19,12 +19,19 @@ import (
 	"go.uber.org/zap"
 )
 
+// GossipService interface for gossip protocol integration
+type GossipService interface {
+	BroadcastIdempotencyKey(key string) error
+	CheckIdempotencyKey(key string) string
+}
+
 // QueueMessageHandler handles HTTP requests and enqueues messages
 type QueueMessageHandler struct {
 	queue          *queue.Queue
 	deliveryConfig *config.DeliveryConfig
 	httpConfig     *config.HTTPConfig
 	circuitBreaker *delivery.CircuitBreaker
+	gossip         GossipService
 	logger         *zap.Logger
 }
 
@@ -35,8 +42,14 @@ func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.DeliveryConfig, 
 		deliveryConfig: deliveryCfg,
 		httpConfig:     httpCfg,
 		circuitBreaker: circuitBreaker,
+		gossip:         nil, // Set via SetGossip() after initialization
 		logger:         logger,
 	}
+}
+
+// SetGossip sets the gossip service for distributed idempotency
+func (h *QueueMessageHandler) SetGossip(gossip GossipService) {
+	h.gossip = gossip
 }
 
 // ServeHTTP handles incoming message submission requests
@@ -166,7 +179,26 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		idempotencyKey = r.Header.Get(h.httpConfig.IdempotencyHeader)
 
 		if idempotencyKey != "" {
-			// Check if message with this idempotency key already exists
+			// First check gossip cache for distributed idempotency (best-effort)
+			if h.gossip != nil {
+				if claimedBy := h.gossip.CheckIdempotencyKey(idempotencyKey); claimedBy != "" {
+					// Key is claimed by another node - return 409 Conflict
+					h.logger.Warn("duplicate request detected via gossip - claimed by another node",
+						zap.String("idempotency_key", idempotencyKey),
+						zap.String("claimed_by", claimedBy))
+
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict) // 409 = duplicate being processed elsewhere
+					json.NewEncoder(w).Encode(map[string]string{
+						"error":      "Duplicate request detected",
+						"message":    "This request is currently being processed by another node",
+						"claimed_by": claimedBy,
+					})
+					return
+				}
+			}
+
+			// Then check local database for idempotency
 			existing, err := h.queue.GetMessageByIdempotencyKey(idempotencyKey)
 			if err != nil {
 				h.logger.Error("failed to check idempotency key",
@@ -175,7 +207,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 				// Don't fail the request, continue without idempotency
 			} else if existing != nil {
 				// Duplicate request - return existing message with 202 Accepted (idempotent response)
-				h.logger.Info("duplicate request detected via idempotency key",
+				h.logger.Info("duplicate request detected via database idempotency key",
 					zap.String("idempotency_key", idempotencyKey),
 					zap.String("existing_message_id", existing.MessageID),
 					zap.String("status", string(existing.Status)))
@@ -248,6 +280,16 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			zap.String("message_id", messageID))
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
+	}
+
+	// Broadcast idempotency key to cluster if gossip is enabled
+	if h.gossip != nil && idempotencyKey != "" {
+		if err := h.gossip.BroadcastIdempotencyKey(idempotencyKey); err != nil {
+			h.logger.Warn("failed to broadcast idempotency key",
+				zap.String("idempotency_key", idempotencyKey),
+				zap.Error(err))
+			// Don't fail the request - gossip is best-effort
+		}
 	}
 
 	duration := time.Since(start)

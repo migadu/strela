@@ -15,6 +15,7 @@ type Config struct {
 	Delivery   DeliveryConfig   `toml:"delivery"`
 	Callbacks  CallbacksConfig  `toml:"callbacks"`
 	Reputation ReputationConfig `toml:"reputation"`
+	Gossip     GossipConfig     `toml:"gossip"`
 }
 
 type ServerConfig struct {
@@ -73,8 +74,8 @@ type DeliveryConfig struct {
 	MaxIPsPerMX               int      `toml:"max_ips_per_mx"` // Maximum number of IPs to try per MX host
 
 	// Rate limiting per destination domain
-	MinDeliveryIntervalSeconds int `toml:"min_delivery_interval_seconds"` // Minimum seconds between deliveries to same domain
-	ThrottleRetryDelaySeconds  int `toml:"throttle_retry_delay_seconds"`  // Delay before retrying throttled message
+	PerDomainIntervalSeconds int `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain
+	PerDomainRetrySeconds    int `toml:"per_domain_retry_seconds"`    // Delay before retrying throttled message
 
 	// Circuit breaker configuration
 	CircuitBreakerEnabled          bool `toml:"circuit_breaker_enabled"`              // Enable circuit breaker (default: true)
@@ -106,6 +107,13 @@ type ReputationConfig struct {
 	DegradedRetryHours     int    `toml:"degraded_retry_hours"`      // Hours before retrying degraded IP (default: 48)
 	EnableIPTracking       bool   `toml:"enable_ip_tracking"`        // Enable IP reputation tracking (default: true)
 	DegradedIPCleanupHours int    `toml:"degraded_ip_cleanup_hours"` // Hours to keep degraded IP history (default: 168 = 7 days)
+}
+
+type GossipConfig struct {
+	Enabled       bool     `toml:"enabled"`        // Enable gossip protocol for distributed coordination (default: false)
+	BindPort      int      `toml:"bind_port"`      // Port for gossip protocol (default: 7946)
+	JoinAddresses []string `toml:"join_addresses"` // Initial seed nodes to join (e.g., ["fune-1:7946", "fune-2:7946"])
+	NodeID        string   `toml:"node_id"`        // Unique node identifier (defaults to hostname)
 }
 
 // SetDefaults sets default values for optional config fields
@@ -192,11 +200,11 @@ func (c *Config) SetDefaults() {
 	if c.Delivery.MaxIPsPerMX == 0 {
 		c.Delivery.MaxIPsPerMX = 5
 	}
-	if c.Delivery.MinDeliveryIntervalSeconds == 0 {
-		c.Delivery.MinDeliveryIntervalSeconds = 2
+	if c.Delivery.PerDomainIntervalSeconds == 0 {
+		c.Delivery.PerDomainIntervalSeconds = 2
 	}
-	if c.Delivery.ThrottleRetryDelaySeconds == 0 {
-		c.Delivery.ThrottleRetryDelaySeconds = 5
+	if c.Delivery.PerDomainRetrySeconds == 0 {
+		c.Delivery.PerDomainRetrySeconds = 5
 	}
 	// Circuit breaker defaults (enabled by default for production safety)
 	// Set CircuitBreakerEnabled explicitly to false to disable
@@ -250,6 +258,12 @@ func (c *Config) SetDefaults() {
 		c.Reputation.DegradedIPCleanupHours = 168 // 7 days
 	}
 	// EnableIPTracking is enabled by default (set to false to disable)
+
+	// Gossip defaults
+	if c.Gossip.BindPort == 0 {
+		c.Gossip.BindPort = 7946 // Default memberlist port
+	}
+	// Gossip is disabled by default (set enabled=true to enable)
 }
 
 func LoadConfig(path string) (*Config, error) {

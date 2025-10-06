@@ -88,8 +88,8 @@ smtp_timeout_seconds = 60
 max_ips_per_mx = 5                 # Maximum IPs to try per MX host (protects against malicious multihomed hosts)
 
 # Rate limiting per destination domain (prevents spam-like behavior)
-min_delivery_interval_seconds = 2  # Minimum seconds between deliveries to same domain
-throttle_retry_delay_seconds = 5   # Retry delay for rate-limited messages
+per_domain_interval_seconds = 2  # Minimum seconds between deliveries to same domain
+per_domain_retry_seconds = 5     # Retry delay when rate-limited
 
 # Circuit breaker configuration (stops accepting requests during delivery failures)
 circuit_breaker_enabled = true            # Enable circuit breaker (recommended for production)
@@ -160,3 +160,42 @@ degraded_ip_cleanup_hours = 168        # Hours to keep degraded IP history - 7 d
 # - IP is retried after degraded_retry_hours (default: 48 hours)
 # - If retry succeeds, alert webhook is called with event_type="recovered"
 # - If retry fails, IP remains degraded for another degraded_retry_hours period
+
+[gossip]
+# Gossip protocol configuration for distributed coordination across multiple fune instances
+# Uses HashiCorp memberlist for cluster membership and state sharing
+enabled = false                                    # Enable gossip protocol (default: false)
+bind_port = 7946                                   # Port for gossip protocol (default: 7946)
+join_addresses = ["fune-1:7946", "fune-2:7946"]   # Initial seed nodes to join the cluster
+node_id = ""                                       # Unique node identifier (defaults to hostname)
+
+# Features enabled by gossip protocol:
+# 1. Distributed Idempotency (best-effort):
+#    - When a message is accepted with an idempotency key, the key is broadcast to the cluster
+#    - Other nodes check the gossip cache before accepting duplicate requests
+#    - Returns HTTP 409 Conflict if key is claimed by another node
+#    - Provides real-time duplicate detection across the cluster
+#    - Note: This is best-effort and may not catch all duplicates in race conditions
+#
+# 2. Cluster-wide Load Monitoring:
+#    - Each node broadcasts its queue depth, active workers, and uptime every 10 seconds
+#    - Cluster status available via /admin/cluster/status endpoint
+#    - Use fune-admin cluster-status -server http://any-node:8080 to view cluster health
+#
+# Example multi-node setup:
+#   Node 1 (fune-1):
+#     enabled = true
+#     bind_port = 7946
+#     join_addresses = ["fune-2:7946", "fune-3:7946"]  # Other nodes in cluster
+#     node_id = "fune-1"
+#
+#   Node 2 (fune-2):
+#     enabled = true
+#     bind_port = 7946
+#     join_addresses = ["fune-1:7946", "fune-3:7946"]
+#     node_id = "fune-2"
+#
+# Recommended use with load balancer:
+#   - HAProxy with consistent hashing: balance hdr(X-Idempotency-Key)
+#   - This directs requests with the same idempotency key to the same node
+#   - Gossip provides additional safety for race conditions and failover scenarios

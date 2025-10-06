@@ -267,7 +267,7 @@ func (w *Worker) handlePermanentFailure(msg *queue.QueuedMessage, result *delive
 // handleThrottledDelivery schedules quick retry for rate-limited deliveries
 func (w *Worker) handleThrottledDelivery(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	// Use configured throttle retry delay (default 5 seconds)
-	nextRetry := time.Now().Add(time.Duration(w.deliveryConfig.ThrottleRetryDelaySeconds) * time.Second)
+	nextRetry := time.Now().Add(time.Duration(w.deliveryConfig.PerDomainRetrySeconds) * time.Second)
 
 	w.logger.Debug("delivery throttled, scheduling quick retry",
 		zap.String("message_id", msg.MessageID),

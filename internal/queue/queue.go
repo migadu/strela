@@ -205,6 +205,20 @@ func (q *Queue) initSchema() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_mx_ttl ON mx_cache(cached_at, ttl_seconds);
+
+	CREATE TABLE IF NOT EXISTS ip_reputation (
+		source_ip TEXT PRIMARY KEY,
+		status TEXT NOT NULL,
+		failure_count INTEGER DEFAULT 0,
+		degraded_at TIMESTAMP,
+		last_attempt_at TIMESTAMP,
+		smtp_code INTEGER,
+		smtp_response TEXT,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_ip_status ON ip_reputation(status);
+	CREATE INDEX IF NOT EXISTS idx_ip_degraded_at ON ip_reputation(degraded_at);
 	`
 
 	_, err := q.db.Exec(schema)
@@ -869,6 +883,17 @@ func (q *Queue) UpdateQueueMetrics() error {
 	}
 
 	return nil
+}
+
+// GetQueueDepth returns the count of messages in queued and sending status
+// This is useful for cluster monitoring via gossip protocol
+func (q *Queue) GetQueueDepth() (int64, error) {
+	var count int64
+	err := q.db.QueryRow("SELECT COUNT(*) FROM messages WHERE status IN ('queued', 'sending')").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query queue depth: %w", err)
+	}
+	return count, nil
 }
 
 // Close closes the database connection

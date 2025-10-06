@@ -341,3 +341,78 @@ type CallbackStats struct {
 	Pending   int64
 	Completed int64
 }
+
+// IPReputationInfo represents IP reputation status
+type IPReputationInfo struct {
+	SourceIP      string
+	Status        string // "degraded" or "healthy"
+	FailureCount  int
+	DegradedAt    *time.Time
+	LastAttemptAt *time.Time
+	SMTPCode      int
+	SMTPResponse  string
+}
+
+// GetIPReputationStats retrieves IP reputation information
+func (a *AdminDB) GetIPReputationStats() ([]IPReputationInfo, error) {
+	query := `
+		SELECT
+			source_ip,
+			status,
+			failure_count,
+			degraded_at,
+			last_attempt_at,
+			smtp_code,
+			smtp_response
+		FROM ip_reputation
+		ORDER BY
+			CASE WHEN status = 'degraded' THEN 0 ELSE 1 END,
+			degraded_at DESC
+	`
+
+	rows, err := a.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get IP reputation stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []IPReputationInfo
+	for rows.Next() {
+		var info IPReputationInfo
+		var degradedAtStr, lastAttemptStr sql.NullString
+		var smtpCode sql.NullInt64
+		var smtpResponse sql.NullString
+
+		err := rows.Scan(
+			&info.SourceIP,
+			&info.Status,
+			&info.FailureCount,
+			&degradedAtStr,
+			&lastAttemptStr,
+			&smtpCode,
+			&smtpResponse,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan IP reputation: %w", err)
+		}
+
+		if degradedAtStr.Valid {
+			t, _ := time.Parse(time.RFC3339, degradedAtStr.String)
+			info.DegradedAt = &t
+		}
+		if lastAttemptStr.Valid {
+			t, _ := time.Parse(time.RFC3339, lastAttemptStr.String)
+			info.LastAttemptAt = &t
+		}
+		if smtpCode.Valid {
+			info.SMTPCode = int(smtpCode.Int64)
+		}
+		if smtpResponse.Valid {
+			info.SMTPResponse = smtpResponse.String
+		}
+
+		stats = append(stats, info)
+	}
+
+	return stats, nil
+}

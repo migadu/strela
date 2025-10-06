@@ -140,11 +140,7 @@ func (m *MXLookup) getFromCache(domain string) ([]*MXRecord, error) {
 	// Parse cached_at timestamp (SQLite CURRENT_TIMESTAMP uses RFC3339)
 	cached, err := time.Parse(time.RFC3339, cachedAt)
 	if err != nil {
-		// Try alternative format for backwards compatibility
-		cached, err = time.Parse("2006-01-02 15:04:05", cachedAt)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	// Check if cache is expired

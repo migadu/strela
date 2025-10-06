@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -28,25 +30,30 @@ Usage:
   fune-admin [command] [flags]
 
 Commands:
-  queue         Show queue statistics
-  queue-domains Show queue grouped by domain (top 20)
-  queue-senders Show queue grouped by sender (top 20)
-  throughput    Show delivery throughput statistics
-  failures      Show recent delivery failures (last 20)
-  callbacks     Show callback queue statistics
-  config        Show current configuration
-  reload        Reload fune-server configuration (sends SIGHUP)
-  version       Show version information
-  help          Show this help message
+  queue           Show queue statistics
+  queue-domains   Show queue grouped by domain (top 20)
+  queue-senders   Show queue grouped by sender (top 20)
+  throughput      Show delivery throughput statistics
+  failures        Show recent delivery failures (last 20)
+  callbacks       Show callback queue statistics
+  reputation      Show IP reputation status
+  cluster-status  Show gossip cluster status
+  config          Show current configuration
+  reload          Reload fune-server configuration (sends SIGHUP)
+  version         Show version information
+  help            Show this help message
 
 Flags:
   -config string   Path to config file (default: config.toml)
   -json            Output in JSON format
+  -server string   Server address for cluster-status (default: http://localhost:8080)
 
 Examples:
   fune-admin queue
   fune-admin throughput -json
   fune-admin queue-domains
+  fune-admin reputation
+  fune-admin cluster-status -server http://fune-1:8080
   fune-admin config -config /etc/fune/config.toml
   fune-admin reload -config /etc/fune/config.toml
 `
@@ -69,12 +76,13 @@ func main() {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	configPath := fs.String("config", "config.toml", "Path to config file")
 	jsonOutput := fs.Bool("json", false, "Output in JSON format")
+	serverAddr := fs.String("server", "http://localhost:8080", "Server address for cluster-status")
 
 	fs.Parse(os.Args[2:])
 
 	// Load config to get database path
 	var dbPath string
-	if command != "version" {
+	if command != "version" && command != "cluster-status" {
 		cfg, err := config.LoadConfig(*configPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
@@ -122,6 +130,20 @@ func main() {
 
 	case "callbacks":
 		err := showCallbacks(dbPath, *jsonOutput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "reputation":
+		err := showReputation(dbPath, *jsonOutput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "cluster-status":
+		err := showClusterStatus(*serverAddr, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -344,6 +366,88 @@ func showCallbacks(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+func showReputation(dbPath string, jsonOutput bool) error {
+	db, err := admin.NewAdminDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	stats, err := db.GetIPReputationStats()
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		return outputJSON(stats)
+	}
+
+	if len(stats) == 0 {
+		fmt.Println("IP Reputation Status")
+		fmt.Println(strings.Repeat("=", 100))
+		fmt.Println("No IP reputation data available")
+		fmt.Println("\nNote: IP reputation tracking may be disabled in config or no IPs have been tracked yet.")
+		return nil
+	}
+
+	fmt.Println("IP Reputation Status")
+	fmt.Println(strings.Repeat("=", 100))
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SOURCE IP\tSTATUS\tFAILURES\tDEGRADED SINCE\tLAST ATTEMPT\tCODE\tRESPONSE")
+	fmt.Fprintln(w, strings.Repeat("-", 100))
+
+	for _, info := range stats {
+		statusDisplay := info.Status
+		if info.Status == "degraded" {
+			statusDisplay = "⚠ DEGRADED"
+		} else {
+			statusDisplay = "✓ healthy"
+		}
+
+		degradedSince := "-"
+		if info.DegradedAt != nil {
+			age := time.Since(*info.DegradedAt)
+			degradedSince = formatDuration(age) + " ago"
+		}
+
+		lastAttempt := "-"
+		if info.LastAttemptAt != nil {
+			age := time.Since(*info.LastAttemptAt)
+			lastAttempt = formatDuration(age) + " ago"
+		}
+
+		response := truncate(firstLine(info.SMTPResponse), 35)
+		if response == "" {
+			response = "-"
+		}
+
+		codeStr := "-"
+		if info.SMTPCode > 0 {
+			codeStr = fmt.Sprintf("%d", info.SMTPCode)
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			info.SourceIP, statusDisplay, info.FailureCount,
+			degradedSince, lastAttempt, codeStr, response)
+	}
+
+	w.Flush()
+
+	// Summary
+	degradedCount := 0
+	for _, info := range stats {
+		if info.Status == "degraded" {
+			degradedCount++
+		}
+	}
+
+	fmt.Printf("\nSummary: %d total IPs tracked, %d degraded, %d healthy\n",
+		len(stats), degradedCount, len(stats)-degradedCount)
+
+	return nil
+}
+
 func showConfig(configPath string, jsonOutput bool) error {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -389,7 +493,8 @@ func showConfig(configPath string, jsonOutput bool) error {
 	fmt.Printf("  Initial Retry Delay: %ds\n", cfg.Delivery.InitialRetryDelaySeconds)
 	fmt.Printf("  Max Retry Delay:     %ds\n", cfg.Delivery.MaxRetryDelaySeconds)
 	fmt.Printf("  Backoff Multiplier:  %.1f\n", cfg.Delivery.BackoffMultiplier)
-	fmt.Printf("  Rate Limit Interval: %ds\n", cfg.Delivery.MinDeliveryIntervalSeconds)
+	fmt.Printf("  Per-Domain Interval: %ds\n", cfg.Delivery.PerDomainIntervalSeconds)
+	fmt.Printf("  Per-Domain Retry:    %ds\n", cfg.Delivery.PerDomainRetrySeconds)
 
 	fmt.Println("\n[Circuit Breaker]")
 	fmt.Printf("  Enabled:             %t\n", cfg.Delivery.CircuitBreakerEnabled)
@@ -405,6 +510,15 @@ func showConfig(configPath string, jsonOutput bool) error {
 	fmt.Printf("  Max Retry Delay:     %ds\n", cfg.Callbacks.MaxRetryDelaySeconds)
 	fmt.Printf("  Backoff Multiplier:  %.1f\n", cfg.Callbacks.BackoffMultiplier)
 	fmt.Printf("  Batch Size:          %d\n", cfg.Callbacks.BatchSize)
+
+	fmt.Println("\n[IP Reputation]")
+	fmt.Printf("  Enabled:             %t\n", cfg.Reputation.EnableIPTracking)
+	if cfg.Reputation.EnableIPTracking {
+		fmt.Printf("  Alert Webhook URL:   %s\n", cfg.Reputation.AlertWebhookURL)
+		fmt.Printf("  Degraded Retry:      %d hours\n", cfg.Reputation.DegradedRetryHours)
+		fmt.Printf("  Cleanup Interval:    %d hours\n", cfg.Reputation.DegradedIPCleanupHours)
+		fmt.Printf("  Alert Timeout:       %ds\n", cfg.Reputation.AlertTimeoutSeconds)
+	}
 
 	return nil
 }
@@ -480,4 +594,77 @@ func firstLine(s string) string {
 		return s[:idx]
 	}
 	return s
+}
+
+// ClusterNodeStatus represents the status of a cluster node
+type ClusterNodeStatus struct {
+	NodeID        string `json:"node_id"`
+	QueueDepth    int64  `json:"queue_depth"`
+	ActiveWorkers int    `json:"active_workers"`
+	Uptime        string `json:"uptime"`
+	LastSeen      string `json:"last_seen"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+}
+
+// ClusterStatusResponse represents the cluster status API response
+type ClusterStatusResponse struct {
+	Timestamp string                       `json:"timestamp"`
+	Nodes     map[string]ClusterNodeStatus `json:"nodes"`
+	NodeCount int                          `json:"node_count"`
+}
+
+func showClusterStatus(serverAddr string, jsonOutput bool) error {
+	// Make HTTP request to cluster status endpoint
+	url := fmt.Sprintf("%s/admin/cluster/status", serverAddr)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to fetch cluster status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var clusterStatus ClusterStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&clusterStatus); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if jsonOutput {
+		return outputJSON(clusterStatus)
+	}
+
+	// Display in human-readable format
+	fmt.Println("Cluster Status")
+	fmt.Println(strings.Repeat("=", 90))
+	fmt.Printf("Timestamp: %s\n", clusterStatus.Timestamp)
+	fmt.Printf("Node Count: %d\n\n", clusterStatus.NodeCount)
+
+	if len(clusterStatus.Nodes) == 0 {
+		fmt.Println("No nodes found in cluster (gossip may be disabled)")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NODE ID\tQUEUE DEPTH\tACTIVE WORKERS\tUPTIME\tLAST SEEN")
+	fmt.Fprintln(w, strings.Repeat("-", 90))
+
+	for _, node := range clusterStatus.Nodes {
+		lastSeen, _ := time.Parse(time.RFC3339, node.LastSeen)
+		lastSeenAgo := time.Since(lastSeen)
+
+		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s ago\n",
+			node.NodeID,
+			node.QueueDepth,
+			node.ActiveWorkers,
+			node.Uptime,
+			formatDuration(lastSeenAgo))
+	}
+
+	w.Flush()
+	return nil
 }
