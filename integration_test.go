@@ -52,7 +52,7 @@ func TestFullMessageFlow(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		SourceIPSelection:               "round-robin",
+		SourceIPSelection:         "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  30,
 		SMTPTimeoutSeconds:        60,
@@ -434,7 +434,7 @@ func TestWorkerLifecycle(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		SourceIPSelection:               "round-robin",
+		SourceIPSelection:         "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  5,
 		SMTPTimeoutSeconds:        10,
@@ -802,7 +802,7 @@ func TestConcurrentWorkers(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		SourceIPSelection:               "round-robin",
+		SourceIPSelection:         "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  5,
 		SMTPTimeoutSeconds:        10,
@@ -918,7 +918,7 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		SourceIPSelection:               "round-robin",
+		SourceIPSelection:         "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  30,
 		SMTPTimeoutSeconds:        60,

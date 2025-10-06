@@ -172,7 +172,7 @@ func TestDeliverer_DeliverMessage_NoMXRecords(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{"127.0.0.1"},
-		SourceIPSelection:              "round-robin",
+		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
 		ConnectionTimeoutSeconds: 5,
 		SMTPTimeoutSeconds:       10,
@@ -216,7 +216,7 @@ func TestDeliverer_SelectSourceIP(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{"192.168.1.1", "192.168.1.2"},
-		SourceIPSelection:              "round-robin",
+		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
 		ConnectionTimeoutSeconds: 5,
 		SMTPTimeoutSeconds:       10,
@@ -348,7 +348,7 @@ func TestDeliverer_LoggingOnFailure(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{},
-		SourceIPSelection:              "round-robin",
+		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
 		ConnectionTimeoutSeconds: 5,
 		SMTPTimeoutSeconds:       10,
@@ -389,7 +389,7 @@ func TestDeliverer_EmptySourceIPs(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{}, // No source IPs
-		SourceIPSelection:              "round-robin",
+		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
 		ConnectionTimeoutSeconds: 5,
 		SMTPTimeoutSeconds:       10,
@@ -458,7 +458,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 	// Initial config
 	initialCfg := &config.DeliveryConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
-		SourceIPSelection:                    "round-robin",
+		SourceIPSelection:              "round-robin",
 		PerDomainIntervalSeconds:       2,
 		CircuitBreakerEnabled:          true,
 		CircuitBreakerFailureThreshold: 5,
@@ -481,7 +481,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 	// New config with different settings
 	newCfg := &config.DeliveryConfig{
 		SourceIPs:                      []string{"192.168.1.100", "192.168.1.101", "192.168.1.102"},
-		SourceIPSelection:                    "random",
+		SourceIPSelection:              "random",
 		PerDomainIntervalSeconds:       5,
 		CircuitBreakerEnabled:          true,
 		CircuitBreakerFailureThreshold: 10,
@@ -522,7 +522,7 @@ func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
 	// Initial config with circuit breaker enabled
 	initialCfg := &config.DeliveryConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
-		SourceIPSelection:                    "round-robin",
+		SourceIPSelection:              "round-robin",
 		CircuitBreakerEnabled:          true,
 		CircuitBreakerFailureThreshold: 5,
 		CircuitBreakerSuccessThreshold: 2,
@@ -540,7 +540,7 @@ func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
 	// New config with circuit breaker disabled
 	newCfg := &config.DeliveryConfig{
 		SourceIPs:             []string{"192.168.1.100"},
-		SourceIPSelection:           "round-robin",
+		SourceIPSelection:     "round-robin",
 		CircuitBreakerEnabled: false,
 	}
 
@@ -561,7 +561,7 @@ func TestDeliverer_ReloadConfig_EnableCircuitBreaker(t *testing.T) {
 	// Initial config with circuit breaker disabled
 	initialCfg := &config.DeliveryConfig{
 		SourceIPs:             []string{"192.168.1.100"},
-		SourceIPSelection:           "round-robin",
+		SourceIPSelection:     "round-robin",
 		CircuitBreakerEnabled: false,
 	}
 
@@ -576,7 +576,7 @@ func TestDeliverer_ReloadConfig_EnableCircuitBreaker(t *testing.T) {
 	// New config with circuit breaker enabled
 	newCfg := &config.DeliveryConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
-		SourceIPSelection:                    "round-robin",
+		SourceIPSelection:              "round-robin",
 		CircuitBreakerEnabled:          true,
 		CircuitBreakerFailureThreshold: 5,
 		CircuitBreakerSuccessThreshold: 2,

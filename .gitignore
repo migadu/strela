@@ -1,10 +1,10 @@
 # Build artifacts
 ./fune-server
 ./fune-admin
-fune-linux-amd64
-fune-admin-linux-amd64
-fune-freebsd-amd64
-fune-admin-freebsd-amd64
+./fune-linux-amd64
+./fune-admin-linux-amd64
+./fune-freebsd-amd64
+./fune-admin-freebsd-amd64
 bin/*
 
 # Runtime files

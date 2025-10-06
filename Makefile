@@ -53,11 +53,11 @@ coverage:
 	go tool cover -html=coverage.out
 
 # Cross-compile with musl libc for Linux
-build-linux-musl:
+linux-musl:
 	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(fune_LINUX_BINARY) ./cmd/fune-server
 	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(fune_ADMIN_LINUX_BINARY) ./cmd/fune-admin
 
 # Cross-compile for FreeBSD
-build-freebsd:
+freebsd:
 	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(fune_FREEBSD_BINARY) ./cmd/fune-server
 	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(fune_ADMIN_FREEBSD_BINARY) ./cmd/fune-admin

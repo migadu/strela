@@ -20,7 +20,7 @@ func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                 []string{"127.0.0.1"},
-		SourceIPSelection:               "round-robin",
+		SourceIPSelection:         "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  5,
 		SMTPTimeoutSeconds:        10,
