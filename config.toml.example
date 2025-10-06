@@ -77,12 +77,22 @@ region = "us-east-1"                   # AWS region (optional, uses default if n
 # Let's Encrypt automatic TLS features:
 # - Automatic certificate issuance from Let's Encrypt
 # - Automatic certificate renewal (handled by autocert library)
+# - Automatic certificate monitoring (checks every 6 hours, logs status)
 # - S3 storage ensures all cluster nodes can serve HTTPS
 # - Gossip-based leader election: only leader requests/renews certificates
 # - All nodes read certificates from S3 and serve HTTPS traffic
 # - Zero-downtime certificate updates
 # - No manual certificate management required
 # - Automatic HTTP-to-HTTPS redirect on port 80
+#
+# Certificate monitoring and alerts:
+# - Checks certificate status every 6 hours (1 minute after startup)
+# - ERROR level: Certificate expired (immediate action required)
+# - WARN level: Certificate expires within 7 days (renewal should happen soon)
+# - INFO level: Certificate expires within 30 days (normal status)
+# - DEBUG level: Certificate has >30 days remaining (healthy)
+# - Monitor your logs for "certificate" keywords to track renewal status
+# - Let's Encrypt renews certificates ~30 days before expiry automatically
 #
 # Requirements:
 # - gossip.enabled = true (for leader coordination)

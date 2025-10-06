@@ -175,7 +175,10 @@ func main() {
 	}
 
 	// Initialize TLS Manager for auto-certificates
-	tlsManager, err := tlsmanager.NewManager(&cfg.TLS, g, logger)
+	// Use a context with timeout for initialization (respects cancellation)
+	initCtx, initCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	tlsManager, err := tlsmanager.NewManager(initCtx, &cfg.TLS, g, logger)
+	initCancel() // Clean up context after initialization
 	if err != nil {
 		logger.Fatal("failed to initialize TLS manager", zap.Error(err))
 	}
@@ -394,6 +397,21 @@ func main() {
 
 				// Give the HTTP server a moment to start and potentially fail fast
 				time.Sleep(100 * time.Millisecond)
+
+				// Start certificate monitoring (check every 6 hours)
+				recovery.SafeGo(logger, "certificate monitor", func() {
+					// Initial check after 1 minute (gives time for first cert acquisition)
+					time.Sleep(1 * time.Minute)
+					tlsManager.CheckCertificates()
+
+					ticker := time.NewTicker(6 * time.Hour)
+					defer ticker.Stop()
+
+					for range ticker.C {
+						tlsManager.CheckCertificates()
+					}
+				})
+				logger.Info("certificate monitoring started (checks every 6 hours)")
 
 				logger.Info("TLS configured with letsencrypt provider",
 					zap.Strings("domains", cfg.TLS.LetsEncrypt.Domains))
