@@ -40,17 +40,15 @@ Commands:
   help          Show this help message
 
 Flags:
-  -db string       Path to database file (default: fune.db)
   -config string   Path to config file (default: config.toml)
   -json            Output in JSON format
-  -pid string      Path to PID file for reload command (default: fune.pid)
 
 Examples:
-  fune-admin queue -db /var/lib/fune/fune.db
+  fune-admin queue
   fune-admin throughput -json
   fune-admin queue-domains
   fune-admin config -config /etc/fune/config.toml
-  fune-admin reload -pid /var/run/fune.pid
+  fune-admin reload -config /etc/fune/config.toml
 `
 
 func main() {
@@ -69,52 +67,61 @@ func main() {
 
 	// Create flag set
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
-	dbPath := fs.String("db", "fune.db", "Path to database file")
 	configPath := fs.String("config", "config.toml", "Path to config file")
-	pidPath := fs.String("pid", "fune.pid", "Path to PID file")
 	jsonOutput := fs.Bool("json", false, "Output in JSON format")
 
 	fs.Parse(os.Args[2:])
 
+	// Load config to get database path
+	var dbPath string
+	if command != "version" {
+		cfg, err := config.LoadConfig(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+			os.Exit(1)
+		}
+		dbPath = cfg.Server.DatabasePath
+	}
+
 	// Execute command
 	switch command {
 	case "queue":
-		err := showQueueStats(*dbPath, *jsonOutput)
+		err := showQueueStats(dbPath, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
 	case "queue-domains":
-		err := showDomainStats(*dbPath, *jsonOutput)
+		err := showDomainStats(dbPath, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
 	case "queue-senders":
-		err := showSenderStats(*dbPath, *jsonOutput)
+		err := showSenderStats(dbPath, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
 	case "throughput":
-		err := showThroughput(*dbPath, *jsonOutput)
+		err := showThroughput(dbPath, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
 	case "failures":
-		err := showFailures(*dbPath, *jsonOutput)
+		err := showFailures(dbPath, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
 	case "callbacks":
-		err := showCallbacks(*dbPath, *jsonOutput)
+		err := showCallbacks(dbPath, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -128,7 +135,7 @@ func main() {
 		}
 
 	case "reload":
-		err := reloadServer(*pidPath)
+		err := reloadServer(*configPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -364,8 +371,11 @@ func showConfig(configPath string, jsonOutput bool) error {
 	fmt.Printf("  Metrics Enabled:     %t\n", cfg.HTTP.MetricsEnabled)
 	fmt.Printf("  Metrics Path:        %s\n", cfg.HTTP.MetricsPath)
 
+	fmt.Println("\n[Server]")
+	fmt.Printf("  Database Path:       %s\n", cfg.Server.DatabasePath)
+	fmt.Printf("  PID File:            %s\n", cfg.Server.PIDFile)
+
 	fmt.Println("\n[Queue]")
-	fmt.Printf("  Database Path:       %s\n", cfg.Queue.DatabasePath)
 	fmt.Printf("  Worker Count:        %d\n", cfg.Queue.WorkerCount)
 	fmt.Printf("  Batch Size:          %d\n", cfg.Queue.BatchSize)
 	fmt.Printf("  Poll Interval:       %ds\n", cfg.Queue.PollIntervalSeconds)
@@ -399,17 +409,23 @@ func showConfig(configPath string, jsonOutput bool) error {
 	return nil
 }
 
-func reloadServer(pidPath string) error {
-	// Read PID file
-	pidBytes, err := os.ReadFile(pidPath)
+func reloadServer(configPath string) error {
+	// Load config to get PID file path
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to read PID file %s: %w", pidPath, err)
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Read PID file
+	pidBytes, err := os.ReadFile(cfg.Server.PIDFile)
+	if err != nil {
+		return fmt.Errorf("failed to read PID file %s: %w", cfg.Server.PIDFile, err)
 	}
 
 	pidStr := strings.TrimSpace(string(pidBytes))
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
-		return fmt.Errorf("invalid PID in file %s: %s", pidPath, pidStr)
+		return fmt.Errorf("invalid PID in file %s: %s", cfg.Server.PIDFile, pidStr)
 	}
 
 	// Find the process

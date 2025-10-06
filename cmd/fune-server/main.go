@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +34,52 @@ var (
 	date    = "unknown"
 )
 
+// initLogger creates a logger that writes to stdout/stderr (systemd-compatible)
+func initLogger(logCfg *config.LoggingConfig) (*zap.Logger, error) {
+	// Parse log level
+	var level zapcore.Level
+	switch strings.ToLower(logCfg.Level) {
+	case "debug":
+		level = zapcore.DebugLevel
+	case "info":
+		level = zapcore.InfoLevel
+	case "warn":
+		level = zapcore.WarnLevel
+	case "error":
+		level = zapcore.ErrorLevel
+	default:
+		level = zapcore.InfoLevel
+	}
+
+	// Create encoder based on format
+	var encoder zapcore.Encoder
+	if strings.ToLower(logCfg.Format) == "json" {
+		// JSON format - good for systemd with structured logging
+		encoderConfig := zap.NewProductionEncoderConfig()
+		encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	} else {
+		// Console format - good for human readability
+		encoderConfig := zap.NewProductionEncoderConfig()
+		encoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05")
+		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		encoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	}
+
+	// Create core that writes to stdout
+	core := zapcore.NewCore(
+		encoder,
+		zapcore.AddSync(os.Stdout),
+		level,
+	)
+
+	// Create logger with caller info and stack traces on errors
+	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
+
+	return logger, nil
+}
+
 func main() {
 	// Parse command-line flags
 	showVersion := flag.Bool("version", false, "Show version information and exit")
@@ -44,26 +91,34 @@ func main() {
 		fmt.Printf("  built:  %s\n", date)
 		os.Exit(0)
 	}
-	// Initialize console logger with human-readable format
-	loggerConfig := zap.NewDevelopmentConfig()
-	loggerConfig.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05")
-	loggerConfig.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 
-	logger, err := loggerConfig.Build()
+	// Load configuration first (need it for logger setup)
+	tempCfg, err := config.LoadConfig("config.toml")
 	if err != nil {
-		panic("failed to initialize logger: " + err.Error())
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+	tempCfg.SetDefaults()
+
+	// Initialize logger with config
+	logger, err := initLogger(&tempCfg.Logging)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
 	}
 	defer logger.Sync()
 
 	logger.Info("starting fune SMTP delivery service",
 		zap.String("version", version),
 		zap.String("commit", commit),
-		zap.String("build_date", date))
+		zap.String("build_date", date),
+		zap.String("log_level", tempCfg.Logging.Level),
+		zap.String("log_format", tempCfg.Logging.Format))
 
 	// Load reloadable configuration
 	reloadableCfg, err := config.NewReloadableConfig("config.toml", logger)
 	if err != nil {
-		logger.Fatal("failed to load config", zap.Error(err))
+		logger.Fatal("failed to load reloadable config", zap.Error(err))
 	}
 
 	cfg := reloadableCfg.Get()
@@ -80,7 +135,7 @@ func main() {
 
 	// Log configuration
 	logger.Info("configuration loaded",
-		zap.String("database", cfg.Queue.DatabasePath),
+		zap.String("database", cfg.Server.DatabasePath),
 		zap.Int("workers", cfg.Queue.WorkerCount),
 		zap.Int("source_ips", len(cfg.Delivery.SourceIPs)),
 		zap.String("ip_selection", cfg.Delivery.IPSelection),
@@ -97,7 +152,7 @@ func main() {
 	}
 
 	// Initialize queue
-	q, err := queue.NewQueue(cfg.Queue.DatabasePath, logger)
+	q, err := queue.NewQueue(cfg.Server.DatabasePath, logger)
 	if err != nil {
 		logger.Fatal("failed to initialize queue", zap.Error(err))
 	}
@@ -107,7 +162,7 @@ func main() {
 		q.SetMetrics(m)
 	}
 
-	logger.Info("queue initialized", zap.String("database", cfg.Queue.DatabasePath))
+	logger.Info("queue initialized", zap.String("database", cfg.Server.DatabasePath))
 
 	// Initialize MX lookup with DNS resolver configuration
 	mxLookup := delivery.NewMXLookup(q, &cfg.Delivery, logger)

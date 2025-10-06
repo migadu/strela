@@ -7,7 +7,36 @@
 # Non-reloadable: database_path, listen address, worker_count, webhook_url (require restart)
 
 [server]
-pid_file = "fune.pid"  # Path to PID file for process management
+database_path = "./queue.db"  # SQLite database path (used by both fune-server and fune-admin)
+pid_file = "fune.pid"          # Path to PID file for process management
+
+# Logging configuration
+[logging]
+level = "info"      # Log level: debug, info, warn, error (default: info)
+format = "console"  # Log format: console (human-readable) or json (structured)
+
+# Logging best practices with systemd:
+# - Logs always go to stdout/stderr
+# - systemd's journald captures and manages logs automatically
+# - No need for log rotation (journald handles it)
+# - Use journalctl to view logs: journalctl -u fune -f
+#
+# Format options:
+#   console: Human-readable with colors (good for development, journalctl -u fune -f)
+#   json:    Structured JSON (good for log aggregation: ELK, Loki, Splunk)
+#
+# Production with systemd:
+#   level = "info"
+#   format = "json"  # Structured logging for journald
+#
+# Development:
+#   level = "debug"
+#   format = "console"  # Easy to read
+#
+# View logs:
+#   journalctl -u fune -f                    # Follow logs
+#   journalctl -u fune --since "1 hour ago"  # Last hour
+#   journalctl -u fune -o json-pretty        # JSON output
 
 [http]
 listen = ":8080"
@@ -31,7 +60,6 @@ metrics_enabled = true                 # Enable Prometheus metrics endpoint (rec
 metrics_path = "/metrics"              # Path for metrics endpoint (default: /metrics)
 
 [queue]
-database_path = "./queue.db"    # Each instance has its own database
 worker_count = 10               # Concurrent delivery workers per instance
 batch_size = 5                  # Messages to process per worker iteration
 cleanup_interval_seconds = 60   # How often to check for expired messages

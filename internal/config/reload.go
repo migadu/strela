@@ -123,9 +123,9 @@ func (rc *ReloadableConfig) Reload() error {
 // validateReload ensures critical fields haven't changed
 func (rc *ReloadableConfig) validateReload(oldCfg, newCfg *Config) error {
 	// Database path cannot change (would require migration)
-	if oldCfg.Queue.DatabasePath != newCfg.Queue.DatabasePath {
+	if oldCfg.Server.DatabasePath != newCfg.Server.DatabasePath {
 		return fmt.Errorf("database_path cannot be changed during reload (old: %s, new: %s)",
-			oldCfg.Queue.DatabasePath, newCfg.Queue.DatabasePath)
+			oldCfg.Server.DatabasePath, newCfg.Server.DatabasePath)
 	}
 
 	// HTTP listen address cannot change (would require server restart)

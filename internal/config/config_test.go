@@ -8,12 +8,14 @@ import (
 func TestLoadConfig(t *testing.T) {
 	// Create temporary config file
 	configContent := `
+[server]
+database_path = "./test.db"
+
 [http]
 listen = ":8080"
 auth_token = "test-token"
 
 [queue]
-database_path = "./test.db"
 worker_count = 5
 
 [delivery]
@@ -51,8 +53,8 @@ auth_token = "webhook-token"
 		t.Errorf("Expected auth_token test-token, got %s", config.HTTP.AuthToken)
 	}
 
-	if config.Queue.DatabasePath != "./test.db" {
-		t.Errorf("Expected database_path ./test.db, got %s", config.Queue.DatabasePath)
+	if config.Server.DatabasePath != "./test.db" {
+		t.Errorf("Expected database_path ./test.db, got %s", config.Server.DatabasePath)
 	}
 
 	if config.Queue.WorkerCount != 5 {

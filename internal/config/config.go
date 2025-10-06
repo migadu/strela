@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	Server    ServerConfig    `toml:"server"`
+	Logging   LoggingConfig   `toml:"logging"`
 	HTTP      HTTPConfig      `toml:"http"`
 	Queue     QueueConfig     `toml:"queue"`
 	Delivery  DeliveryConfig  `toml:"delivery"`
@@ -16,7 +17,15 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	PIDFile string `toml:"pid_file"` // Path to PID file (default: fune.pid)
+	DatabasePath string `toml:"database_path"` // Path to SQLite database file
+	PIDFile      string `toml:"pid_file"`      // Path to PID file (default: fune.pid)
+}
+
+type LoggingConfig struct {
+	Level  string `toml:"level"`  // Log level: debug, info, warn, error (default: info)
+	Format string `toml:"format"` // Log format: console, json (default: console)
+	// Note: Logs always go to stdout/stderr for systemd compatibility
+	// Use systemd's journald for log rotation and management in production
 }
 
 type HTTPConfig struct {
@@ -38,11 +47,10 @@ type HTTPConfig struct {
 }
 
 type QueueConfig struct {
-	DatabasePath           string `toml:"database_path"`
-	WorkerCount            int    `toml:"worker_count"`
-	BatchSize              int    `toml:"batch_size"`
-	CleanupIntervalSeconds int    `toml:"cleanup_interval_seconds"`
-	PollIntervalSeconds    int    `toml:"poll_interval_seconds"` // Fallback poll interval when no notifications
+	WorkerCount            int `toml:"worker_count"`
+	BatchSize              int `toml:"batch_size"`
+	CleanupIntervalSeconds int `toml:"cleanup_interval_seconds"`
+	PollIntervalSeconds    int `toml:"poll_interval_seconds"` // Fallback poll interval when no notifications
 }
 
 type DeliveryConfig struct {
@@ -90,6 +98,14 @@ func (c *Config) SetDefaults() {
 	// Server defaults
 	if c.Server.PIDFile == "" {
 		c.Server.PIDFile = "fune.pid"
+	}
+
+	// Logging defaults
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
+	if c.Logging.Format == "" {
+		c.Logging.Format = "console"
 	}
 
 	// HTTP defaults

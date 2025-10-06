@@ -19,3 +19,4 @@ config.toml
 # Development
 *.pem
 *.key
+test-config.toml

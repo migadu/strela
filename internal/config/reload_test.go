@@ -124,10 +124,11 @@ func TestReloadableConfig_ReloadValidation(t *testing.T) {
 		{
 			name: "database_path changed (should fail)",
 			initialConfig: `
+[server]
+database_path = "./queue.db"
 [http]
 listen = ":8080"
 [queue]
-database_path = "./queue.db"
 worker_count = 10
 [delivery]
 source_ips = []
@@ -135,10 +136,11 @@ source_ips = []
 webhook_url = "https://example.com/webhook"
 `,
 			updatedConfig: `
+[server]
+database_path = "./queue-new.db"
 [http]
 listen = ":8080"
 [queue]
-database_path = "./queue-new.db"
 worker_count = 10
 [delivery]
 source_ips = []
