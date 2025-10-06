@@ -36,6 +36,29 @@ var (
 	date    = "unknown"
 )
 
+// basicAuthMiddleware wraps an HTTP handler with HTTP Basic Authentication
+func basicAuthMiddleware(next http.Handler, username, password string, logger *zap.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Get credentials from Authorization header
+		user, pass, ok := r.BasicAuth()
+
+		// Check if credentials match
+		if !ok || user != username || pass != password {
+			logger.Warn("metrics endpoint unauthorized access attempt",
+				zap.String("remote_addr", r.RemoteAddr),
+				zap.String("user_agent", r.UserAgent()))
+
+			w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("Unauthorized\n"))
+			return
+		}
+
+		// Credentials are valid, pass to next handler
+		next.ServeHTTP(w, r)
+	})
+}
+
 // initLogger creates a logger that writes to stdout/stderr (systemd-compatible)
 func initLogger(logCfg *config.LoggingConfig) (*zap.Logger, error) {
 	// Parse log level
@@ -140,38 +163,41 @@ func main() {
 		zap.String("database", cfg.Server.DatabasePath),
 		zap.Int("workers", cfg.Queue.WorkerCount),
 		zap.Int("source_ips", len(cfg.Delivery.SourceIPs)),
-		zap.String("ip_selection", cfg.Delivery.IPSelection),
+		zap.String("source_ip_selection", cfg.Delivery.SourceIPSelection),
 		zap.String("callback_url", cfg.Callbacks.WebhookURL),
 		zap.Int("max_message_age_hours", cfg.Delivery.MaxMessageAgeHours))
 
 	// Initialize metrics (if enabled)
 	var m *metrics.Metrics
-	if !cfg.HTTP.MetricsEnabled {
+	if !cfg.Metrics.Enabled {
 		logger.Warn("metrics are DISABLED")
 	} else {
 		m = metrics.NewMetrics()
-		logger.Info("metrics initialized", zap.String("path", cfg.HTTP.MetricsPath))
+		logger.Info("metrics initialized", zap.String("path", cfg.Metrics.Path))
 	}
 
-	// Initialize gossip service (if enabled)
+	// Initialize cluster gossip service (if enabled)
 	gossipCfg := &gossip.Config{
-		Enabled:        cfg.Gossip.Enabled,
-		BindPort:       cfg.Gossip.BindPort,
-		JoinAddresses:  cfg.Gossip.JoinAddresses,
-		NodeID:         cfg.Gossip.NodeID,
+		Enabled:        cfg.Cluster.Enabled,
+		BindAddr:       cfg.Cluster.BindAddr,
+		BindPort:       cfg.Cluster.BindPort,
+		Peers:          cfg.Cluster.Peers,
+		NodeID:         cfg.Cluster.NodeID,
+		SecretKey:      cfg.Cluster.SecretKey,
 		IdempotencyTTL: time.Duration(cfg.HTTP.IdempotencyTTLHours) * time.Hour,
 	}
 
 	g, err := gossip.NewGossip(gossipCfg, logger)
 	if err != nil {
-		logger.Fatal("failed to initialize gossip", zap.Error(err))
+		logger.Fatal("failed to initialize cluster", zap.Error(err))
 	}
 	if g != nil {
 		defer g.Shutdown()
-		logger.Info("gossip service initialized",
-			zap.Bool("enabled", cfg.Gossip.Enabled),
-			zap.Int("bind_port", cfg.Gossip.BindPort),
-			zap.Strings("join_addresses", cfg.Gossip.JoinAddresses))
+		logger.Info("cluster gossip initialized",
+			zap.Bool("enabled", cfg.Cluster.Enabled),
+			zap.String("bind_addr", cfg.Cluster.BindAddr),
+			zap.Int("bind_port", cfg.Cluster.BindPort),
+			zap.Strings("peers", cfg.Cluster.Peers))
 	}
 
 	// Initialize TLS Manager for auto-certificates
@@ -200,7 +226,7 @@ func main() {
 	logger.Info("queue initialized", zap.String("database", cfg.Server.DatabasePath))
 
 	// Initialize MX lookup with DNS resolver configuration
-	mxLookup := delivery.NewMXLookup(q, &cfg.Delivery, logger)
+	mxLookup := delivery.NewMXLookup(q, &cfg.DNS, &cfg.Delivery, logger)
 
 	// Initialize deliverer
 	deliverer := delivery.NewDeliverer(&cfg.Delivery, mxLookup, logger, &cfg.Reputation)
@@ -236,8 +262,8 @@ func main() {
 
 	logger.Info("callback handler started")
 
-	// Initialize worker
-	w := worker.NewWorker(q, deliverer, retryScheduler, callbackHandler, &cfg.Delivery, &cfg.Queue, logger)
+	// Initialize worker with MXLookup for batch DNS prefetching
+	w := worker.NewWorker(q, deliverer, retryScheduler, mxLookup, callbackHandler, &cfg.Delivery, &cfg.Queue, logger)
 	w.Start(cfg.Queue.WorkerCount)
 	defer w.Stop()
 
@@ -309,9 +335,21 @@ func main() {
 	mux.Handle("/", finalHandler)
 
 	// Add metrics endpoint if enabled
-	if m != nil && cfg.HTTP.MetricsPath != "" {
-		mux.Handle(cfg.HTTP.MetricsPath, promhttp.Handler())
-		logger.Info("metrics endpoint registered", zap.String("path", cfg.HTTP.MetricsPath))
+	if m != nil && cfg.Metrics.Path != "" {
+		metricsHandler := promhttp.Handler()
+
+		// Wrap with Basic Auth if credentials are configured
+		if cfg.Metrics.Username != "" && cfg.Metrics.Password != "" {
+			metricsHandler = basicAuthMiddleware(metricsHandler, cfg.Metrics.Username, cfg.Metrics.Password, logger)
+			logger.Info("metrics endpoint registered with Basic Auth",
+				zap.String("path", cfg.Metrics.Path),
+				zap.String("username", cfg.Metrics.Username))
+		} else {
+			logger.Warn("metrics endpoint registered WITHOUT authentication - not recommended for production",
+				zap.String("path", cfg.Metrics.Path))
+		}
+
+		mux.Handle(cfg.Metrics.Path, metricsHandler)
 	}
 
 	// Add cluster status endpoint if gossip is enabled
@@ -353,6 +391,45 @@ func main() {
 			}
 		})
 		logger.Info("gossip status broadcaster started")
+	}
+
+	// Setup dedicated health check server (if enabled)
+	var healthServer *http.Server
+	if cfg.Health.Enabled {
+		healthHandler := handler.NewHealthHandler(g, q, deliverer, logger)
+
+		// Wrap with Basic Auth if credentials are configured
+		var finalHealthHandler http.Handler = healthHandler
+		if cfg.Health.Username != "" && cfg.Health.Password != "" {
+			finalHealthHandler = basicAuthMiddleware(healthHandler, cfg.Health.Username, cfg.Health.Password, logger)
+			logger.Info("health endpoint registered with Basic Auth",
+				zap.String("listen_addr", cfg.Health.ListenAddr),
+				zap.String("username", cfg.Health.Username))
+		} else {
+			logger.Info("health endpoint registered without authentication",
+				zap.String("listen_addr", cfg.Health.ListenAddr))
+		}
+
+		healthMux := http.NewServeMux()
+		healthMux.Handle("/health", finalHealthHandler)
+
+		healthServer = &http.Server{
+			Addr:         cfg.Health.ListenAddr,
+			Handler:      healthMux,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+
+		// Start health server in background
+		recovery.SafeGo(logger, "health server", func() {
+			logger.Info("health server starting", zap.String("addr", cfg.Health.ListenAddr))
+			if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("health server failed", zap.Error(err))
+			}
+		})
+	} else {
+		logger.Info("health endpoint disabled")
 	}
 
 	// Setup HTTP server with TLS certificate hot reload support
@@ -488,7 +565,7 @@ func main() {
 		}
 
 		// Reload MX lookup DNS configuration
-		if err := mxLookup.ReloadConfig(&newCfg.Delivery); err != nil {
+		if err := mxLookup.ReloadConfig(&newCfg.DNS, &newCfg.Delivery); err != nil {
 			return err
 		}
 
@@ -537,6 +614,14 @@ shutdown:
 		logger.Info("shutting down HTTP-01 challenge server...")
 		if err := httpChallengeServer.Shutdown(ctx); err != nil {
 			logger.Error("HTTP challenge server shutdown error", zap.Error(err))
+		}
+	}
+
+	// Shutdown health server (if running)
+	if healthServer != nil {
+		logger.Info("shutting down health server...")
+		if err := healthServer.Shutdown(ctx); err != nil {
+			logger.Error("health server shutdown error", zap.Error(err))
 		}
 	}
 

@@ -115,8 +115,8 @@ func TestSetDefaults(t *testing.T) {
 		t.Errorf("Expected default greylist_retry_delay_seconds 120, got %d", config.Delivery.GreylistRetryDelaySeconds)
 	}
 
-	if config.Delivery.IPSelection != "round-robin" {
-		t.Errorf("Expected default ip_selection round-robin, got %s", config.Delivery.IPSelection)
+	if config.Delivery.SourceIPSelection != "round-robin" {
+		t.Errorf("Expected default source_ip_selection round-robin, got %s", config.Delivery.SourceIPSelection)
 	}
 
 	if config.Callbacks.TimeoutSeconds != 10 {

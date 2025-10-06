@@ -20,6 +20,7 @@ type Worker struct {
 	queue           *queue.Queue
 	deliverer       *delivery.Deliverer
 	retryScheduler  *delivery.RetryScheduler
+	mxLookup        *delivery.MXLookup
 	deliveryConfig  *config.DeliveryConfig
 	queueConfig     *config.QueueConfig
 	logger          *zap.Logger
@@ -34,6 +35,7 @@ func NewWorker(
 	q *queue.Queue,
 	deliverer *delivery.Deliverer,
 	retryScheduler *delivery.RetryScheduler,
+	mxLookup *delivery.MXLookup,
 	callbackHandler *callback.CallbackHandler,
 	deliveryCfg *config.DeliveryConfig,
 	queueCfg *config.QueueConfig,
@@ -45,6 +47,7 @@ func NewWorker(
 		queue:           q,
 		deliverer:       deliverer,
 		retryScheduler:  retryScheduler,
+		mxLookup:        mxLookup,
 		callbackHandler: callbackHandler,
 		deliveryConfig:  deliveryCfg,
 		queueConfig:     queueCfg,
@@ -132,6 +135,20 @@ func (w *Worker) processBatch(workerID int) {
 		zap.Int("worker_id", workerID),
 		zap.Int("message_count", len(messages)))
 
+	// Batch DNS prefetch: Extract unique domains and prefetch MX records in parallel
+	if w.mxLookup != nil && len(messages) > 1 {
+		domains := make([]string, 0, len(messages))
+		for _, msg := range messages {
+			domains = append(domains, msg.ToDomain)
+		}
+
+		// Prefetch DNS for all domains in parallel (non-blocking, populates cache)
+		w.mxLookup.BatchPrefetch(w.ctx, domains)
+		// Note: We don't need the results here - the cache is populated
+		// Individual deliveries will use cached results
+	}
+
+	// Process messages (DNS already cached from prefetch)
 	for _, msg := range messages {
 		w.processMessage(msg)
 	}

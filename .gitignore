@@ -1,6 +1,6 @@
 # Build artifacts
-fune-server
-fune-admin
+./fune-server
+./fune-admin
 fune-linux-amd64
 fune-admin-linux-amd64
 fune-freebsd-amd64

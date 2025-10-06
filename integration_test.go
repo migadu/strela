@@ -52,7 +52,7 @@ func TestFullMessageFlow(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		IPSelection:               "round-robin",
+		SourceIPSelection:               "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  30,
 		SMTPTimeoutSeconds:        60,
@@ -190,7 +190,11 @@ func TestFullMessageFlow(t *testing.T) {
 
 	// Test 6: Test worker components (without actual SMTP)
 	// This tests the worker initialization
-	mxLookup := delivery.NewMXLookup(q, deliveryCfg, logger)
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheNegativeTTLSeconds: 60,
+	}
+	mxLookup := delivery.NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
 
@@ -211,7 +215,7 @@ func TestFullMessageFlow(t *testing.T) {
 		CleanupIntervalSeconds: 60,
 	}
 
-	wrk := worker.NewWorker(q, deliverer, retryScheduler, callbackHandler, deliveryCfg, queueCfg, logger)
+	wrk := worker.NewWorker(q, deliverer, retryScheduler, mxLookup, callbackHandler, deliveryCfg, queueCfg, logger)
 
 	if wrk == nil {
 		t.Fatal("Failed to create worker")
@@ -430,7 +434,7 @@ func TestWorkerLifecycle(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		IPSelection:               "round-robin",
+		SourceIPSelection:               "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  5,
 		SMTPTimeoutSeconds:        10,
@@ -441,8 +445,6 @@ func TestWorkerLifecycle(t *testing.T) {
 		MaxIPsPerMX:               5,
 		PerDomainIntervalSeconds:  0,
 		PerDomainRetrySeconds:     1,
-		DNSTimeoutSeconds:         5,
-		DNSCacheNegativeTTL:       60,
 	}
 
 	queueCfg := &config.QueueConfig{
@@ -462,7 +464,11 @@ func TestWorkerLifecycle(t *testing.T) {
 		BatchSize:                10,
 	}
 
-	mxLookup := delivery.NewMXLookup(q, deliveryCfg, logger)
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheNegativeTTLSeconds: 60,
+	}
+	mxLookup := delivery.NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
@@ -473,7 +479,7 @@ func TestWorkerLifecycle(t *testing.T) {
 	defer callbackHandler.Stop()
 
 	// Create worker
-	w := worker.NewWorker(q, deliverer, retryScheduler, callbackHandler, deliveryCfg, queueCfg, logger)
+	w := worker.NewWorker(q, deliverer, retryScheduler, mxLookup, callbackHandler, deliveryCfg, queueCfg, logger)
 
 	// Start workers
 	w.Start(2)
@@ -648,8 +654,6 @@ func TestDeliveryRetry(t *testing.T) {
 		MaxIPsPerMX:               5,
 		PerDomainIntervalSeconds:  0,
 		PerDomainRetrySeconds:     1,
-		DNSTimeoutSeconds:         5,
-		DNSCacheNegativeTTL:       60,
 	}
 
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
@@ -798,7 +802,7 @@ func TestConcurrentWorkers(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		IPSelection:               "round-robin",
+		SourceIPSelection:               "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  5,
 		SMTPTimeoutSeconds:        10,
@@ -809,8 +813,6 @@ func TestConcurrentWorkers(t *testing.T) {
 		MaxIPsPerMX:               5,
 		PerDomainIntervalSeconds:  0,
 		PerDomainRetrySeconds:     5,
-		DNSTimeoutSeconds:         5,
-		DNSCacheNegativeTTL:       60,
 	}
 
 	queueCfg := &config.QueueConfig{
@@ -830,13 +832,17 @@ func TestConcurrentWorkers(t *testing.T) {
 		BatchSize:                10,
 	}
 
-	mxLookup := delivery.NewMXLookup(q, deliveryCfg, logger)
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheNegativeTTLSeconds: 60,
+	}
+	mxLookup := delivery.NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackCfg, logger)
 
-	w := worker.NewWorker(q, deliverer, retryScheduler, callbackHandler, deliveryCfg, queueCfg, logger)
+	w := worker.NewWorker(q, deliverer, retryScheduler, mxLookup, callbackHandler, deliveryCfg, queueCfg, logger)
 
 	// Start workers
 	w.Start(3)
@@ -912,7 +918,7 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 	deliveryCfg := &config.DeliveryConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
-		IPSelection:               "round-robin",
+		SourceIPSelection:               "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  30,
 		SMTPTimeoutSeconds:        60,

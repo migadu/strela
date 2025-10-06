@@ -3,7 +3,7 @@
 # Hot Reload: Send SIGHUP signal to reload configuration without downtime
 #   kill -HUP <pid>  OR  systemctl reload fune  OR  fune-admin reload
 #
-# Reloadable: source_ips, ip_selection, rate limits, circuit breaker, DNS, TLS certs, HTTP timeouts
+# Reloadable: source_ips, source_ip_selection, rate limits, circuit breaker, DNS, TLS certs, HTTP timeouts
 # Non-reloadable: database_path, listen address, worker_count, webhook_url (require restart)
 
 [server]
@@ -130,10 +130,6 @@ region = "us-east-1"                   # AWS region (optional, uses default if n
 # - Your main HTTPS server runs on the port specified in http.listen (typically :443)
 # - All HTTP traffic on port 80 is automatically redirected to HTTPS
 
-# Metrics configuration
-metrics_enabled = true                 # Enable Prometheus metrics endpoint (recommended for production)
-metrics_path = "/metrics"              # Path for metrics endpoint (default: /metrics)
-
 # Idempotency configuration (prevents duplicate message delivery)
 idempotency_enabled = false            # Enable idempotency key support (default: false)
 idempotency_header = "X-Idempotency-Key"  # Header name for idempotency key (default: X-Idempotency-Key)
@@ -143,17 +139,48 @@ idempotency_ttl_hours = 24             # How long to keep idempotency keys in ho
 # Keys are automatically cleaned up after TTL expires
 # Recommended for use with HAProxy consistent hashing: balance hdr(X-Idempotency-Key)
 
+[metrics]
+# Prometheus metrics configuration
+enabled = true                         # Enable Prometheus metrics endpoint (recommended for production)
+path = "/metrics"                      # Path for metrics endpoint (default: /metrics)
+username = "admin"                     # HTTP Basic Auth username (optional, REQUIRED in production)
+password = "secure-random-password"    # HTTP Basic Auth password (optional, use strong password)
+# Security: If username and password are set, the metrics endpoint requires HTTP Basic Auth
+# Leave empty to disable authentication (NOT recommended for production)
+
+[health]
+# Health check endpoint configuration (cluster status, queue stats, system health)
+enabled = true                         # Enable health endpoint (default: true)
+listen_addr = ":8080"                  # Address to listen on (default: :8080)
+username = ""                          # HTTP Basic Auth username (optional, leave empty for no auth)
+password = ""                          # HTTP Basic Auth password (optional)
+# The health endpoint provides cluster status, queue depth, circuit breaker state, and system info
+# Accessible at http://<listen_addr>/health (e.g., http://localhost:8080/health)
+# Use fune-admin to query: ./fune-admin health
+
 [queue]
 worker_count = 10               # Concurrent delivery workers per instance
 batch_size = 5                  # Messages to process per worker iteration
 cleanup_interval_seconds = 60   # How often to check for expired messages
 poll_interval_seconds = 30      # Fallback poll interval (workers are notified immediately)
 
+[dns]
+# DNS resolver configuration for MX record lookups
+# Custom DNS servers (optional, uses system default if not specified)
+# Supports both IPv4 and IPv6 DNS servers (IPv6 must use bracket notation)
+resolvers = ["8.8.8.8:53", "[2001:4860:4860::8888]:53"]  # Google DNS (IPv4 and IPv6)
+# resolvers = ["1.1.1.1:53", "[2606:4700:4700::1111]:53"]  # Cloudflare DNS (IPv4 and IPv6)
+# resolvers = []  # Empty to use system default resolver
+timeout_seconds = 5            # Timeout for individual DNS queries
+cache_ttl_seconds = 3600       # Cache successful DNS lookups for 1 hour (default: 3600)
+cache_negative_ttl_seconds = 60        # Cache failed lookups (NXDOMAIN) for 1 minute
+# Note: DNS resolver automatically queries both AAAA (IPv6) and A (IPv4) records
+
 [delivery]
 # Multiple source IPs for outbound delivery (supports both IPv4 and IPv6) [HOT RELOAD]
 # IPv6 addresses should be in standard notation
 source_ips = ["192.168.1.100", "192.168.1.101", "2001:db8::1"]
-ip_selection = "round-robin"   # Options: "round-robin", "random", "hash-domain" [HOT RELOAD]
+source_ip_selection = "round-robin"   # Options: "round-robin", "random", "hash-domain" [HOT RELOAD]
 # Note: Delivery attempts IPv6 first, then falls back to IPv4
 
 # MX lookup and connection settings
@@ -167,20 +194,11 @@ per_domain_interval_seconds = 2  # Minimum seconds between deliveries to same do
 per_domain_retry_seconds = 5     # Retry delay when rate-limited
 
 # Circuit breaker configuration (stops accepting requests during delivery failures)
-circuit_breaker_enabled = true            # Enable circuit breaker (recommended for production)
-circuit_breaker_failure_threshold = 5     # Consecutive local failures before opening circuit
-circuit_breaker_success_threshold = 2     # Consecutive successes in half-open to close circuit
-circuit_breaker_open_timeout_seconds = 60 # Seconds to wait before trying half-open state
-
-# DNS resolver configuration
-# Custom DNS servers for MX lookups (optional, uses system default if not specified)
-# Supports both IPv4 and IPv6 DNS servers (IPv6 must use bracket notation)
-dns_resolvers = ["8.8.8.8:53", "[2001:4860:4860::8888]:53"]  # Google DNS (IPv4 and IPv6)
-# dns_resolvers = ["1.1.1.1:53", "[2606:4700:4700::1111]:53"]  # Cloudflare DNS (IPv4 and IPv6)
-# dns_resolvers = []  # Empty to use system default resolver
-dns_timeout_seconds = 5            # Timeout for individual DNS queries
-dns_cache_negative_ttl = 60        # Cache failed lookups (NXDOMAIN) for 1 minute
-# Note: DNS resolver automatically queries both AAAA (IPv6) and A (IPv4) records
+# ENABLED BY DEFAULT - Set to false only if you have external circuit breaking
+circuit_breaker_enabled = true            # Default: true (production safety feature)
+circuit_breaker_failure_threshold = 5     # Default: 5 - Consecutive local failures before opening circuit
+circuit_breaker_success_threshold = 2     # Default: 2 - Consecutive successes in half-open to close circuit
+circuit_breaker_open_timeout_seconds = 60 # Default: 60 - Seconds to wait before trying half-open state
 
 # Retry configuration
 max_message_age_hours = 48
@@ -201,6 +219,20 @@ batch_size = 10                        # Callbacks to process per iteration
 
 # Callback retry pattern: 30s, 60s, 120s, 240s, 480s, 960s, 1800s, 3600s (max), ...
 # Total retries depend on max_callback_age_hours - retries until age exceeds limit
+
+# Circuit breaker configuration (protects against webhook failures)
+# ENABLED BY DEFAULT - Prevents callback queue blocking when webhook is down
+circuit_breaker_enabled = true              # Default: true (production safety feature)
+circuit_breaker_failure_threshold = 5       # Default: 5 - Consecutive network failures before opening circuit
+circuit_breaker_success_threshold = 2       # Default: 2 - Consecutive successes in half-open to close circuit
+circuit_breaker_open_timeout_seconds = 60   # Default: 60 - Seconds to wait before trying half-open state
+
+# Circuit breaker behavior:
+# - Opens on consecutive network/timeout errors (connection refused, DNS failures, timeouts)
+# - Does NOT open on HTTP 4xx/5xx responses from webhook (application errors)
+# - When open: callbacks are postponed (not lost), retried after timeout
+# - Prevents callback queue from being blocked by unreachable webhook endpoints
+# - Automatically recovers when webhook becomes available again
 
 [reputation]
 # IP reputation tracking and alerting
@@ -236,13 +268,24 @@ degraded_ip_cleanup_hours = 168        # Hours to keep degraded IP history - 7 d
 # - If retry succeeds, alert webhook is called with event_type="recovered"
 # - If retry fails, IP remains degraded for another degraded_retry_hours period
 
-[gossip]
-# Gossip protocol configuration for distributed coordination across multiple fune instances
-# Uses HashiCorp memberlist for cluster membership and state sharing
-enabled = false                                    # Enable gossip protocol (default: false)
-bind_port = 7946                                   # Port for gossip protocol (default: 7946)
-join_addresses = ["fune-1:7946", "fune-2:7946"]   # Initial seed nodes to join the cluster
-node_id = ""                                       # Unique node identifier (defaults to hostname)
+[cluster]
+# Cluster configuration for distributed coordination across multiple fune instances
+# Uses HashiCorp memberlist gossip protocol for membership and state sharing
+enabled = false                                         # Enable cluster mode (default: false)
+bind_addr = "0.0.0.0"                                   # IP address to bind to (default: 0.0.0.0 - all interfaces)
+bind_port = 7946                                        # Port for gossip protocol (default: 7946)
+node_id = ""                                            # Unique node identifier (defaults to hostname)
+
+# PEERS: List of initial seed nodes to join the cluster
+# You only need to list 1-2 existing nodes - gossip will discover all others automatically
+# Format: ["hostname:port", "hostname:port"] or ["hostname"] (assumes bind_port if port omitted)
+# Each node should list at least one OTHER node (not itself)
+peers = ["fune-1", "fune-2"]                           # Initial seed nodes (port defaults to bind_port)
+
+# SECURITY: Encrypt all cluster communication (REQUIRED for production)
+# Generate a 32-byte secret key: openssl rand -base64 32
+# All cluster nodes MUST use the SAME secret key
+secret_key = "your-base64-encoded-32-byte-secret-key-here"  # Empty = INSECURE (not recommended)
 
 # Features enabled by gossip protocol:
 # 1. Leader Election for Auto-TLS:
@@ -267,15 +310,19 @@ node_id = ""                                       # Unique node identifier (def
 # Example multi-node setup:
 #   Node 1 (fune-1):
 #     enabled = true
+#     bind_addr = "0.0.0.0"          # Bind to all interfaces
 #     bind_port = 7946
-#     join_addresses = ["fune-2:7946", "fune-3:7946"]  # Other nodes in cluster
+#     peers = ["fune-2", "fune-3"]   # Initial seed nodes (port defaults to bind_port)
 #     node_id = "fune-1"
+#     secret_key = "same-key-on-all-nodes"
 #
 #   Node 2 (fune-2):
 #     enabled = true
+#     bind_addr = "10.0.1.10"        # Bind to specific private IP
 #     bind_port = 7946
-#     join_addresses = ["fune-1:7946", "fune-3:7946"]
+#     peers = ["fune-1"]              # Only need 1 seed node
 #     node_id = "fune-2"
+#     secret_key = "same-key-on-all-nodes"
 #
 # Recommended use with load balancer:
 #   - HAProxy with consistent hashing: balance hdr(X-Idempotency-Key)

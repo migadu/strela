@@ -47,6 +47,11 @@ clean:
 test:
 	go test -v ./...
 
+# Run tests with coverage
+coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out
+
 # Cross-compile with musl libc for Linux
 build-linux-musl:
 	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(fune_LINUX_BINARY) ./cmd/fune-server

@@ -20,7 +20,7 @@ func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                 []string{"127.0.0.1"},
-		IPSelection:               "round-robin",
+		SourceIPSelection:               "round-robin",
 		MXCacheTTLSeconds:         3600,
 		ConnectionTimeoutSeconds:  5,
 		SMTPTimeoutSeconds:        10,
@@ -55,12 +55,13 @@ func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 		DegradedIPCleanupHours: 168,
 	}
 
-	mxLookup := delivery.NewMXLookup(q, cfg, logger)
+	dnsCfg := &config.DNSConfig{}
+	mxLookup := delivery.NewMXLookup(q, dnsCfg, cfg, logger)
 	deliverer := delivery.NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 	retryScheduler := delivery.NewRetryScheduler(cfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackConfig, logger)
 
-	worker := NewWorker(q, deliverer, retryScheduler, callbackHandler, cfg, queueCfg, logger)
+	worker := NewWorker(q, deliverer, retryScheduler, mxLookup, callbackHandler, cfg, queueCfg, logger)
 
 	cleanup := func() {
 		queueCleanup()

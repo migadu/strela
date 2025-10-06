@@ -11,8 +11,8 @@ A production-ready, queue-based SMTP delivery service with direct MX delivery, i
 - **Multiple Source IPs**: Rotate through multiple outbound IPs (round-robin, random, hash-domain)
 - **IP Reputation Tracking**: Automatically detects and manages degraded IPs due to blacklisting
 - **Exponential Backoff**: Intelligent retry with 5min → 12h cap over 48 hours
-- **Circuit Breaker**: Automatic health monitoring and fast-fail during infrastructure failures
-- **Webhook Callbacks**: Notifies your endpoint on delivery/bounce events with retry logic
+- **Circuit Breakers**: Automatic health monitoring and fast-fail during infrastructure failures (enabled by default for delivery and webhooks)
+- **Webhook Callbacks**: Notifies your endpoint on delivery/bounce events with circuit breaker protection
 
 ### Operations & Monitoring
 - **Hot Reload**: Configuration changes without downtime (SIGHUP signal)
@@ -25,15 +25,19 @@ A production-ready, queue-based SMTP delivery service with direct MX delivery, i
 ### Reliability & Performance
 - **SQLite WAL**: Persistent queue with concurrent reads, single writer
 - **Event-Driven Workers**: Instant message processing with fallback polling
-- **MX Caching**: Reduces DNS queries and improves delivery latency
+- **Batch DNS Prefetching**: Parallel MX lookups for multiple domains in same batch
+- **MX Caching**: Reduces DNS queries and improves delivery latency (1 hour TTL)
 - **Destination Throttling**: Prevents rapid-fire connections (anti-spam)
 - **TLS Support**: Optional HTTPS for API, opportunistic STARTTLS for SMTP
 - **Idempotency**: Optional idempotency key support to prevent duplicate deliveries
 
 ### Cluster Support (Optional)
 - **Gossip Protocol**: Distributed coordination using HashiCorp memberlist
+- **Encrypted Communication**: AES-256 encryption for all gossip traffic (required for production)
+- **Leader Election**: Automatic leader selection for Let's Encrypt certificate management
 - **Distributed Idempotency**: Best-effort duplicate prevention across cluster nodes
 - **Cluster Monitoring**: Real-time visibility into queue depth and load across all nodes
+- **Flexible Binding**: Configure specific network interfaces for cluster communication
 - **Admin API**: `/admin/cluster/status` endpoint for cluster health
 - **CLI Tools**: `fune-admin cluster-status` command for cluster inspection
 
@@ -92,32 +96,119 @@ auth_token = "webhook-secret"
 ### Complete Configuration
 
 See [config.toml.example](config.toml.example) for all options including:
+- Auto-TLS with Let's Encrypt (with S3 storage and cluster coordination)
 - TLS/HTTPS configuration
 - IP rotation strategies (round-robin, random, hash-domain)
 - Circuit breaker thresholds
-- DNS resolver settings
+- Custom DNS resolvers with failover
 - Retry schedules and backoff
 - Idempotency settings
 - IP reputation tracking
 - Prometheus metrics
-- Gossip protocol for clustering
+- Cluster mode with gossip protocol
 
-### Cluster Setup (Optional)
+### Auto-TLS with Let's Encrypt (Optional)
 
-Enable gossip protocol for distributed coordination across multiple nodes:
+Automatic HTTPS certificate management with cluster-aware coordination:
 
 ```toml
-[gossip]
+[tls]
 enabled = true
-bind_port = 7946
-join_addresses = ["fune-1:7946", "fune-2:7946", "fune-3:7946"]
-node_id = "fune-1"  # Unique per node (defaults to hostname)
+provider = "letsencrypt"
+
+[tls.letsencrypt]
+email = "admin@example.com"
+domains = ["mail.example.com"]
+storage_provider = "s3"
+
+[tls.letsencrypt.s3]
+bucket = "fune-certs"
+region = "us-east-1"
+# Optional: Use specific credentials (or IAM role/env vars)
+# access_key_id = ""
+# secret_access_key = ""
 ```
 
 **Features:**
+- **Automatic Certificates**: Requests and renews Let's Encrypt certificates
+- **HTTP-01 Challenge**: Built-in challenge server on port 80
+- **S3 Storage**: Stores certificates in S3 for cluster-wide access
+- **Leader Coordination**: Only the cluster leader requests/renews certificates
+- **Certificate Monitoring**: Automatic expiry tracking and renewal
+- **All Nodes Serve HTTPS**: All nodes read certificates from S3
+
+**Cluster Mode (Recommended):**
+When running in cluster mode with multiple nodes:
+1. Enable cluster gossip protocol (see Cluster Setup below)
+2. Leader election automatically determines which node manages certificates
+3. Only the leader requests/renews Let's Encrypt certificates
+4. All nodes read certificates from shared S3 storage
+5. Automatic failover if leader node fails
+
+**Requirements:**
+- Port 80 accessible for HTTP-01 challenge
+- Port 443 for HTTPS API
+- S3 bucket with read/write access
+- DNS A/AAAA records pointing to your server(s)
+
+### Custom DNS Resolvers (Optional)
+
+Configure custom DNS resolvers with automatic failover:
+
+```toml
+[dns]
+resolvers = ["1.1.1.1:53", "8.8.8.8:53", "8.8.4.4:53"]
+timeout_seconds = 5
+cache_negative_ttl_seconds = 60
+```
+
+**Features:**
+- **Round-robin load distribution** across all configured resolvers
+- **Automatic failover** - tries all resolvers before giving up
+- **UDP → TCP fallback** - automatically retries with TCP if UDP fails
+- **System default fallback** - uses OS resolver if none configured
+
+**Flow:**
+```
+Query 1: Try 1.1.1.1 (UDP → TCP) → 8.8.8.8 (UDP → TCP) → 8.8.4.4 (UDP → TCP)
+Query 2: Try 8.8.8.8 (UDP → TCP) → 8.8.4.4 (UDP → TCP) → 1.1.1.1 (UDP → TCP)
+Query 3: Try 8.8.4.4 (UDP → TCP) → 1.1.1.1 (UDP → TCP) → 8.8.8.8 (UDP → TCP)
+```
+
+### Cluster Setup (Optional)
+
+Enable cluster mode for distributed coordination across multiple nodes:
+
+```toml
+[cluster]
+enabled = true
+bind_addr = "0.0.0.0"  # IP to bind to (default: 0.0.0.0 - all interfaces)
+bind_port = 7946       # Port for gossip protocol (default: 7946)
+node_id = "fune-1"     # Unique per node (defaults to hostname)
+
+# List 1-2 initial seed nodes (gossip discovers others automatically)
+# Port is optional and defaults to bind_port
+peers = ["fune-2", "fune-3"]
+
+# SECURITY: Encrypt all cluster communication (REQUIRED for production)
+# Generate key: openssl rand -base64 32
+# Use the SAME key on all cluster nodes
+secret_key = "your-base64-encoded-32-byte-secret-key-here"
+```
+
+**Note**: You only need to list a few initial peers. The gossip protocol automatically discovers all other cluster members.
+
+**Features:**
+- **AES-256 Encryption**: All gossip traffic encrypted (when `secret_key` is set)
 - **Distributed Idempotency**: Prevents duplicate processing when requests hit different nodes
 - **Load Monitoring**: Real-time visibility into queue depth across the cluster
 - **Cluster Health**: Monitor node status, uptime, and active workers
+
+**Generate encryption key:**
+```bash
+# Generate a secure 32-byte key for cluster encryption
+openssl rand -base64 32
+```
 
 **View cluster status:**
 ```bash
@@ -299,6 +390,31 @@ Fune sends POST requests to your `webhook_url` for all terminal events:
 }
 ```
 
+### Callback Circuit Breaker
+
+Protect your system from webhook failures with the callback circuit breaker (**enabled by default**):
+
+```toml
+[callbacks]
+circuit_breaker_enabled = true             # Default: true
+circuit_breaker_failure_threshold = 5      # Default: 5
+circuit_breaker_success_threshold = 2      # Default: 2
+circuit_breaker_open_timeout_seconds = 60  # Default: 60
+```
+
+**How it works:**
+- **Opens on network errors**: Connection refused, DNS failures, timeouts
+- **Ignores application errors**: HTTP 4xx/5xx responses don't trigger circuit breaker
+- **Postpones callbacks**: When open, callbacks wait until webhook recovers
+- **Automatic recovery**: Tests webhook availability and closes when successful
+
+**States:**
+- **Closed** (normal): All callbacks sent immediately
+- **Open** (failing): Callbacks postponed for 60 seconds
+- **Half-Open** (testing): Limited callbacks to test recovery
+
+This prevents your callback queue from being blocked by an unreachable webhook endpoint while ensuring no callbacks are lost.
+
 ## Retry Schedule
 
 Exponential backoff with configurable cap:
@@ -365,7 +481,7 @@ Event types: `degraded`, `recovered`
 
 ## Circuit Breaker
 
-Automatically stops accepting requests when local infrastructure fails:
+Automatically stops accepting requests when local infrastructure fails (**enabled by default**):
 
 ### States
 
@@ -377,10 +493,10 @@ Automatically stops accepting requests when local infrastructure fails:
 
 ```toml
 [delivery]
-circuit_breaker_enabled = true
-circuit_breaker_failure_threshold = 5      # Failures before opening
-circuit_breaker_success_threshold = 2      # Successes to close
-circuit_breaker_open_timeout_seconds = 60  # Wait before testing
+circuit_breaker_enabled = true             # Default: true
+circuit_breaker_failure_threshold = 5      # Default: 5
+circuit_breaker_success_threshold = 2      # Default: 2
+circuit_breaker_open_timeout_seconds = 60  # Default: 60
 ```
 
 ### Triggers
@@ -398,7 +514,7 @@ circuit_breaker_open_timeout_seconds = 60  # Wait before testing
 
 ### Prometheus Metrics
 
-Available at `/metrics` endpoint:
+Available at `/metrics` endpoint (secured with HTTP Basic Auth in production):
 
 ```promql
 # Queue depth by status
@@ -425,6 +541,34 @@ fune_http_requests_total{method="POST",path="/",status="202"}  # idempotent resp
 
 # Callback attempts
 fune_callback_attempts_total{outcome="success",event_type="delivered"}
+```
+
+**Securing the Metrics Endpoint:**
+
+Configure HTTP Basic Auth for production deployments:
+
+```toml
+[metrics]
+enabled = true
+path = "/metrics"
+username = "admin"
+password = "secure-random-password"
+```
+
+Access metrics with authentication:
+```bash
+curl -u admin:secure-random-password https://mail.example.com/metrics
+```
+
+Configure Prometheus scrape config:
+```yaml
+scrape_configs:
+  - job_name: 'fune'
+    basic_auth:
+      username: 'admin'
+      password: 'secure-random-password'
+    static_configs:
+      - targets: ['mail.example.com:443']
 ```
 
 ### Recommended Alerts
@@ -792,6 +936,15 @@ batch_size = 5  # Messages per worker iteration
 ```
 - Larger = fewer DB queries, but potential head-of-line blocking
 - Smaller = more responsive, but more DB overhead
+- **Optimization**: Larger batches enable DNS prefetching (e.g., 5-10 messages)
+
+**DNS Batch Prefetching** (automatic, no configuration needed):
+- Workers automatically prefetch DNS for all unique domains in a batch
+- **Example**: Batch of 5 messages to `gmail.com`, `yahoo.com`, `gmail.com`, `outlook.com`, `gmail.com`
+  - Traditional: 5 sequential DNS lookups
+  - With batching: 3 parallel DNS lookups (deduplicated)
+- Benefits compound with larger batches and common domains
+- All prefetched results are cached for instant reuse
 
 ### MX Cache TTL
 ```toml

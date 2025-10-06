@@ -12,11 +12,14 @@ type Config struct {
 	Logging    LoggingConfig    `toml:"logging"`
 	HTTP       HTTPConfig       `toml:"http"`
 	TLS        TLSConfig        `toml:"tls"`
+	DNS        DNSConfig        `toml:"dns"`
+	Metrics    MetricsConfig    `toml:"metrics"`
+	Health     HealthConfig     `toml:"health"`
 	Queue      QueueConfig      `toml:"queue"`
 	Delivery   DeliveryConfig   `toml:"delivery"`
 	Callbacks  CallbacksConfig  `toml:"callbacks"`
 	Reputation ReputationConfig `toml:"reputation"`
-	Gossip     GossipConfig     `toml:"gossip"`
+	Cluster    ClusterConfig    `toml:"cluster"`
 }
 
 type ServerConfig struct {
@@ -37,14 +40,24 @@ type HTTPConfig struct {
 	WriteTimeoutSecs int    `toml:"write_timeout_seconds"` // Write timeout for responses
 	IdleTimeoutSecs  int    `toml:"idle_timeout_seconds"`  // Idle timeout for keep-alive
 
-	// Metrics configuration
-	MetricsEnabled bool   `toml:"metrics_enabled"` // Enable Prometheus metrics endpoint (default: true)
-	MetricsPath    string `toml:"metrics_path"`    // Path for metrics endpoint (default: /metrics)
-
 	// Idempotency configuration
 	IdempotencyEnabled  bool   `toml:"idempotency_enabled"`   // Enable idempotency key support (default: false)
 	IdempotencyHeader   string `toml:"idempotency_header"`    // Header name for idempotency key (default: X-Idempotency-Key)
 	IdempotencyTTLHours int    `toml:"idempotency_ttl_hours"` // How long to keep idempotency keys (default: 24)
+}
+
+type MetricsConfig struct {
+	Enabled  bool   `toml:"enabled"`  // Enable Prometheus metrics endpoint (default: true)
+	Path     string `toml:"path"`     // Path for metrics endpoint (default: /metrics)
+	Username string `toml:"username"` // HTTP Basic Auth username (optional, secure in production)
+	Password string `toml:"password"` // HTTP Basic Auth password (optional, use strong password)
+}
+
+type HealthConfig struct {
+	Enabled    bool   `toml:"enabled"`     // Enable health check endpoint (default: true)
+	ListenAddr string `toml:"listen_addr"` // Address to listen on (default: :8080)
+	Username   string `toml:"username"`    // HTTP Basic Auth username (optional)
+	Password   string `toml:"password"`    // HTTP Basic Auth password (optional)
 }
 
 type TLSConfig struct {
@@ -76,9 +89,16 @@ type QueueConfig struct {
 	PollIntervalSeconds    int `toml:"poll_interval_seconds"` // Fallback poll interval when no notifications
 }
 
+type DNSConfig struct {
+	Resolvers               []string `toml:"resolvers"`                  // Custom DNS servers (empty = system default)
+	TimeoutSeconds          int      `toml:"timeout_seconds"`            // Timeout for DNS queries
+	CacheTTLSeconds         int      `toml:"cache_ttl_seconds"`          // Cache successful DNS lookups
+	CacheNegativeTTLSeconds int      `toml:"cache_negative_ttl_seconds"` // Cache failed lookups (NXDOMAIN)
+}
+
 type DeliveryConfig struct {
 	SourceIPs                 []string `toml:"source_ips"`
-	IPSelection               string   `toml:"ip_selection"` // "round-robin", "random", "hash-domain"
+	SourceIPSelection         string   `toml:"source_ip_selection"` // "round-robin", "random", "hash-domain"
 	MXCacheTTLSeconds         int      `toml:"mx_cache_ttl_seconds"`
 	ConnectionTimeoutSeconds  int      `toml:"connection_timeout_seconds"`
 	SMTPTimeoutSeconds        int      `toml:"smtp_timeout_seconds"`
@@ -98,11 +118,6 @@ type DeliveryConfig struct {
 	CircuitBreakerFailureThreshold int  `toml:"circuit_breaker_failure_threshold"`
 	CircuitBreakerSuccessThreshold int  `toml:"circuit_breaker_success_threshold"`
 	CircuitBreakerOpenTimeoutSecs  int  `toml:"circuit_breaker_open_timeout_seconds"`
-
-	// DNS resolver configuration
-	DNSResolvers        []string `toml:"dns_resolvers"`
-	DNSTimeoutSeconds   int      `toml:"dns_timeout_seconds"`
-	DNSCacheNegativeTTL int      `toml:"dns_cache_negative_ttl"`
 }
 
 type CallbacksConfig struct {
@@ -114,6 +129,12 @@ type CallbacksConfig struct {
 	MaxRetryDelaySeconds     int     `toml:"max_retry_delay_seconds"`
 	BackoffMultiplier        float64 `toml:"backoff_multiplier"`
 	BatchSize                int     `toml:"batch_size"`
+
+	// Circuit breaker configuration
+	CircuitBreakerEnabled          bool `toml:"circuit_breaker_enabled"`
+	CircuitBreakerFailureThreshold int  `toml:"circuit_breaker_failure_threshold"`
+	CircuitBreakerSuccessThreshold int  `toml:"circuit_breaker_success_threshold"`
+	CircuitBreakerOpenTimeoutSecs  int  `toml:"circuit_breaker_open_timeout_seconds"`
 }
 
 type ReputationConfig struct {
@@ -125,11 +146,13 @@ type ReputationConfig struct {
 	DegradedIPCleanupHours int    `toml:"degraded_ip_cleanup_hours"`
 }
 
-type GossipConfig struct {
-	Enabled       bool     `toml:"enabled"`
-	BindPort      int      `toml:"bind_port"`
-	JoinAddresses []string `toml:"join_addresses"`
-	NodeID        string   `toml:"node_id"`
+type ClusterConfig struct {
+	Enabled   bool     `toml:"enabled"`
+	BindAddr  string   `toml:"bind_addr"` // IP address to bind to (default: 0.0.0.0)
+	BindPort  int      `toml:"bind_port"`
+	Peers     []string `toml:"peers"`      // All other cluster nodes (address:port)
+	NodeID    string   `toml:"node_id"`    // Unique node identifier
+	SecretKey string   `toml:"secret_key"` // 32-byte base64 encoded encryption key for AES-256
 }
 
 // SetDefaults sets default values for optional config fields
@@ -155,15 +178,23 @@ func (c *Config) SetDefaults() {
 	if c.HTTP.IdleTimeoutSecs == 0 {
 		c.HTTP.IdleTimeoutSecs = 120
 	}
-	if c.HTTP.MetricsPath == "" {
-		c.HTTP.MetricsPath = "/metrics"
-	}
 	if c.HTTP.IdempotencyHeader == "" {
 		c.HTTP.IdempotencyHeader = "X-Idempotency-Key"
 	}
 	if c.HTTP.IdempotencyTTLHours == 0 {
 		c.HTTP.IdempotencyTTLHours = 24
 	}
+
+	// Metrics defaults
+	if c.Metrics.Path == "" {
+		c.Metrics.Path = "/metrics"
+	}
+
+	// Health defaults
+	if c.Health.ListenAddr == "" {
+		c.Health.ListenAddr = ":8080"
+	}
+
 	if c.TLS.Provider == "" {
 		c.TLS.Provider = "file"
 	}
@@ -206,8 +237,8 @@ func (c *Config) SetDefaults() {
 	if c.Delivery.GreylistRetryDelaySeconds == 0 {
 		c.Delivery.GreylistRetryDelaySeconds = 120
 	}
-	if c.Delivery.IPSelection == "" {
-		c.Delivery.IPSelection = "round-robin"
+	if c.Delivery.SourceIPSelection == "" {
+		c.Delivery.SourceIPSelection = "round-robin"
 	}
 	if c.Delivery.MaxIPsPerMX == 0 {
 		c.Delivery.MaxIPsPerMX = 5
@@ -218,6 +249,10 @@ func (c *Config) SetDefaults() {
 	if c.Delivery.PerDomainRetrySeconds == 0 {
 		c.Delivery.PerDomainRetrySeconds = 5
 	}
+	// Circuit breaker enabled by default for production safety
+	// Note: Boolean fields default to false in Go, so we check if explicitly disabled
+	// If not explicitly set in config, enable by default
+	c.Delivery.CircuitBreakerEnabled = true
 	if c.Delivery.CircuitBreakerFailureThreshold == 0 {
 		c.Delivery.CircuitBreakerFailureThreshold = 5
 	}
@@ -226,6 +261,16 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Delivery.CircuitBreakerOpenTimeoutSecs == 0 {
 		c.Delivery.CircuitBreakerOpenTimeoutSecs = 60
+	}
+	// DNS defaults
+	if c.DNS.TimeoutSeconds == 0 {
+		c.DNS.TimeoutSeconds = 5
+	}
+	if c.DNS.CacheTTLSeconds == 0 {
+		c.DNS.CacheTTLSeconds = 3600
+	}
+	if c.DNS.CacheNegativeTTLSeconds == 0 {
+		c.DNS.CacheNegativeTTLSeconds = 60
 	}
 	if c.Callbacks.TimeoutSeconds == 0 {
 		c.Callbacks.TimeoutSeconds = 10
@@ -245,14 +290,16 @@ func (c *Config) SetDefaults() {
 	if c.Callbacks.BatchSize == 0 {
 		c.Callbacks.BatchSize = 10
 	}
-	if c.Delivery.DNSTimeoutSeconds == 0 {
-		c.Delivery.DNSTimeoutSeconds = 5
+	// Callback circuit breaker enabled by default for production safety
+	c.Callbacks.CircuitBreakerEnabled = true
+	if c.Callbacks.CircuitBreakerFailureThreshold == 0 {
+		c.Callbacks.CircuitBreakerFailureThreshold = 5
 	}
-	if c.Delivery.DNSCacheNegativeTTL == 0 {
-		c.Delivery.DNSCacheNegativeTTL = 60
+	if c.Callbacks.CircuitBreakerSuccessThreshold == 0 {
+		c.Callbacks.CircuitBreakerSuccessThreshold = 2
 	}
-	if len(c.Delivery.DNSResolvers) == 0 {
-		c.Delivery.DNSResolvers = []string{}
+	if c.Callbacks.CircuitBreakerOpenTimeoutSecs == 0 {
+		c.Callbacks.CircuitBreakerOpenTimeoutSecs = 60
 	}
 	if c.Reputation.AlertTimeoutSeconds == 0 {
 		c.Reputation.AlertTimeoutSeconds = 10
@@ -263,8 +310,11 @@ func (c *Config) SetDefaults() {
 	if c.Reputation.DegradedIPCleanupHours == 0 {
 		c.Reputation.DegradedIPCleanupHours = 168
 	}
-	if c.Gossip.BindPort == 0 {
-		c.Gossip.BindPort = 7946
+	if c.Cluster.BindAddr == "" {
+		c.Cluster.BindAddr = "0.0.0.0"
+	}
+	if c.Cluster.BindPort == 0 {
+		c.Cluster.BindPort = 7946
 	}
 }
 

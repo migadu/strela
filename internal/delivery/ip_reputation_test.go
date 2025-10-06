@@ -783,7 +783,7 @@ func TestDelivery_Integration_ReputationTracking(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},
-		IPSelection:              "round-robin",
+		SourceIPSelection:              "round-robin",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
 	}
@@ -799,7 +799,8 @@ func TestDelivery_Integration_ReputationTracking(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	mxLookup := NewMXLookup(q, cfg, logger)
+	dnsCfg := &config.DNSConfig{}
+	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
 	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	// Test 1: All IPs should be healthy initially
@@ -873,7 +874,7 @@ func TestDelivery_Integration_AllIPsDegraded(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},
-		IPSelection:              "round-robin",
+		SourceIPSelection:              "round-robin",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
 	}
@@ -888,7 +889,8 @@ func TestDelivery_Integration_AllIPsDegraded(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	mxLookup := NewMXLookup(q, cfg, logger)
+	dnsCfg := &config.DNSConfig{}
+	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
 	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	deliveryInfo := DeliveryInfo{
@@ -929,7 +931,7 @@ func TestDelivery_Integration_NonReputationError(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{"192.168.1.100"},
-		IPSelection:              "round-robin",
+		SourceIPSelection:              "round-robin",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
 	}
@@ -944,7 +946,8 @@ func TestDelivery_Integration_NonReputationError(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	mxLookup := NewMXLookup(q, cfg, logger)
+	dnsCfg := &config.DNSConfig{}
+	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
 	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	deliveryInfo := DeliveryInfo{
@@ -983,7 +986,7 @@ func TestDelivery_Integration_ReputationTrackingDisabled(t *testing.T) {
 
 	cfg := &config.DeliveryConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},
-		IPSelection:              "round-robin",
+		SourceIPSelection:              "round-robin",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
 	}
@@ -995,7 +998,8 @@ func TestDelivery_Integration_ReputationTrackingDisabled(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	mxLookup := NewMXLookup(q, cfg, logger)
+	dnsCfg := &config.DNSConfig{}
+	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
 	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	deliveryInfo := DeliveryInfo{

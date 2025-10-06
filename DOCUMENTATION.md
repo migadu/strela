@@ -630,7 +630,7 @@ poll_interval_seconds = 30
 
 [delivery]
 source_ips = ["192.168.1.100", "2001:db8::1"]
-ip_selection = "round-robin"
+source_ip_selection = "round-robin"
 mx_cache_ttl_seconds = 3600
 connection_timeout_seconds = 30
 smtp_timeout_seconds = 60
@@ -1183,7 +1183,7 @@ Reputation tracking integrates seamlessly with IP rotation strategies:
 ```toml
 [delivery]
 source_ips = ["192.168.1.100", "192.168.1.101", "192.168.1.102"]
-ip_selection = "round-robin"  # or "random", "hash-domain"
+source_ip_selection = "round-robin"  # or "random", "hash-domain"
 
 [reputation]
 enable_ip_tracking = true

@@ -2,6 +2,7 @@ package tls
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"fune/internal/config"
@@ -61,3 +62,88 @@ func TestManager_TLSConfig_NilManager(t *testing.T) {
 // because they require a valid gossip instance and AWS credentials.
 // The context parameter is tested indirectly through the S3 initialization
 // path, and the S3 cache itself is thoroughly tested in s3_cache_test.go.
+
+func TestManager_HTTPHandler_NilManager(t *testing.T) {
+	var m *Manager
+	fallback := &testHandler{name: "fallback"}
+
+	handler := m.HTTPHandler(fallback)
+
+	if handler != fallback {
+		t.Error("HTTPHandler() on a nil manager should return the fallback handler")
+	}
+}
+
+func TestManager_HTTPHandler_ValidManager(t *testing.T) {
+	// Create a manager with autocert manager set (but not fully initialized)
+	m := &Manager{
+		autocertManager: nil, // Even with nil autocert, should return fallback
+		logger:          zap.NewNop(),
+	}
+
+	fallback := &testHandler{name: "fallback"}
+	handler := m.HTTPHandler(fallback)
+
+	if handler != fallback {
+		t.Error("HTTPHandler() with nil autocertManager should return the fallback handler")
+	}
+}
+
+func TestManager_GetCertificateInfo_NilManager(t *testing.T) {
+	var m *Manager
+
+	info := m.GetCertificateInfo("example.com")
+
+	if info.Error == nil {
+		t.Error("GetCertificateInfo() on a nil manager should return an error")
+	}
+
+	if info.Domain != "example.com" {
+		t.Errorf("expected domain 'example.com', got '%s'", info.Domain)
+	}
+}
+
+func TestManager_GetCertificateInfo_NilAutocertManager(t *testing.T) {
+	m := &Manager{
+		autocertManager: nil,
+		logger:          zap.NewNop(),
+	}
+
+	info := m.GetCertificateInfo("example.com")
+
+	if info.Error == nil {
+		t.Error("GetCertificateInfo() with nil autocertManager should return an error")
+	}
+
+	expectedMsg := "TLS manager not initialized"
+	if info.Error.Error() != expectedMsg {
+		t.Errorf("expected error message '%s', got '%s'", expectedMsg, info.Error.Error())
+	}
+}
+
+func TestManager_CheckCertificates_NilManager(t *testing.T) {
+	var m *Manager
+
+	// Should not panic
+	m.CheckCertificates()
+}
+
+func TestManager_CheckCertificates_NilAutocertManager(t *testing.T) {
+	m := &Manager{
+		autocertManager: nil,
+		logger:          zap.NewNop(),
+		domains:         []string{"example.com"},
+	}
+
+	// Should not panic
+	m.CheckCertificates()
+}
+
+// testHandler is a simple HTTP handler for testing
+type testHandler struct {
+	name string
+}
+
+func (h *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte(h.name))
+}

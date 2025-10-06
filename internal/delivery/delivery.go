@@ -134,7 +134,7 @@ func NewDeliverer(config *config.DeliveryConfig, mxLookup *MXLookup, logger *zap
 		config:            config,
 		mxLookup:          mxLookup,
 		logger:            logger,
-		ipRotator:         NewIPRotator(config.SourceIPs, config.IPSelection),
+		ipRotator:         NewIPRotator(config.SourceIPs, config.SourceIPSelection),
 		throttle:          NewDestinationThrottle(config.PerDomainIntervalSeconds),
 		circuitBreaker:    circuitBreaker,
 		reputationTracker: reputationTracker,
@@ -713,14 +713,14 @@ func (d *Deliverer) ReloadConfig(newConfig *config.DeliveryConfig) error {
 	d.logger.Info("reloading delivery configuration",
 		zap.Int("old_source_ips", len(d.config.SourceIPs)),
 		zap.Int("new_source_ips", len(newConfig.SourceIPs)),
-		zap.String("old_ip_selection", d.config.IPSelection),
-		zap.String("new_ip_selection", newConfig.IPSelection))
+		zap.String("old_ip_selection", d.config.SourceIPSelection),
+		zap.String("new_ip_selection", newConfig.SourceIPSelection))
 
 	// Update config
 	d.config = newConfig
 
 	// Recreate IP rotator with new IPs and selection strategy
-	d.ipRotator = NewIPRotator(newConfig.SourceIPs, newConfig.IPSelection)
+	d.ipRotator = NewIPRotator(newConfig.SourceIPs, newConfig.SourceIPSelection)
 
 	// Update throttle settings
 	d.throttle = NewDestinationThrottle(newConfig.PerDomainIntervalSeconds)

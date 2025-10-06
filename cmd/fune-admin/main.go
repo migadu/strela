@@ -37,7 +37,7 @@ Commands:
   failures        Show recent delivery failures (last 20)
   callbacks       Show callback queue statistics
   reputation      Show IP reputation status
-  cluster-status  Show gossip cluster status
+  health          Show comprehensive health status (cluster, queue, circuit breaker, system)
   config          Show current configuration
   reload          Reload fune-server configuration (sends SIGHUP)
   version         Show version information
@@ -46,14 +46,13 @@ Commands:
 Flags:
   -config string   Path to config file (default: config.toml)
   -json            Output in JSON format
-  -server string   Server address for cluster-status (default: http://localhost:8080)
+  -server string   Server address for health (default: http://localhost:8080)
 
 Examples:
   fune-admin queue
   fune-admin throughput -json
   fune-admin queue-domains
   fune-admin reputation
-  fune-admin cluster-status -server http://fune-1:8080
   fune-admin config -config /etc/fune/config.toml
   fune-admin reload -config /etc/fune/config.toml
 `
@@ -82,7 +81,7 @@ func main() {
 
 	// Load config to get database path
 	var dbPath string
-	if command != "version" && command != "cluster-status" {
+	if command != "version" && command != "cluster-status" && command != "health" {
 		cfg, err := config.LoadConfig(*configPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
@@ -142,8 +141,8 @@ func main() {
 			os.Exit(1)
 		}
 
-	case "cluster-status":
-		err := showClusterStatus(*serverAddr, *jsonOutput)
+	case "health":
+		err := showHealth(*serverAddr, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -467,8 +466,8 @@ func showConfig(configPath string, jsonOutput bool) error {
 	fmt.Printf("  Max Body Size:       %d bytes\n", cfg.HTTP.MaxBodySizeBytes)
 	fmt.Printf("  Read Timeout:        %ds\n", cfg.HTTP.ReadTimeoutSecs)
 	fmt.Printf("  Write Timeout:       %ds\n", cfg.HTTP.WriteTimeoutSecs)
-	fmt.Printf("  Metrics Enabled:     %t\n", cfg.HTTP.MetricsEnabled)
-	fmt.Printf("  Metrics Path:        %s\n", cfg.HTTP.MetricsPath)
+	fmt.Printf("  Metrics Enabled:     %t\n", cfg.Metrics.Enabled)
+	fmt.Printf("  Metrics Path:        %s\n", cfg.Metrics.Path)
 
 	fmt.Println("\n[TLS]")
 	fmt.Printf("  Enabled:             %t\n", cfg.TLS.Enabled)
@@ -499,7 +498,7 @@ func showConfig(configPath string, jsonOutput bool) error {
 
 	fmt.Println("\n[Delivery]")
 	fmt.Printf("  Source IPs:          %s\n", strings.Join(cfg.Delivery.SourceIPs, ", "))
-	fmt.Printf("  IP Selection:        %s\n", cfg.Delivery.IPSelection)
+	fmt.Printf("  IP Selection:        %s\n", cfg.Delivery.SourceIPSelection)
 	fmt.Printf("  Max Message Age:     %d hours\n", cfg.Delivery.MaxMessageAgeHours)
 	fmt.Printf("  Connection Timeout:  %ds\n", cfg.Delivery.ConnectionTimeoutSeconds)
 	fmt.Printf("  SMTP Timeout:        %ds\n", cfg.Delivery.SMTPTimeoutSeconds)
@@ -619,65 +618,113 @@ type ClusterNodeStatus struct {
 	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
-// ClusterStatusResponse represents the cluster status API response
-type ClusterStatusResponse struct {
-	Timestamp string                       `json:"timestamp"`
-	Nodes     map[string]ClusterNodeStatus `json:"nodes"`
-	NodeCount int                          `json:"node_count"`
+// HealthResponse structures for health endpoint
+type HealthResponse struct {
+	Status    string                `json:"status"`
+	Timestamp string                `json:"timestamp"`
+	Uptime    string                `json:"uptime"`
+	Queue     HealthQueue           `json:"queue"`
+	Cluster   *HealthCluster        `json:"cluster,omitempty"`
+	Circuit   *HealthCircuitBreaker `json:"circuit_breaker,omitempty"`
+	System    HealthSystem          `json:"system"`
 }
 
-func showClusterStatus(serverAddr string, jsonOutput bool) error {
-	// Make HTTP request to cluster status endpoint
-	url := fmt.Sprintf("%s/admin/cluster/status", serverAddr)
+type HealthQueue struct {
+	Pending   int64 `json:"pending"`
+	Active    int64 `json:"active"`
+	Failed    int64 `json:"failed"`
+	Delivered int64 `json:"delivered"`
+	Total     int64 `json:"total"`
+}
+
+type HealthCluster struct {
+	Enabled   bool                         `json:"enabled"`
+	NodeCount int                          `json:"node_count"`
+	Leader    string                       `json:"leader,omitempty"`
+	Nodes     map[string]ClusterNodeStatus `json:"nodes,omitempty"`
+}
+
+type HealthCircuitBreaker struct {
+	State         string `json:"state"`
+	Failures      uint32 `json:"failures"`
+	Successes     uint32 `json:"successes"`
+	LastStateTime string `json:"last_state_time"`
+}
+
+type HealthSystem struct {
+	GoVersion     string `json:"go_version"`
+	Goroutines    int    `json:"goroutines"`
+	MemoryMB      uint64 `json:"memory_mb"`
+	MemoryAllocMB uint64 `json:"memory_alloc_mb"`
+}
+
+func showHealth(serverAddr string, jsonOutput bool) error {
+	url := fmt.Sprintf("%s/health", serverAddr)
 
 	resp, err := http.Get(url)
 	if err != nil {
-		return fmt.Errorf("failed to fetch cluster status: %w", err)
+		return fmt.Errorf("failed to fetch health status: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
-	var clusterStatus ClusterStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&clusterStatus); err != nil {
+	var health HealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	if jsonOutput {
-		return outputJSON(clusterStatus)
+		return outputJSON(health)
 	}
 
-	// Display in human-readable format
-	fmt.Println("Cluster Status")
+	fmt.Println("Health Status")
 	fmt.Println(strings.Repeat("=", 90))
-	fmt.Printf("Timestamp: %s\n", clusterStatus.Timestamp)
-	fmt.Printf("Node Count: %d\n\n", clusterStatus.NodeCount)
+	fmt.Printf("Status:    %s\n", strings.ToUpper(health.Status))
+	fmt.Printf("Timestamp: %s\n", health.Timestamp)
+	fmt.Printf("Uptime:    %s\n\n", health.Uptime)
 
-	if len(clusterStatus.Nodes) == 0 {
-		fmt.Println("No nodes found in cluster (gossip may be disabled)")
-		return nil
+	fmt.Println("Queue:")
+	fmt.Printf("  Pending:   %d\n\n", health.Queue.Pending)
+
+	if health.Cluster != nil {
+		fmt.Println("Cluster:")
+		fmt.Printf("  Enabled:    %t\n", health.Cluster.Enabled)
+		if health.Cluster.Enabled {
+			fmt.Printf("  Node Count: %d\n", health.Cluster.NodeCount)
+			fmt.Printf("  Leader:     %s\n", health.Cluster.Leader)
+			if len(health.Cluster.Nodes) > 0 {
+				fmt.Println("\n  Nodes:")
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "  NODE ID\tQUEUE DEPTH\tACTIVE WORKERS\tUPTIME\tLAST SEEN")
+				for _, node := range health.Cluster.Nodes {
+					lastSeen, _ := time.Parse(time.RFC3339, node.LastSeen)
+					lastSeenAgo := time.Since(lastSeen)
+					fmt.Fprintf(w, "  %s\t%d\t%d\t%s\t%s ago\n",
+						node.NodeID, node.QueueDepth, node.ActiveWorkers, node.Uptime, formatDuration(lastSeenAgo))
+				}
+				w.Flush()
+			}
+		}
+		fmt.Println()
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NODE ID\tQUEUE DEPTH\tACTIVE WORKERS\tUPTIME\tLAST SEEN")
-	fmt.Fprintln(w, strings.Repeat("-", 90))
-
-	for _, node := range clusterStatus.Nodes {
-		lastSeen, _ := time.Parse(time.RFC3339, node.LastSeen)
-		lastSeenAgo := time.Since(lastSeen)
-
-		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s ago\n",
-			node.NodeID,
-			node.QueueDepth,
-			node.ActiveWorkers,
-			node.Uptime,
-			formatDuration(lastSeenAgo))
+	if health.Circuit != nil {
+		fmt.Println("Circuit Breaker:")
+		fmt.Printf("  State:          %s\n", strings.ToUpper(health.Circuit.State))
+		fmt.Printf("  Failures:       %d\n", health.Circuit.Failures)
+		fmt.Printf("  Successes:      %d\n", health.Circuit.Successes)
+		fmt.Printf("  Last State At:  %s\n\n", health.Circuit.LastStateTime)
 	}
 
-	w.Flush()
+	fmt.Println("System:")
+	fmt.Printf("  Go Version:     %s\n", health.System.GoVersion)
+	fmt.Printf("  Goroutines:     %d\n", health.System.Goroutines)
+	fmt.Printf("  Memory (Total): %d MB\n", health.System.MemoryMB)
+	fmt.Printf("  Memory (Alloc): %d MB\n", health.System.MemoryAllocMB)
+
 	return nil
 }

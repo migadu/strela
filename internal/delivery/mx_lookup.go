@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"fune/internal/config"
@@ -29,13 +30,13 @@ type MXRecord struct {
 }
 
 // NewMXLookup creates a new MX lookup service
-func NewMXLookup(q *queue.Queue, cfg *config.DeliveryConfig, logger *zap.Logger) *MXLookup {
+func NewMXLookup(q *queue.Queue, dnsCfg *config.DNSConfig, deliveryCfg *config.DeliveryConfig, logger *zap.Logger) *MXLookup {
 	return &MXLookup{
 		queue:       q,
-		dnsResolver: NewDNSResolver(cfg, logger),
+		dnsResolver: NewDNSResolver(dnsCfg, logger),
 		logger:      logger,
-		cacheTTL:    time.Duration(cfg.MXCacheTTLSeconds) * time.Second,
-		negativeTTL: time.Duration(cfg.DNSCacheNegativeTTL) * time.Second,
+		cacheTTL:    time.Duration(dnsCfg.CacheTTLSeconds) * time.Second,
+		negativeTTL: time.Duration(dnsCfg.CacheNegativeTTLSeconds) * time.Second,
 	}
 }
 
@@ -202,19 +203,97 @@ func (m *MXLookup) CleanupExpiredCache() (int, error) {
 }
 
 // ReloadConfig updates DNS resolver configuration (hot reload)
-func (m *MXLookup) ReloadConfig(newConfig *config.DeliveryConfig) error {
+func (m *MXLookup) ReloadConfig(dnsCfg *config.DNSConfig, deliveryCfg *config.DeliveryConfig) error {
 	m.logger.Info("reloading DNS resolver configuration")
 
 	// Update cache TTLs
-	m.cacheTTL = time.Duration(newConfig.MXCacheTTLSeconds) * time.Second
-	m.negativeTTL = time.Duration(newConfig.DNSCacheNegativeTTL) * time.Second
+	m.cacheTTL = time.Duration(dnsCfg.CacheTTLSeconds) * time.Second
+	m.negativeTTL = time.Duration(dnsCfg.CacheNegativeTTLSeconds) * time.Second
 
 	// Recreate DNS resolver with new settings
-	m.dnsResolver = NewDNSResolver(newConfig, m.logger)
+	m.dnsResolver = NewDNSResolver(dnsCfg, m.logger)
 
 	m.logger.Info("DNS resolver configuration reloaded",
 		zap.Duration("cache_ttl", m.cacheTTL),
 		zap.Duration("negative_ttl", m.negativeTTL))
 
 	return nil
+}
+
+// BatchPrefetch performs parallel DNS lookups for multiple domains
+// This is useful when processing a batch of messages to the same domains
+func (m *MXLookup) BatchPrefetch(ctx context.Context, domains []string) map[string]error {
+	if len(domains) == 0 {
+		return make(map[string]error)
+	}
+
+	// Deduplicate domains and filter out already cached ones
+	uniqueDomains := make(map[string]bool)
+	domainsToFetch := make([]string, 0, len(domains))
+
+	for _, domain := range domains {
+		if uniqueDomains[domain] {
+			continue
+		}
+		uniqueDomains[domain] = true
+
+		// Check if already cached
+		cached, err := m.getFromCache(domain)
+		if err == nil && cached != nil {
+			m.logger.Debug("domain already cached, skipping prefetch",
+				zap.String("domain", domain))
+			continue
+		}
+
+		domainsToFetch = append(domainsToFetch, domain)
+	}
+
+	if len(domainsToFetch) == 0 {
+		m.logger.Debug("all domains already cached, no prefetch needed")
+		return make(map[string]error)
+	}
+
+	m.logger.Info("batch DNS prefetch starting",
+		zap.Int("total_domains", len(domains)),
+		zap.Int("unique_domains", len(uniqueDomains)),
+		zap.Int("to_fetch", len(domainsToFetch)))
+
+	// Prefetch in parallel
+	results := make(map[string]error)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, domain := range domainsToFetch {
+		wg.Add(1)
+		go func(d string) {
+			defer wg.Done()
+
+			// Perform lookup (will cache the result)
+			_, err := m.Lookup(ctx, d)
+
+			mu.Lock()
+			results[d] = err
+			mu.Unlock()
+		}(domain)
+	}
+
+	wg.Wait()
+
+	// Count successes and failures
+	successes := 0
+	failures := 0
+	for _, err := range results {
+		if err == nil {
+			successes++
+		} else {
+			failures++
+		}
+	}
+
+	m.logger.Info("batch DNS prefetch completed",
+		zap.Int("fetched", len(domainsToFetch)),
+		zap.Int("successes", successes),
+		zap.Int("failures", failures))
+
+	return results
 }

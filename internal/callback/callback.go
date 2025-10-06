@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,19 +25,34 @@ type CallbackMetrics interface {
 
 // CallbackHandler manages webhook callbacks to CloudFlare Worker
 type CallbackHandler struct {
-	queue   *queue.Queue
-	config  *config.CallbacksConfig
-	logger  *zap.Logger
-	client  *http.Client
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	metrics CallbackMetrics
+	queue          *queue.Queue
+	config         *config.CallbacksConfig
+	logger         *zap.Logger
+	client         *http.Client
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	metrics        CallbackMetrics
+	circuitBreaker *CallbackCircuitBreaker
 }
 
 // NewCallbackHandler creates a new callback handler
 func NewCallbackHandler(q *queue.Queue, cfg *config.CallbacksConfig, logger *zap.Logger) *CallbackHandler {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	var cb *CallbackCircuitBreaker
+	if cfg.CircuitBreakerEnabled {
+		cb = NewCallbackCircuitBreaker(
+			cfg.CircuitBreakerFailureThreshold,
+			cfg.CircuitBreakerSuccessThreshold,
+			time.Duration(cfg.CircuitBreakerOpenTimeoutSecs)*time.Second,
+			logger,
+		)
+		logger.Info("callback circuit breaker enabled",
+			zap.Int("failure_threshold", cfg.CircuitBreakerFailureThreshold),
+			zap.Int("success_threshold", cfg.CircuitBreakerSuccessThreshold),
+			zap.Int("open_timeout_secs", cfg.CircuitBreakerOpenTimeoutSecs))
+	}
 
 	return &CallbackHandler{
 		queue:  q,
@@ -45,8 +61,9 @@ func NewCallbackHandler(q *queue.Queue, cfg *config.CallbacksConfig, logger *zap
 		client: &http.Client{
 			Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
 		},
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:            ctx,
+		cancel:         cancel,
+		circuitBreaker: cb,
 	}
 }
 
@@ -239,6 +256,23 @@ func (c *CallbackHandler) processBatch() {
 func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 	startTime := time.Now()
 
+	// Check circuit breaker before attempting callback
+	if c.circuitBreaker != nil && !c.circuitBreaker.CanAttempt() {
+		c.logger.Warn("callback circuit breaker open, skipping callback",
+			zap.String("message_id", cb.MessageID),
+			zap.String("event_type", cb.EventType))
+
+		// Schedule retry after circuit breaker timeout
+		retryDelay := time.Duration(c.config.CircuitBreakerOpenTimeoutSecs) * time.Second
+		nextRetry := time.Now().Add(retryDelay)
+		c.queue.ScheduleCallbackRetry(cb.ID, nextRetry)
+
+		c.logger.Info("callback rescheduled due to circuit breaker",
+			zap.String("message_id", cb.MessageID),
+			zap.Time("next_retry", nextRetry))
+		return
+	}
+
 	c.logger.Info("sending callback",
 		zap.String("message_id", cb.MessageID),
 		zap.String("event_type", cb.EventType),
@@ -269,6 +303,11 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 			c.metrics.RecordCallbackAttempt("success", cb.EventType, duration)
 		}
 
+		// Record success with circuit breaker
+		if c.circuitBreaker != nil {
+			c.circuitBreaker.RecordSuccess()
+		}
+
 		c.queue.MarkCallbackComplete(cb.ID)
 	} else {
 		// Failure
@@ -280,6 +319,14 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 
 		if c.metrics != nil {
 			c.metrics.RecordCallbackAttempt("failure", cb.EventType, duration)
+		}
+
+		// Record failure with circuit breaker (only for network/timeout errors)
+		if c.circuitBreaker != nil {
+			isNetworkError := isCallbackNetworkError(err)
+			if isNetworkError {
+				c.circuitBreaker.RecordFailure()
+			}
 		}
 
 		// Check if callback has expired (age-based instead of attempt-based)
@@ -373,4 +420,41 @@ func (c *CallbackHandler) sendHTTPCallback(ctx context.Context, payload Delivery
 	}
 
 	return nil
+}
+
+// isCallbackNetworkError determines if an error is a network/timeout error
+// that should trigger the circuit breaker
+func isCallbackNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// Network errors that should trigger circuit breaker
+	networkKeywords := []string{
+		"connection refused",
+		"connection reset",
+		"connection timeout",
+		"i/o timeout",
+		"network",
+		"dns",
+		"no such host",
+		"timeout",
+		"deadline exceeded",
+	}
+
+	for _, keyword := range networkKeywords {
+		if strings.Contains(errStr, keyword) {
+			return true
+		}
+	}
+
+	// HTTP 5xx errors from webhook endpoint should NOT trigger circuit breaker
+	// (those are application errors, not infrastructure failures)
+	if strings.Contains(errStr, "callback returned status 5") {
+		return false
+	}
+
+	return false
 }

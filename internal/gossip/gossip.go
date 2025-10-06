@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -66,12 +67,14 @@ type Gossip struct {
 	onNodeLeave func(node string)
 }
 
-// Config holds gossip configuration
+// Config holds cluster configuration for gossip protocol
 type Config struct {
 	Enabled        bool
+	BindAddr       string // IP address to bind to (default: 0.0.0.0)
 	BindPort       int
-	JoinAddresses  []string
+	Peers          []string // All other cluster nodes to connect to
 	NodeID         string
+	SecretKey      string // 32-byte base64 encoded encryption key
 	IdempotencyTTL time.Duration
 }
 
@@ -101,8 +104,30 @@ func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
 	// Configure memberlist
 	mlConfig := memberlist.DefaultLANConfig()
 	mlConfig.Name = nodeID
+	mlConfig.BindAddr = cfg.BindAddr
 	mlConfig.BindPort = cfg.BindPort
 	mlConfig.AdvertisePort = cfg.BindPort
+
+	// Configure encryption if secret key is provided
+	if cfg.SecretKey != "" {
+		// Decode base64 secret key
+		keyBytes, err := base64.StdEncoding.DecodeString(cfg.SecretKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode secret key (must be base64): %w", err)
+		}
+
+		// Memberlist requires exactly 32 bytes for AES-256 encryption
+		if len(keyBytes) != 32 {
+			return nil, fmt.Errorf("secret key must be exactly 32 bytes (got %d bytes)", len(keyBytes))
+		}
+
+		// Enable encryption with the provided key
+		mlConfig.SecretKey = keyBytes
+		logger.Info("gossip encryption enabled", zap.Int("key_length", len(keyBytes)))
+	} else {
+		logger.Warn("cluster encryption DISABLED - gossip communication is INSECURE",
+			zap.String("recommendation", "set cluster.secret_key for production deployments"))
+	}
 
 	// Set delegate for custom message handling
 	mlConfig.Delegate = &delegate{gossip: g}
@@ -121,19 +146,20 @@ func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
 
 	logger.Info("gossip service initialized",
 		zap.String("node_id", nodeID),
+		zap.String("bind_addr", cfg.BindAddr),
 		zap.Int("bind_port", cfg.BindPort))
 
-	// Join cluster if seed nodes are provided
-	if len(cfg.JoinAddresses) > 0 {
-		n, err := ml.Join(cfg.JoinAddresses)
+	// Join cluster if peers are provided
+	if len(cfg.Peers) > 0 {
+		n, err := ml.Join(cfg.Peers)
 		if err != nil {
 			logger.Warn("failed to join cluster",
-				zap.Strings("seed_nodes", cfg.JoinAddresses),
+				zap.Strings("peers", cfg.Peers),
 				zap.Error(err))
 		} else {
-			logger.Info("joined gossip cluster",
-				zap.Int("nodes_contacted", n),
-				zap.Strings("seed_nodes", cfg.JoinAddresses))
+			logger.Info("joined cluster",
+				zap.Int("peers_contacted", n),
+				zap.Strings("peers", cfg.Peers))
 		}
 	}
 

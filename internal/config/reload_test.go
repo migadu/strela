@@ -29,7 +29,7 @@ batch_size = 5
 
 [delivery]
 source_ips = ["192.168.1.100"]
-ip_selection = "round-robin"
+source_ip_selection = "round-robin"
 mx_cache_ttl_seconds = 3600
 circuit_breaker_enabled = true
 circuit_breaker_failure_threshold = 5
@@ -74,7 +74,7 @@ batch_size = 5
 
 [delivery]
 source_ips = ["192.168.1.100", "192.168.1.101", "192.168.1.102"]
-ip_selection = "random"
+source_ip_selection = "random"
 mx_cache_ttl_seconds = 7200
 circuit_breaker_enabled = true
 circuit_breaker_failure_threshold = 10
@@ -100,8 +100,8 @@ timeout_seconds = 10
 	if len(cfg.Delivery.SourceIPs) != 3 {
 		t.Errorf("expected 3 source IPs, got %d", len(cfg.Delivery.SourceIPs))
 	}
-	if cfg.Delivery.IPSelection != "random" {
-		t.Errorf("expected ip_selection 'random', got '%s'", cfg.Delivery.IPSelection)
+	if cfg.Delivery.SourceIPSelection != "random" {
+		t.Errorf("expected source_ip_selection 'random', got '%s'", cfg.Delivery.SourceIPSelection)
 	}
 	if cfg.Delivery.CircuitBreakerFailureThreshold != 10 {
 		t.Errorf("expected threshold 10, got %d", cfg.Delivery.CircuitBreakerFailureThreshold)
@@ -407,7 +407,7 @@ worker_count = 10
 batch_size = 5
 [delivery]
 source_ips = ["192.168.1.100"]
-ip_selection = "round-robin"
+source_ip_selection = "round-robin"
 [callbacks]
 webhook_url = "https://example.com/webhook"
 timeout_seconds = 10
@@ -428,8 +428,8 @@ timeout_seconds = 10
 	}
 
 	deliveryCfg := rc.GetDelivery()
-	if deliveryCfg.IPSelection != "round-robin" {
-		t.Errorf("GetDelivery: expected ip_selection 'round-robin', got '%s'", deliveryCfg.IPSelection)
+	if deliveryCfg.SourceIPSelection != "round-robin" {
+		t.Errorf("GetDelivery: expected source_ip_selection 'round-robin', got '%s'", deliveryCfg.SourceIPSelection)
 	}
 
 	queueCfg := rc.GetQueue()

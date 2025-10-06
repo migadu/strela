@@ -12,9 +12,9 @@ import (
 
 func TestDNSResolver_SystemDefault(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	cfg := &config.DeliveryConfig{
-		DNSResolvers:      []string{}, // Use system default
-		DNSTimeoutSeconds: 5,
+	cfg := &config.DNSConfig{
+		Resolvers:      []string{}, // Use system default
+		TimeoutSeconds: 5,
 	}
 
 	resolver := NewDNSResolver(cfg, logger)
@@ -39,9 +39,9 @@ func TestDNSResolver_SystemDefault(t *testing.T) {
 
 func TestDNSResolver_CustomResolvers(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	cfg := &config.DeliveryConfig{
-		DNSResolvers:      []string{"8.8.8.8:53", "1.1.1.1:53"}, // Google and Cloudflare DNS
-		DNSTimeoutSeconds: 5,
+	cfg := &config.DNSConfig{
+		Resolvers:      []string{"8.8.8.8:53", "1.1.1.1:53"}, // Google and Cloudflare DNS
+		TimeoutSeconds: 5,
 	}
 
 	resolver := NewDNSResolver(cfg, logger)
@@ -62,9 +62,9 @@ func TestDNSResolver_CustomResolvers(t *testing.T) {
 
 func TestDNSResolver_Timeout(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	cfg := &config.DeliveryConfig{
-		DNSResolvers:      []string{"192.0.2.1:53"}, // Non-routable IP (should timeout)
-		DNSTimeoutSeconds: 2,                        // Short timeout
+	cfg := &config.DNSConfig{
+		Resolvers:      []string{"192.0.2.1:53"}, // Non-routable IP (should timeout)
+		TimeoutSeconds: 2,                        // Short timeout
 	}
 
 	resolver := NewDNSResolver(cfg, logger)
@@ -87,9 +87,9 @@ func TestDNSResolver_Timeout(t *testing.T) {
 
 func TestDNSResolver_InvalidDomain(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	cfg := &config.DeliveryConfig{
-		DNSResolvers:      []string{},
-		DNSTimeoutSeconds: 5,
+	cfg := &config.DNSConfig{
+		Resolvers:      []string{},
+		TimeoutSeconds: 5,
 	}
 
 	resolver := NewDNSResolver(cfg, logger)
@@ -106,9 +106,9 @@ func TestDNSResolver_InvalidDomain(t *testing.T) {
 
 func TestDNSResolver_HostLookup(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	cfg := &config.DeliveryConfig{
-		DNSResolvers:      []string{},
-		DNSTimeoutSeconds: 5,
+	cfg := &config.DNSConfig{
+		Resolvers:      []string{},
+		TimeoutSeconds: 5,
 	}
 
 	resolver := NewDNSResolver(cfg, logger)

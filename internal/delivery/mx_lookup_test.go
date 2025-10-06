@@ -17,13 +17,16 @@ func TestMXLookup_LookupDNS(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   3600,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         3600,
+		CacheNegativeTTLSeconds: 60,
+	}
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 3600,
 	}
 
-	mx := NewMXLookup(q, cfg, logger)
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// Test lookup for a well-known domain
 	ctx := context.Background()
@@ -60,13 +63,16 @@ func TestMXLookup_LookupDNS_NoMXRecords(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   3600,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         3600,
+		CacheNegativeTTLSeconds: 60,
+	}
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 3600,
 	}
 
-	mx := NewMXLookup(q, cfg, logger)
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// Test domain with no MX records (should fail)
 	ctx := context.Background()
@@ -81,13 +87,16 @@ func TestMXLookup_LookupDNS_InvalidDomain(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   3600,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         3600,
+		CacheNegativeTTLSeconds: 60,
+	}
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 3600,
 	}
 
-	mx := NewMXLookup(q, cfg, logger)
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// Test invalid domain
 	ctx := context.Background()
@@ -102,13 +111,16 @@ func TestMXLookup_Cache(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   3600,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         3600,
+		CacheNegativeTTLSeconds: 60,
+	}
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 3600,
 	}
 
-	mx := NewMXLookup(q, cfg, logger)
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// First lookup - should hit DNS
 	records1, err := mx.Lookup(context.Background(), "gmail.com")
@@ -144,12 +156,15 @@ func TestMXLookup_CacheExpiration(t *testing.T) {
 	defer cleanup()
 
 	// Create MX lookup with 1 second TTL
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   1,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         1,
+		CacheNegativeTTLSeconds: 60,
 	}
-	mx := NewMXLookup(q, cfg, logger)
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 1,
+	}
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// First lookup
 	_, err := mx.Lookup(context.Background(), "gmail.com")
@@ -175,13 +190,16 @@ func TestMXLookup_StoreAndRetrieveCache(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   3600,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         3600,
+		CacheNegativeTTLSeconds: 60,
+	}
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 3600,
 	}
 
-	mx := NewMXLookup(q, cfg, logger)
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// Create test records
 	testRecords := []*MXRecord{
@@ -220,13 +238,16 @@ func TestMXLookup_InvalidateCache(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   3600,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         3600,
+		CacheNegativeTTLSeconds: 60,
+	}
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 3600,
 	}
 
-	mx := NewMXLookup(q, cfg, logger)
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// Store test record
 	testRecords := []*MXRecord{
@@ -258,12 +279,15 @@ func TestMXLookup_CleanupExpiredCache(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   1,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         1,
+		CacheNegativeTTLSeconds: 60,
 	}
-	mx := NewMXLookup(q, cfg, logger)
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 1,
+	}
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// Store multiple records
 	testRecords := []*MXRecord{
@@ -303,13 +327,16 @@ func TestMXLookup_SortByPriority(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
-		MXCacheTTLSeconds:   3600,
-		DNSTimeoutSeconds:   5,
-		DNSCacheNegativeTTL: 60,
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds:          5,
+		CacheTTLSeconds:         3600,
+		CacheNegativeTTLSeconds: 60,
+	}
+	deliveryCfg := &config.DeliveryConfig{
+		MXCacheTTLSeconds: 3600,
 	}
 
-	mx := NewMXLookup(q, cfg, logger)
+	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
 	// Create unsorted records
 	unsorted := []*MXRecord{

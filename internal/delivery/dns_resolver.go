@@ -21,10 +21,10 @@ type DNSResolver struct {
 }
 
 // NewDNSResolver creates a new DNS resolver with custom configuration
-func NewDNSResolver(cfg *config.DeliveryConfig, logger *zap.Logger) *DNSResolver {
+func NewDNSResolver(cfg *config.DNSConfig, logger *zap.Logger) *DNSResolver {
 	return &DNSResolver{
-		resolvers: cfg.DNSResolvers,
-		timeout:   time.Duration(cfg.DNSTimeoutSeconds) * time.Second,
+		resolvers: cfg.Resolvers,
+		timeout:   time.Duration(cfg.TimeoutSeconds) * time.Second,
 		logger:    logger,
 	}
 }

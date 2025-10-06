@@ -114,7 +114,7 @@ func (rc *ReloadableConfig) Reload() error {
 	rc.logger.Info("configuration reloaded successfully",
 		zap.Int("source_ips", len(newConfig.Delivery.SourceIPs)),
 		zap.Bool("tls_enabled", newConfig.TLS.Enabled),
-		zap.Bool("metrics_enabled", newConfig.HTTP.MetricsEnabled),
+		zap.Bool("metrics_enabled", newConfig.Metrics.Enabled),
 		zap.Bool("circuit_breaker_enabled", newConfig.Delivery.CircuitBreakerEnabled))
 
 	return nil
