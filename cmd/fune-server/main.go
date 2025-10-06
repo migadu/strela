@@ -361,12 +361,40 @@ func main() {
 		IdleTimeout:  time.Duration(cfg.HTTP.IdleTimeoutSecs) * time.Second,
 	}
 
+	// HTTP challenge server (for Let's Encrypt ACME HTTP-01)
+	var httpChallengeServer *http.Server
+
 	// Configure TLS
 	if cfg.TLS.Enabled {
 		switch cfg.TLS.Provider {
 		case "letsencrypt":
 			if tlsManager != nil {
 				server.TLSConfig = tlsManager.TLSConfig()
+
+				// Start HTTP server on port 80 for ACME HTTP-01 challenges
+				// This is required for Let's Encrypt domain verification
+				httpChallengeServer = &http.Server{
+					Addr:         ":80",
+					Handler:      tlsManager.HTTPHandler(nil), // nil = redirect to HTTPS
+					ReadTimeout:  30 * time.Second,
+					WriteTimeout: 30 * time.Second,
+				}
+
+				// Attempt to start HTTP challenge server
+				// This must succeed for ACME to work
+				recovery.SafeGo(logger, "HTTP-01 challenge server", func() {
+					logger.Info("starting ACME HTTP-01 challenge server on port 80")
+					if err := httpChallengeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+						logger.Fatal("HTTP-01 challenge server failed - port 80 required for Let's Encrypt",
+							zap.Error(err),
+							zap.String("hint", "ensure port 80 is available and not in use by another service"),
+							zap.String("help", "check with: sudo lsof -i :80"))
+					}
+				})
+
+				// Give the HTTP server a moment to start and potentially fail fast
+				time.Sleep(100 * time.Millisecond)
+
 				logger.Info("TLS configured with letsencrypt provider",
 					zap.Strings("domains", cfg.TLS.LetsEncrypt.Domains))
 			} else {
@@ -480,10 +508,18 @@ shutdown:
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Shutdown HTTP server
+	// Shutdown HTTP servers
 	logger.Info("shutting down HTTP server...")
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("HTTP server shutdown error", zap.Error(err))
+	}
+
+	// Shutdown HTTP challenge server (if running)
+	if httpChallengeServer != nil {
+		logger.Info("shutting down HTTP-01 challenge server...")
+		if err := httpChallengeServer.Shutdown(ctx); err != nil {
+			logger.Error("HTTP challenge server shutdown error", zap.Error(err))
+		}
 	}
 
 	// Stop workers

@@ -3,11 +3,16 @@ package tls
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"net/http"
+	"time"
 
 	"fune/internal/config"
 	"fune/internal/gossip"
 	"fune/internal/tls/storage"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -65,13 +70,31 @@ func (m *Manager) TLSConfig() *tls.Config {
 	return m.autocertManager.TLSConfig()
 }
 
-func createS3Cache(cfg config.LetsEncryptConfig, isLeaderF func() bool, logger *zap.Logger) (*storage.S3Cache, error) {
-	ctx := context.TODO()
+// HTTPHandler returns an HTTP handler for ACME HTTP-01 challenges.
+// This handler must be served on port 80 for Let's Encrypt verification.
+// If the request is not an ACME challenge, it delegates to the fallback handler.
+func (m *Manager) HTTPHandler(fallback http.Handler) http.Handler {
+	if m == nil || m.autocertManager == nil {
+		return fallback
+	}
+	return m.autocertManager.HTTPHandler(fallback)
+}
 
-	// Load default AWS config
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+func createS3Cache(cfg config.LetsEncryptConfig, isLeaderF func() bool, logger *zap.Logger) (*storage.S3Cache, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Load default AWS config with retry configuration
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRetryer(func() aws.Retryer {
+			return retry.NewStandard(func(o *retry.StandardOptions) {
+				o.MaxAttempts = 3
+				o.MaxBackoff = 5 * time.Second
+			})
+		}),
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
 	// Override region if specified
@@ -89,6 +112,17 @@ func createS3Cache(cfg config.LetsEncryptConfig, isLeaderF func() bool, logger *
 	}
 
 	s3Client := s3.NewFromConfig(awsCfg)
+
+	// Validate S3 bucket exists and is accessible
+	logger.Info("validating S3 bucket access", zap.String("bucket", cfg.S3.Bucket))
+	_, err = s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: &cfg.S3.Bucket,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("S3 bucket validation failed for '%s': %w (check bucket exists and IAM permissions)", cfg.S3.Bucket, err)
+	}
+
+	logger.Info("S3 bucket validated successfully", zap.String("bucket", cfg.S3.Bucket))
 
 	return &storage.S3Cache{
 		S3Client:  s3Client,

@@ -82,14 +82,21 @@ region = "us-east-1"                   # AWS region (optional, uses default if n
 # - All nodes read certificates from S3 and serve HTTPS traffic
 # - Zero-downtime certificate updates
 # - No manual certificate management required
+# - Automatic HTTP-to-HTTPS redirect on port 80
 #
 # Requirements:
 # - gossip.enabled = true (for leader coordination)
 # - S3 bucket created and accessible
 # - Domain DNS pointing to your server(s)
-# - Port 443 accessible for ACME HTTP-01 challenge
+# - Port 80 accessible (for ACME HTTP-01 challenge and redirects)
+# - Port 443 accessible (for HTTPS traffic)
+# - Set http.listen = ":443" when using Let's Encrypt
 #
 # Example multi-node setup with auto-TLS:
+#   [http]
+#   listen = ":443"  # HTTPS port
+#   auth_token = "secret"
+#
 #   [tls]
 #   enabled = true
 #   provider = "letsencrypt"
@@ -107,6 +114,11 @@ region = "us-east-1"                   # AWS region (optional, uses default if n
 #   enabled = true
 #   bind_port = 7946
 #   join_addresses = ["node1:7946", "node2:7946", "node3:7946"]
+#
+# Note: When using Let's Encrypt:
+# - Port 80 is automatically used for ACME challenges and HTTP-to-HTTPS redirects
+# - Your main HTTPS server runs on the port specified in http.listen (typically :443)
+# - All HTTP traffic on port 80 is automatically redirected to HTTPS
 
 # Metrics configuration
 metrics_enabled = true                 # Enable Prometheus metrics endpoint (recommended for production)
