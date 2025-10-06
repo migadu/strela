@@ -11,6 +11,7 @@ type Config struct {
 	Server     ServerConfig     `toml:"server"`
 	Logging    LoggingConfig    `toml:"logging"`
 	HTTP       HTTPConfig       `toml:"http"`
+	TLS        TLSConfig        `toml:"tls"`
 	Queue      QueueConfig      `toml:"queue"`
 	Delivery   DeliveryConfig   `toml:"delivery"`
 	Callbacks  CallbacksConfig  `toml:"callbacks"`
@@ -26,8 +27,6 @@ type ServerConfig struct {
 type LoggingConfig struct {
 	Level  string `toml:"level"`  // Log level: debug, info, warn, error (default: info)
 	Format string `toml:"format"` // Log format: console, json (default: console)
-	// Note: Logs always go to stdout/stderr for systemd compatibility
-	// Use systemd's journald for log rotation and management in production
 }
 
 type HTTPConfig struct {
@@ -38,11 +37,6 @@ type HTTPConfig struct {
 	WriteTimeoutSecs int    `toml:"write_timeout_seconds"` // Write timeout for responses
 	IdleTimeoutSecs  int    `toml:"idle_timeout_seconds"`  // Idle timeout for keep-alive
 
-	// TLS configuration
-	TLSEnabled  bool   `toml:"tls_enabled"`   // Enable HTTPS with TLS
-	TLSCertFile string `toml:"tls_cert_file"` // Path to TLS certificate file
-	TLSKeyFile  string `toml:"tls_key_file"`  // Path to TLS private key file
-
 	// Metrics configuration
 	MetricsEnabled bool   `toml:"metrics_enabled"` // Enable Prometheus metrics endpoint (default: true)
 	MetricsPath    string `toml:"metrics_path"`    // Path for metrics endpoint (default: /metrics)
@@ -51,6 +45,28 @@ type HTTPConfig struct {
 	IdempotencyEnabled  bool   `toml:"idempotency_enabled"`   // Enable idempotency key support (default: false)
 	IdempotencyHeader   string `toml:"idempotency_header"`    // Header name for idempotency key (default: X-Idempotency-Key)
 	IdempotencyTTLHours int    `toml:"idempotency_ttl_hours"` // How long to keep idempotency keys (default: 24)
+}
+
+type TLSConfig struct {
+	Enabled     bool              `toml:"enabled"`
+	CertFile    string            `toml:"cert_file"`
+	KeyFile     string            `toml:"key_file"`
+	Provider    string            `toml:"provider"` // "file" or "letsencrypt"
+	LetsEncrypt LetsEncryptConfig `toml:"letsencrypt"`
+}
+
+type LetsEncryptConfig struct {
+	Email           string   `toml:"email"`
+	Domains         []string `toml:"domains"`
+	StorageProvider string   `toml:"storage_provider"` // "s3"
+	S3              S3Config `toml:"s3"`
+}
+
+type S3Config struct {
+	Bucket          string `toml:"bucket"`
+	Region          string `toml:"region"`
+	AccessKeyID     string `toml:"access_key_id"`
+	SecretAccessKey string `toml:"secret_access_key"`
 }
 
 type QueueConfig struct {
@@ -78,86 +94,82 @@ type DeliveryConfig struct {
 	PerDomainRetrySeconds    int `toml:"per_domain_retry_seconds"`    // Delay before retrying throttled message
 
 	// Circuit breaker configuration
-	CircuitBreakerEnabled          bool `toml:"circuit_breaker_enabled"`              // Enable circuit breaker (default: true)
-	CircuitBreakerFailureThreshold int  `toml:"circuit_breaker_failure_threshold"`    // Consecutive failures before opening (default: 5)
-	CircuitBreakerSuccessThreshold int  `toml:"circuit_breaker_success_threshold"`    // Successes in half-open to close (default: 2)
-	CircuitBreakerOpenTimeoutSecs  int  `toml:"circuit_breaker_open_timeout_seconds"` // Seconds before trying half-open (default: 60)
+	CircuitBreakerEnabled          bool `toml:"circuit_breaker_enabled"`
+	CircuitBreakerFailureThreshold int  `toml:"circuit_breaker_failure_threshold"`
+	CircuitBreakerSuccessThreshold int  `toml:"circuit_breaker_success_threshold"`
+	CircuitBreakerOpenTimeoutSecs  int  `toml:"circuit_breaker_open_timeout_seconds"`
 
 	// DNS resolver configuration
-	DNSResolvers        []string `toml:"dns_resolvers"`          // Custom DNS servers (e.g. ["8.8.8.8:53", "1.1.1.1:53"])
-	DNSTimeoutSeconds   int      `toml:"dns_timeout_seconds"`    // Timeout for DNS queries
-	DNSCacheNegativeTTL int      `toml:"dns_cache_negative_ttl"` // TTL for negative DNS responses (NXDOMAIN, etc.)
+	DNSResolvers        []string `toml:"dns_resolvers"`
+	DNSTimeoutSeconds   int      `toml:"dns_timeout_seconds"`
+	DNSCacheNegativeTTL int      `toml:"dns_cache_negative_ttl"`
 }
 
 type CallbacksConfig struct {
 	WebhookURL               string  `toml:"webhook_url"`
 	AuthToken                string  `toml:"auth_token"`
 	TimeoutSeconds           int     `toml:"timeout_seconds"`
-	MaxCallbackAgeHours      int     `toml:"max_callback_age_hours"`      // Maximum age before giving up (similar to max_message_age_hours)
-	InitialRetryDelaySeconds int     `toml:"initial_retry_delay_seconds"` // Initial retry delay (e.g., 30s)
-	MaxRetryDelaySeconds     int     `toml:"max_retry_delay_seconds"`     // Maximum retry delay (e.g., 3600s = 1 hour)
-	BackoffMultiplier        float64 `toml:"backoff_multiplier"`          // Exponential backoff multiplier (e.g., 2.0)
-	BatchSize                int     `toml:"batch_size"`                  // Number of callbacks to process per iteration
+	MaxCallbackAgeHours      int     `toml:"max_callback_age_hours"`
+	InitialRetryDelaySeconds int     `toml:"initial_retry_delay_seconds"`
+	MaxRetryDelaySeconds     int     `toml:"max_retry_delay_seconds"`
+	BackoffMultiplier        float64 `toml:"backoff_multiplier"`
+	BatchSize                int     `toml:"batch_size"`
 }
 
 type ReputationConfig struct {
-	AlertWebhookURL        string `toml:"alert_webhook_url"`         // URL to send reputation alerts
-	AlertAuthToken         string `toml:"alert_auth_token"`          // Auth token for alert webhook
-	AlertTimeoutSeconds    int    `toml:"alert_timeout_seconds"`     // Timeout for alert requests
-	DegradedRetryHours     int    `toml:"degraded_retry_hours"`      // Hours before retrying degraded IP (default: 48)
-	EnableIPTracking       bool   `toml:"enable_ip_tracking"`        // Enable IP reputation tracking (default: true)
-	DegradedIPCleanupHours int    `toml:"degraded_ip_cleanup_hours"` // Hours to keep degraded IP history (default: 168 = 7 days)
+	AlertWebhookURL        string `toml:"alert_webhook_url"`
+	AlertAuthToken         string `toml:"alert_auth_token"`
+	AlertTimeoutSeconds    int    `toml:"alert_timeout_seconds"`
+	DegradedRetryHours     int    `toml:"degraded_retry_hours"`
+	EnableIPTracking       bool   `toml:"enable_ip_tracking"`
+	DegradedIPCleanupHours int    `toml:"degraded_ip_cleanup_hours"`
 }
 
 type GossipConfig struct {
-	Enabled       bool     `toml:"enabled"`        // Enable gossip protocol for distributed coordination (default: false)
-	BindPort      int      `toml:"bind_port"`      // Port for gossip protocol (default: 7946)
-	JoinAddresses []string `toml:"join_addresses"` // Initial seed nodes to join (e.g., ["fune-1:7946", "fune-2:7946"])
-	NodeID        string   `toml:"node_id"`        // Unique node identifier (defaults to hostname)
+	Enabled       bool     `toml:"enabled"`
+	BindPort      int      `toml:"bind_port"`
+	JoinAddresses []string `toml:"join_addresses"`
+	NodeID        string   `toml:"node_id"`
 }
 
 // SetDefaults sets default values for optional config fields
 func (c *Config) SetDefaults() {
-	// Server defaults
 	if c.Server.PIDFile == "" {
 		c.Server.PIDFile = "fune.pid"
 	}
-
-	// Logging defaults
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
 	if c.Logging.Format == "" {
 		c.Logging.Format = "console"
 	}
-
-	// HTTP defaults
 	if c.HTTP.MaxBodySizeBytes == 0 {
-		c.HTTP.MaxBodySizeBytes = 35 * 1024 * 1024 // 35 MB default
+		c.HTTP.MaxBodySizeBytes = 35 * 1024 * 1024
 	}
 	if c.HTTP.ReadTimeoutSecs == 0 {
-		c.HTTP.ReadTimeoutSecs = 30 // 30 seconds
+		c.HTTP.ReadTimeoutSecs = 30
 	}
 	if c.HTTP.WriteTimeoutSecs == 0 {
-		c.HTTP.WriteTimeoutSecs = 30 // 30 seconds
+		c.HTTP.WriteTimeoutSecs = 30
 	}
 	if c.HTTP.IdleTimeoutSecs == 0 {
-		c.HTTP.IdleTimeoutSecs = 120 // 2 minutes
+		c.HTTP.IdleTimeoutSecs = 120
 	}
 	if c.HTTP.MetricsPath == "" {
 		c.HTTP.MetricsPath = "/metrics"
 	}
-	// Metrics enabled by default
-	// Set MetricsEnabled explicitly to false to disable
-
-	// Idempotency defaults
 	if c.HTTP.IdempotencyHeader == "" {
 		c.HTTP.IdempotencyHeader = "X-Idempotency-Key"
 	}
 	if c.HTTP.IdempotencyTTLHours == 0 {
 		c.HTTP.IdempotencyTTLHours = 24
 	}
-
+	if c.TLS.Provider == "" {
+		c.TLS.Provider = "file"
+	}
+	if c.TLS.LetsEncrypt.StorageProvider == "" {
+		c.TLS.LetsEncrypt.StorageProvider = "s3"
+	}
 	if c.Queue.WorkerCount == 0 {
 		c.Queue.WorkerCount = 10
 	}
@@ -168,7 +180,7 @@ func (c *Config) SetDefaults() {
 		c.Queue.CleanupIntervalSeconds = 60
 	}
 	if c.Queue.PollIntervalSeconds == 0 {
-		c.Queue.PollIntervalSeconds = 30 // Poll every 30s as fallback
+		c.Queue.PollIntervalSeconds = 30
 	}
 	if c.Delivery.MXCacheTTLSeconds == 0 {
 		c.Delivery.MXCacheTTLSeconds = 3600
@@ -206,8 +218,6 @@ func (c *Config) SetDefaults() {
 	if c.Delivery.PerDomainRetrySeconds == 0 {
 		c.Delivery.PerDomainRetrySeconds = 5
 	}
-	// Circuit breaker defaults (enabled by default for production safety)
-	// Set CircuitBreakerEnabled explicitly to false to disable
 	if c.Delivery.CircuitBreakerFailureThreshold == 0 {
 		c.Delivery.CircuitBreakerFailureThreshold = 5
 	}
@@ -221,13 +231,13 @@ func (c *Config) SetDefaults() {
 		c.Callbacks.TimeoutSeconds = 10
 	}
 	if c.Callbacks.MaxCallbackAgeHours == 0 {
-		c.Callbacks.MaxCallbackAgeHours = 48 // Same as message age by default
+		c.Callbacks.MaxCallbackAgeHours = 48
 	}
 	if c.Callbacks.InitialRetryDelaySeconds == 0 {
-		c.Callbacks.InitialRetryDelaySeconds = 30 // 30 seconds
+		c.Callbacks.InitialRetryDelaySeconds = 30
 	}
 	if c.Callbacks.MaxRetryDelaySeconds == 0 {
-		c.Callbacks.MaxRetryDelaySeconds = 3600 // 1 hour max
+		c.Callbacks.MaxRetryDelaySeconds = 3600
 	}
 	if c.Callbacks.BackoffMultiplier == 0 {
 		c.Callbacks.BackoffMultiplier = 2.0
@@ -235,35 +245,27 @@ func (c *Config) SetDefaults() {
 	if c.Callbacks.BatchSize == 0 {
 		c.Callbacks.BatchSize = 10
 	}
-	// DNS defaults
 	if c.Delivery.DNSTimeoutSeconds == 0 {
 		c.Delivery.DNSTimeoutSeconds = 5
 	}
 	if c.Delivery.DNSCacheNegativeTTL == 0 {
-		c.Delivery.DNSCacheNegativeTTL = 60 // 1 minute for failures
+		c.Delivery.DNSCacheNegativeTTL = 60
 	}
-	// If no DNS resolvers specified, use system default
 	if len(c.Delivery.DNSResolvers) == 0 {
-		c.Delivery.DNSResolvers = []string{} // Empty means use system resolver
+		c.Delivery.DNSResolvers = []string{}
 	}
-
-	// Reputation defaults
 	if c.Reputation.AlertTimeoutSeconds == 0 {
 		c.Reputation.AlertTimeoutSeconds = 10
 	}
 	if c.Reputation.DegradedRetryHours == 0 {
-		c.Reputation.DegradedRetryHours = 48 // 48 hours default
+		c.Reputation.DegradedRetryHours = 48
 	}
 	if c.Reputation.DegradedIPCleanupHours == 0 {
-		c.Reputation.DegradedIPCleanupHours = 168 // 7 days
+		c.Reputation.DegradedIPCleanupHours = 168
 	}
-	// EnableIPTracking is enabled by default (set to false to disable)
-
-	// Gossip defaults
 	if c.Gossip.BindPort == 0 {
-		c.Gossip.BindPort = 7946 // Default memberlist port
+		c.Gossip.BindPort = 7946
 	}
-	// Gossip is disabled by default (set enabled=true to enable)
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -277,7 +279,6 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Apply defaults
 	config.SetDefaults()
 
 	return &config, nil

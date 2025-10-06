@@ -113,7 +113,7 @@ func (rc *ReloadableConfig) Reload() error {
 
 	rc.logger.Info("configuration reloaded successfully",
 		zap.Int("source_ips", len(newConfig.Delivery.SourceIPs)),
-		zap.Bool("tls_enabled", newConfig.HTTP.TLSEnabled),
+		zap.Bool("tls_enabled", newConfig.TLS.Enabled),
 		zap.Bool("metrics_enabled", newConfig.HTTP.MetricsEnabled),
 		zap.Bool("circuit_breaker_enabled", newConfig.Delivery.CircuitBreakerEnabled))
 
@@ -154,11 +154,16 @@ func (rc *ReloadableConfig) LoadTLSConfig() (*tls.Config, error) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 
-	if !rc.config.HTTP.TLSEnabled {
+	if !rc.config.TLS.Enabled {
 		return nil, fmt.Errorf("TLS not enabled")
 	}
 
-	cert, err := tls.LoadX509KeyPair(rc.config.HTTP.TLSCertFile, rc.config.HTTP.TLSKeyFile)
+	// Only support file-based TLS for hot reload
+	if rc.config.TLS.Provider != "file" {
+		return nil, fmt.Errorf("LoadTLSConfig only supports file provider")
+	}
+
+	cert, err := tls.LoadX509KeyPair(rc.config.TLS.CertFile, rc.config.TLS.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
 	}

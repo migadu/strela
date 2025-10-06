@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -55,6 +56,10 @@ type Gossip struct {
 
 	// TTL for idempotency cache entries
 	idempotencyTTL time.Duration
+
+	// Leader election
+	leader    string
+	leaderMtx sync.RWMutex
 
 	// Callbacks
 	onNodeJoin  func(node string)
@@ -131,6 +136,9 @@ func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
 				zap.Strings("seed_nodes", cfg.JoinAddresses))
 		}
 	}
+
+	// Initial leader election
+	g.updateLeader()
 
 	// Start background cleanup for expired idempotency keys
 	go g.cleanupExpiredKeys()
@@ -422,5 +430,57 @@ func (g *Gossip) SetNodeJoinCallback(fn func(node string)) {
 func (g *Gossip) SetNodeLeaveCallback(fn func(node string)) {
 	if g != nil {
 		g.onNodeLeave = fn
+	}
+}
+
+// IsLeader returns true if this node is the cluster leader
+func (g *Gossip) IsLeader() bool {
+	if g == nil {
+		return false
+	}
+	g.leaderMtx.RLock()
+	defer g.leaderMtx.RUnlock()
+	return g.leader == g.nodeID
+}
+
+// GetLeader returns the current cluster leader node ID
+func (g *Gossip) GetLeader() string {
+	if g == nil {
+		return ""
+	}
+	g.leaderMtx.RLock()
+	defer g.leaderMtx.RUnlock()
+	return g.leader
+}
+
+// updateLeader determines the cluster leader based on member list
+// Leader is the node with the lexicographically smallest node ID
+func (g *Gossip) updateLeader() {
+	if g == nil || g.memberlist == nil {
+		return
+	}
+
+	members := g.memberlist.Members()
+	if len(members) == 0 {
+		return
+	}
+
+	// Sort members by node ID (lexicographically)
+	sort.Slice(members, func(i, j int) bool {
+		return members[i].Name < members[j].Name
+	})
+
+	newLeader := members[0].Name
+
+	g.leaderMtx.Lock()
+	defer g.leaderMtx.Unlock()
+
+	if g.leader != newLeader {
+		oldLeader := g.leader
+		g.leader = newLeader
+		g.logger.Info("cluster leader changed",
+			zap.String("old_leader", oldLeader),
+			zap.String("new_leader", g.leader),
+			zap.Bool("is_leader", g.leader == g.nodeID))
 	}
 }

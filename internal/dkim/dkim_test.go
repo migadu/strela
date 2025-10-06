@@ -54,15 +54,15 @@ func TestValidatePrivateKey_ValidKeys(t *testing.T) {
 }
 
 func TestValidatePrivateKey_InvalidKeySize(t *testing.T) {
-	// Generate 512-bit key (unsupported)
-	keyPEM, err := generateRSAKey(512)
+	// Test with 4096-bit key (unsupported, we only accept 1024 or 2048)
+	keyPEM, err := generateRSAKey(4096)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
 
 	_, err = ValidatePrivateKey(keyPEM)
 	if err == nil {
-		t.Error("Expected error for 512-bit key, got nil")
+		t.Error("Expected error for 4096-bit key, got nil")
 	}
 
 	if !strings.Contains(err.Error(), "unsupported RSA key size") {

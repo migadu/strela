@@ -21,6 +21,7 @@ import (
 	"fune/internal/metrics"
 	"fune/internal/queue"
 	"fune/internal/recovery"
+	tlsmanager "fune/internal/tls"
 	"fune/internal/worker"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -171,6 +172,12 @@ func main() {
 			zap.Bool("enabled", cfg.Gossip.Enabled),
 			zap.Int("bind_port", cfg.Gossip.BindPort),
 			zap.Strings("join_addresses", cfg.Gossip.JoinAddresses))
+	}
+
+	// Initialize TLS Manager for auto-certificates
+	tlsManager, err := tlsmanager.NewManager(&cfg.TLS, g, logger)
+	if err != nil {
+		logger.Fatal("failed to initialize TLS manager", zap.Error(err))
 	}
 
 	// Track server start time for uptime reporting
@@ -354,34 +361,47 @@ func main() {
 		IdleTimeout:  time.Duration(cfg.HTTP.IdleTimeoutSecs) * time.Second,
 	}
 
-	// Configure TLS with certificate hot reload
-	if cfg.HTTP.TLSEnabled {
-		// Validate TLS configuration
-		if cfg.HTTP.TLSCertFile == "" || cfg.HTTP.TLSKeyFile == "" {
-			logger.Fatal("TLS enabled but cert_file or key_file not specified")
-		}
+	// Configure TLS
+	if cfg.TLS.Enabled {
+		switch cfg.TLS.Provider {
+		case "letsencrypt":
+			if tlsManager != nil {
+				server.TLSConfig = tlsManager.TLSConfig()
+				logger.Info("TLS configured with letsencrypt provider",
+					zap.Strings("domains", cfg.TLS.LetsEncrypt.Domains))
+			} else {
+				logger.Fatal("TLS provider is letsencrypt, but manager failed to initialize")
+			}
+		case "file":
+			fallthrough
+		default:
+			// Validate TLS configuration
+			if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
+				logger.Fatal("TLS enabled with file provider, but cert_file or key_file not specified")
+			}
 
-		// Setup TLS config with GetCertificate callback for hot reload
-		server.TLSConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				// Load certificate from disk on each connection
-				// This allows hot reload when certificate files are updated
-				tlsConfig, err := reloadableCfg.LoadTLSConfig()
-				if err != nil {
-					logger.Error("failed to load TLS certificate", zap.Error(err))
-					return nil, err
-				}
-				if len(tlsConfig.Certificates) == 0 {
-					return nil, nil
-				}
-				return &tlsConfig.Certificates[0], nil
-			},
-		}
+			// Setup TLS config with GetCertificate callback for hot reload
+			server.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					// Load certificate from disk on each connection
+					// This allows hot reload when certificate files are updated
+					tlsConfig, err := reloadableCfg.LoadTLSConfig()
+					if err != nil {
+						logger.Error("failed to load TLS certificate", zap.Error(err))
+						return nil, err
+					}
+					if len(tlsConfig.Certificates) == 0 {
+						return nil, nil
+					}
+					return &tlsConfig.Certificates[0], nil
+				},
+			}
 
-		logger.Info("TLS configured with hot reload support",
-			zap.String("cert_file", cfg.HTTP.TLSCertFile),
-			zap.String("key_file", cfg.HTTP.TLSKeyFile))
+			logger.Info("TLS configured with file provider and hot reload support",
+				zap.String("cert_file", cfg.TLS.CertFile),
+				zap.String("key_file", cfg.TLS.KeyFile))
+		}
 	}
 
 	// Start HTTP server in goroutine
@@ -391,17 +411,17 @@ func main() {
 			logger.Info("starting HTTP server",
 				zap.String("listen", cfg.HTTP.Listen),
 				zap.Bool("auth_enabled", true),
-				zap.Bool("tls_enabled", cfg.HTTP.TLSEnabled))
+				zap.Bool("tls_enabled", cfg.TLS.Enabled))
 		} else {
 			logger.Warn("starting HTTP server WITHOUT authentication",
 				zap.String("listen", cfg.HTTP.Listen),
 				zap.Bool("auth_enabled", false),
-				zap.Bool("tls_enabled", cfg.HTTP.TLSEnabled))
+				zap.Bool("tls_enabled", cfg.TLS.Enabled))
 		}
 
 		// Start server with or without TLS
 		var err error
-		if cfg.HTTP.TLSEnabled {
+		if cfg.TLS.Enabled {
 			// Use ListenAndServeTLS with empty cert/key paths since we configured TLS via server.TLSConfig
 			err = server.ListenAndServeTLS("", "")
 		} else {

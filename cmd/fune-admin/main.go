@@ -464,16 +464,29 @@ func showConfig(configPath string, jsonOutput bool) error {
 
 	fmt.Println("\n[HTTP]")
 	fmt.Printf("  Listen:              %s\n", cfg.HTTP.Listen)
-	fmt.Printf("  TLS Enabled:         %t\n", cfg.HTTP.TLSEnabled)
-	if cfg.HTTP.TLSEnabled {
-		fmt.Printf("  TLS Cert:            %s\n", cfg.HTTP.TLSCertFile)
-		fmt.Printf("  TLS Key:             %s\n", cfg.HTTP.TLSKeyFile)
-	}
 	fmt.Printf("  Max Body Size:       %d bytes\n", cfg.HTTP.MaxBodySizeBytes)
 	fmt.Printf("  Read Timeout:        %ds\n", cfg.HTTP.ReadTimeoutSecs)
 	fmt.Printf("  Write Timeout:       %ds\n", cfg.HTTP.WriteTimeoutSecs)
 	fmt.Printf("  Metrics Enabled:     %t\n", cfg.HTTP.MetricsEnabled)
 	fmt.Printf("  Metrics Path:        %s\n", cfg.HTTP.MetricsPath)
+
+	fmt.Println("\n[TLS]")
+	fmt.Printf("  Enabled:             %t\n", cfg.TLS.Enabled)
+	if cfg.TLS.Enabled {
+		fmt.Printf("  Provider:            %s\n", cfg.TLS.Provider)
+		if cfg.TLS.Provider == "letsencrypt" {
+			fmt.Printf("  Email:               %s\n", cfg.TLS.LetsEncrypt.Email)
+			fmt.Printf("  Domains:             %v\n", cfg.TLS.LetsEncrypt.Domains)
+			fmt.Printf("  Storage:             %s\n", cfg.TLS.LetsEncrypt.StorageProvider)
+			if cfg.TLS.LetsEncrypt.StorageProvider == "s3" {
+				fmt.Printf("  S3 Bucket:           %s\n", cfg.TLS.LetsEncrypt.S3.Bucket)
+				fmt.Printf("  S3 Region:           %s\n", cfg.TLS.LetsEncrypt.S3.Region)
+			}
+		} else {
+			fmt.Printf("  Cert File:           %s\n", cfg.TLS.CertFile)
+			fmt.Printf("  Key File:            %s\n", cfg.TLS.KeyFile)
+		}
+	}
 
 	fmt.Println("\n[Server]")
 	fmt.Printf("  Database Path:       %s\n", cfg.Server.DatabasePath)

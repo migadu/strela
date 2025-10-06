@@ -51,6 +51,9 @@ func (e *eventDelegate) NotifyJoin(node *memberlist.Node) {
 		zap.String("node_id", node.Name),
 		zap.String("addr", node.Address()))
 
+	// Re-evaluate leader
+	e.gossip.updateLeader()
+
 	if e.gossip.onNodeJoin != nil {
 		e.gossip.onNodeJoin(node.Name)
 	}
@@ -64,6 +67,9 @@ func (e *eventDelegate) NotifyLeave(node *memberlist.Node) {
 
 	// Remove node status
 	e.gossip.nodeStatuses.Delete(node.Name)
+
+	// Re-evaluate leader
+	e.gossip.updateLeader()
 
 	if e.gossip.onNodeLeave != nil {
 		e.gossip.onNodeLeave(node.Name)
