@@ -1,77 +1,73 @@
 # Fune - High-Performance SMTP Delivery Service
 
-A production-ready, queue-based SMTP delivery service with direct MX delivery, intelligent retry logic, IP reputation management, and comprehensive monitoring.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/migadu/fune/master/assets/fune-logo.png" alt="Fune Logo" width="200"/>
+</p>
+
+<p align="center">
+  <strong>A production-ready, queue-based SMTP delivery service with direct MX delivery, intelligent retry logic, IP reputation management, and comprehensive monitoring.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/migadu/fune/actions"><img src="https://github.com/migadu/fune/workflows/Go/badge.svg" alt="Build Status"></a>
+  <a href="https://goreportcard.com/report/github.com/migadu/fune"><img src="https://goreportcard.com/badge/github.com/migadu/fune" alt="Go Report Card"></a>
+  <a href="https://godoc.org/github.com/migadu/fune"><img src="https://godoc.org/github.com/migadu/fune?status.svg" alt="GoDoc"></a>
+</p>
+
+---
+
+Fune is a modern, reliable, and high-performance email delivery service built in Go. It accepts messages via a simple HTTP API, queues them persistently, and delivers them directly to recipient MX servers. It's designed for developers and businesses who need a robust, self-hosted email sending solution without the complexity of traditional mail servers.
 
 ## Features
 
-### Core Capabilities
-- **Queue-Based Architecture**: Accepts messages via HTTP, returns immediately (200 OK for new messages, 202 Accepted for idempotent duplicates), processes asynchronously
-- **Direct MX Delivery**: Bypasses SMTP relay, delivers directly to recipient's MX servers with IPv6-first support
-- **DKIM Signing**: Optional DKIM signature support with 1024/2048-bit RSA keys
-- **Multiple Source IPs**: Rotate through multiple outbound IPs (round-robin, random, hash-domain)
-- **IP Reputation Tracking**: Automatically detects and manages degraded IPs due to blacklisting
-- **Exponential Backoff**: Intelligent retry with 5min → 12h cap over 48 hours
-- **Circuit Breakers**: Automatic health monitoring and fast-fail during infrastructure failures (enabled by default for delivery and webhooks)
-- **Webhook Callbacks**: Notifies your endpoint on delivery/bounce events with circuit breaker protection
+- **Queue-Based Architecture**: Asynchronously processes messages for high throughput and reliability.
+- **Direct MX Delivery**: Delivers email directly to the recipient's mail server, bypassing relays.
+- **Intelligent Retries**: Exponential backoff and greylisting handling ensure your emails get delivered.
+- **IP Reputation Management**: Automatically detects and manages degraded IPs to protect your deliverability.
+- **Webhook Callbacks**: Get real-time notifications for delivery events (delivered, bounced, failed).
+- **DKIM Signing**: Sign your emails with DKIM for better security and deliverability.
+- **Clustering Support**: Scale horizontally with optional clustering for high availability.
+- **Prometheus Metrics**: In-depth monitoring of queues, deliveries, and performance.
+- **Hot Reload**: Update configuration without downtime.
 
-### Operations & Monitoring
-- **Hot Reload**: Configuration changes without downtime (SIGHUP signal)
-- **Prometheus Metrics**: Comprehensive metrics for monitoring delivery, queue, circuit breaker, and IP reputation
-- **Panic Recovery**: Comprehensive crash prevention with safe goroutine execution
-- **Graceful Shutdown**: Completes in-flight deliveries before shutting down
-- **Admin CLI**: Queue inspection, statistics, and server management
-- **Structured Logging**: JSON or console output with configurable levels
-
-### Reliability & Performance
-- **SQLite WAL**: Persistent queue with concurrent reads, single writer
-- **Event-Driven Workers**: Instant message processing with fallback polling
-- **Batch DNS Prefetching**: Parallel MX lookups for multiple domains in same batch
-- **MX Caching**: Reduces DNS queries and improves delivery latency (1 hour TTL)
-- **Destination Throttling**: Prevents rapid-fire connections (anti-spam)
-- **TLS Support**: Optional HTTPS for API, opportunistic STARTTLS for SMTP
-- **Idempotency**: Optional idempotency key support to prevent duplicate deliveries
-
-### Cluster Support (Optional)
-- **Gossip Protocol**: Distributed coordination using HashiCorp memberlist
-- **Encrypted Communication**: AES-256 encryption for all gossip traffic (required for production)
-- **Leader Election**: Automatic leader selection for Let's Encrypt certificate management
-- **Distributed Idempotency**: Best-effort duplicate prevention across cluster nodes
-- **Cluster Monitoring**: Real-time visibility into queue depth and load across all nodes
-- **Flexible Binding**: Configure specific network interfaces for cluster communication
-- **Admin API**: `/admin/cluster/status` endpoint for cluster health
-- **CLI Tools**: `fune-admin cluster-status` command for cluster inspection
+For a full list of features and detailed technical information, please see our [**Technical Documentation**](DOCUMENTATION.md).
 
 ## Quick Start
 
-```bash
-# Build binaries
-make all
+1.  **Build the binaries:**
+    ```bash
+    make all
+    ```
 
-# Copy and edit configuration
-cp config.toml.example config.toml
-nano config.toml
+2.  **Configure Fune:**
+    Copy the example configuration and edit it to your needs.
+    ```bash
+    cp config.toml.example config.toml
+    nano config.toml
+    ```
 
-# Run server
-./fune-server
+3.  **Run the server:**
+    ```bash
+    ./bin/fune-server
+    ```
 
-# Check queue status
-./fune-admin queue
-
-# Send test message
-curl -X POST http://localhost:8080/v1/messages \
-  -H "Authorization: Bearer your-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "sender@example.com",
-    "to": "recipient@example.com",
-    "subject": "Test",
-    "text": "Hello World"
-  }'
-```
+4.  **Send a test message:**
+    ```bash
+    curl -X POST http://localhost:8080/v1/messages \
+      -H "Authorization: Bearer your-secret-token" \
+      -H "Content-Type: application/json" \
+      -d 
+      {
+        "from": "sender@example.com",
+        "to": "recipient@example.com",
+        "subject": "Hello from Fune!",
+        "text": "This is a test message."
+      }
+    ```
 
 ## Configuration
 
-### Minimal Configuration
+Fune is configured using a `config.toml` file. A minimal configuration looks like this:
 
 ```toml
 [server]
@@ -93,181 +89,26 @@ webhook_url = "https://your-app.com/webhooks/delivery"
 auth_token = "webhook-secret"
 ```
 
-### Complete Configuration
+For a complete list of all configuration options, please see the [**`config.toml.example`**](config.toml.example) file.
 
-See [config.toml.example](config.toml.example) for all options including:
-- Auto-TLS with Let's Encrypt (with S3 storage and cluster coordination)
-- TLS/HTTPS configuration
-- IP rotation strategies (round-robin, random, hash-domain)
-- Circuit breaker thresholds
-- Custom DNS resolvers with failover
-- Retry schedules and backoff
-- Idempotency settings
-- IP reputation tracking
-- Prometheus metrics
-- Cluster mode with gossip protocol
+## API
 
-### Auto-TLS with Let's Encrypt (Optional)
+Submit a message for delivery by making a POST request to the `/v1/messages` endpoint.
 
-Automatic HTTPS certificate management with cluster-aware coordination:
+**Request:**
+```http
+POST /v1/messages
+Host: localhost:8080
+Authorization: Bearer your-secret-token
+Content-Type: application/json
 
-```toml
-[tls]
-enabled = true
-provider = "letsencrypt"
-
-[tls.letsencrypt]
-email = "admin@example.com"
-domains = ["mail.example.com"]
-storage_provider = "s3"
-
-[tls.letsencrypt.s3]
-bucket = "fune-certs"
-region = "us-east-1"
-# Optional: Use specific credentials (or IAM role/env vars)
-# access_key_id = ""
-# secret_access_key = ""
-```
-
-**Features:**
-- **Automatic Certificates**: Requests and renews Let's Encrypt certificates
-- **HTTP-01 Challenge**: Built-in challenge server on port 80
-- **S3 Storage**: Stores certificates in S3 for cluster-wide access
-- **Leader Coordination**: Only the cluster leader requests/renews certificates
-- **Certificate Monitoring**: Automatic expiry tracking and renewal
-- **All Nodes Serve HTTPS**: All nodes read certificates from S3
-
-**Cluster Mode (Recommended):**
-When running in cluster mode with multiple nodes:
-1. Enable cluster gossip protocol (see Cluster Setup below)
-2. Leader election automatically determines which node manages certificates
-3. Only the leader requests/renews Let's Encrypt certificates
-4. All nodes read certificates from shared S3 storage
-5. Automatic failover if leader node fails
-
-**Requirements:**
-- Port 80 accessible for HTTP-01 challenge
-- Port 443 for HTTPS API
-- S3 bucket with read/write access
-- DNS A/AAAA records pointing to your server(s)
-
-### Custom DNS Resolvers (Optional)
-
-Configure custom DNS resolvers with automatic failover:
-
-```toml
-[dns]
-resolvers = ["1.1.1.1:53", "8.8.8.8:53", "8.8.4.4:53"]
-timeout_seconds = 5
-cache_negative_ttl_seconds = 60
-```
-
-**Features:**
-- **Round-robin load distribution** across all configured resolvers
-- **Automatic failover** - tries all resolvers before giving up
-- **UDP → TCP fallback** - automatically retries with TCP if UDP fails
-- **System default fallback** - uses OS resolver if none configured
-
-**Flow:**
-```
-Query 1: Try 1.1.1.1 (UDP → TCP) → 8.8.8.8 (UDP → TCP) → 8.8.4.4 (UDP → TCP)
-Query 2: Try 8.8.8.8 (UDP → TCP) → 8.8.4.4 (UDP → TCP) → 1.1.1.1 (UDP → TCP)
-Query 3: Try 8.8.4.4 (UDP → TCP) → 1.1.1.1 (UDP → TCP) → 8.8.8.8 (UDP → TCP)
-```
-
-### Cluster Setup (Optional)
-
-Enable cluster mode for distributed coordination across multiple nodes:
-
-```toml
-[cluster]
-enabled = true
-bind_addr = "0.0.0.0"  # IP to bind to (default: 0.0.0.0 - all interfaces)
-bind_port = 7946       # Port for gossip protocol (default: 7946)
-node_id = "fune-1"     # Unique per node (defaults to hostname)
-
-# List 1-2 initial seed nodes (gossip discovers others automatically)
-# Port is optional and defaults to bind_port
-peers = ["fune-2", "fune-3"]
-
-# SECURITY: Encrypt all cluster communication (REQUIRED for production)
-# Generate key: openssl rand -base64 32
-# Use the SAME key on all cluster nodes
-secret_key = "your-base64-encoded-32-byte-secret-key-here"
-```
-
-**Note**: You only need to list a few initial peers. The gossip protocol automatically discovers all other cluster members.
-
-**Features:**
-- **AES-256 Encryption**: All gossip traffic encrypted (when `secret_key` is set)
-- **Distributed Idempotency**: Prevents duplicate processing when requests hit different nodes
-- **Load Monitoring**: Real-time visibility into queue depth across the cluster
-- **Cluster Health**: Monitor node status, uptime, and active workers
-
-**Generate encryption key:**
-```bash
-# Generate a secure 32-byte key for cluster encryption
-openssl rand -base64 32
-```
-
-**View cluster status:**
-```bash
-# Query any node in the cluster
-./fune-admin cluster-status -server http://fune-1:8080
-
-# Or via API
-curl http://fune-1:8080/admin/cluster/status
-```
-
-**Recommended load balancer setup with HAProxy:**
-```haproxy
-frontend fune_api
-    bind *:80
-    default_backend fune_servers
-
-backend fune_servers
-    balance hdr(X-Idempotency-Key)
-    hash-type consistent
-    server fune-1 fune-1:8080 check
-    server fune-2 fune-2:8080 check
-    server fune-3 fune-3:8080 check
-```
-
-This directs requests with the same idempotency key to the same node, while gossip provides additional safety for race conditions and failover scenarios.
-
-### Hot Reload
-
-Reload configuration without downtime:
-
-```bash
-# Send SIGHUP signal
-kill -HUP $(cat fune.pid)
-
-# Or with systemd
-systemctl reload fune
-
-# Or with admin CLI
-./fune-admin reload -pid fune.pid
-```
-
-**Reloadable**: Source IPs, rate limits, circuit breaker, DNS, TLS certs, HTTP timeouts
-**Non-reloadable**: Database path, listen address, worker count (require restart)
-
-## API Usage
-
-### Submit Message (JSON)
-
-```bash
-curl -X POST http://localhost:8080/v1/messages \
-  -H "Authorization: Bearer your-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "sender@example.com",
-    "to": "recipient@example.com",
-    "subject": "Test Subject",
-    "text": "Plain text body",
-    "html": "<p>HTML body</p>"
-  }'
+{
+  "from": "sender@example.com",
+  "to": "recipient@example.com",
+  "subject": "Test Subject",
+  "text": "Plain text body",
+  "html": "<p>HTML body</p>"
+}
 ```
 
 **Response (200 OK):**
@@ -279,684 +120,16 @@ curl -X POST http://localhost:8080/v1/messages \
 }
 ```
 
-### Submit with DKIM Signature
-
-```bash
-# Generate DKIM key pair
-openssl genrsa -out dkim_private.pem 2048
-openssl rsa -in dkim_private.pem -pubout -out dkim_public.pem
-
-# Add DNS TXT record
-# default._domainkey.example.com TXT "v=DKIM1; k=rsa; p=MIIBIjANB..."
-
-# Send with DKIM
-curl -X POST http://localhost:8080/v1/messages \
-  -H "Authorization: Bearer your-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "sender@example.com",
-    "to": "recipient@example.com",
-    "subject": "DKIM Signed Email",
-    "text": "This email is DKIM signed",
-    "dkim_private_key": "'"$(cat dkim_private.pem)"'",
-    "dkim_selector": "default"
-  }'
-```
-
-### Idempotent Requests
-
-Prevent duplicate deliveries using idempotency keys:
-
-```bash
-curl -X POST http://localhost:8080/v1/messages \
-  -H "Authorization: Bearer your-token" \
-  -H "X-Idempotency-Key: unique-key-123" \
-  -H "Content-Type: application/json" \
-  -d '{"from": "sender@example.com", "to": "recipient@example.com", ...}'
-
-# Sending again with same key returns existing message_id
-# First request: 200 OK (queued)
-# Duplicate request: 202 Accepted (idempotent)
-```
-
-Enable in config:
-```toml
-[http]
-idempotency_enabled = true
-idempotency_ttl_hours = 24
-```
-
-## Webhook Callbacks
-
-Fune sends POST requests to your `webhook_url` for all terminal events:
-
-### Delivered (Success)
-
-```json
-{
-  "event_type": "delivered",
-  "message_id": "msg_abc123",
-  "from_address": "sender@example.com",
-  "to_address": "recipient@example.com",
-  "subject": "Test",
-  "timestamp": "2025-01-15T10:35:00Z",
-  "smtp_code": 250,
-  "smtp_response": "OK",
-  "mx_host": "mx1.example.com",
-  "source_ip": "192.168.1.100",
-  "attempts": 1
-}
-```
-
-### Bounced (Permanent Failure)
-
-```json
-{
-  "event_type": "bounced",
-  "message_id": "msg_xyz789",
-  "from_address": "sender@example.com",
-  "to_address": "invalid@example.com",
-  "timestamp": "2025-01-15T10:35:00Z",
-  "smtp_code": 550,
-  "smtp_response": "User not found",
-  "error_message": "Permanent delivery failure",
-  "attempts": 1
-}
-```
-
-### Failed (Temporary, Retrying)
-
-```json
-{
-  "event_type": "failed",
-  "message_id": "msg_def456",
-  "timestamp": "2025-01-15T10:35:00Z",
-  "smtp_code": 421,
-  "smtp_response": "Greylisted",
-  "attempts": 2,
-  "next_retry_at": "2025-01-15T10:37:00Z"
-}
-```
-
-### Expired (Timeout)
-
-```json
-{
-  "event_type": "expired",
-  "message_id": "msg_ghi789",
-  "timestamp": "2025-01-17T10:30:00Z",
-  "error_message": "Message exceeded 48 hour delivery window",
-  "attempts": 12
-}
-```
-
-### Callback Circuit Breaker
-
-Protect your system from webhook failures with the callback circuit breaker (**enabled by default**):
-
-```toml
-[callbacks]
-circuit_breaker_enabled = true             # Default: true
-circuit_breaker_failure_threshold = 5      # Default: 5
-circuit_breaker_success_threshold = 2      # Default: 2
-circuit_breaker_open_timeout_seconds = 60  # Default: 60
-```
-
-**How it works:**
-- **Opens on network errors**: Connection refused, DNS failures, timeouts
-- **Ignores application errors**: HTTP 4xx/5xx responses don't trigger circuit breaker
-- **Postpones callbacks**: When open, callbacks wait until webhook recovers
-- **Automatic recovery**: Tests webhook availability and closes when successful
-
-**States:**
-- **Closed** (normal): All callbacks sent immediately
-- **Open** (failing): Callbacks postponed for 60 seconds
-- **Half-Open** (testing): Limited callbacks to test recovery
-
-This prevents your callback queue from being blocked by an unreachable webhook endpoint while ensuring no callbacks are lost.
-
-## Retry Schedule
-
-Exponential backoff with configurable cap:
-
-| Attempt | Delay | Cumulative |
-|---------|-------|------------|
-| 1 | Immediate | 0 |
-| 2 | 5 min | 5 min |
-| 3 | 10 min | 15 min |
-| 4 | 20 min | 35 min |
-| 5 | 40 min | 1h 15m |
-| 6 | 80 min | 2h 35m |
-| 7 | 160 min | 5h 15m |
-| 8+ | 12h (capped) | → 48h max |
-
-**Special cases:**
-- **Greylisting (421)**: Aggressive 2-minute retry
-- **Permanent (5xx)**: No retry, immediate bounce callback
-- **Network errors**: Retry with backoff
-- **Throttled**: Quick retry once rate limit window passes
-
-## IP Reputation Management
-
-Automatic detection and management of degraded IPs:
-
-### How It Works
-
-1. Delivery fails with reputation error (e.g., "550 blocked by Spamhaus")
-2. IP automatically marked as "degraded"
-3. IP removed from rotation pool
-4. Alert sent to reputation webhook
-5. After 48 hours (configurable), IP is retried
-6. If successful → marked "recovered", alert sent
-7. If failed → remains degraded for another 48 hours
-
-### Configuration
-
-```toml
-[reputation]
-enable_ip_tracking = true
-alert_webhook_url = "https://your-app.com/api/reputation-alert"
-alert_auth_token = "secret"
-degraded_retry_hours = 48
-```
-
-### Reputation Alert Payload
-
-```json
-{
-  "timestamp": "2025-01-15T10:30:00Z",
-  "source_ip": "192.168.1.100",
-  "event_type": "degraded",
-  "from": "sender@example.com",
-  "to": "recipient@example.com",
-  "smtp_code": 550,
-  "smtp_response": "IP blocked by Spamhaus RBL",
-  "mx_host": "mx.example.com",
-  "retry_after": "2025-01-17T10:30:00Z",
-  "degraded_ips_count": 1
-}
-```
-
-Event types: `degraded`, `recovered`
-
-## Circuit Breaker
-
-Automatically stops accepting requests when local infrastructure fails (**enabled by default**):
-
-### States
-
-- **Closed** (normal): All requests accepted
-- **Open** (failing): Requests rejected with 503
-- **Half-Open** (testing): Limited requests to test recovery
-
-### Configuration
-
-```toml
-[delivery]
-circuit_breaker_enabled = true             # Default: true
-circuit_breaker_failure_threshold = 5      # Default: 5
-circuit_breaker_success_threshold = 2      # Default: 2
-circuit_breaker_open_timeout_seconds = 60  # Default: 60
-```
-
-### Triggers
-
-**Opens on:**
-- Network failures (connection refused, timeouts)
-- DNS failures (NXDOMAIN, resolver unreachable)
-- Local IP binding failures
-
-**Does NOT open on:**
-- Remote SMTP errors (4xx, 5xx codes)
-- Greylisting or rate limiting
-
-## Monitoring
-
-### Prometheus Metrics
-
-Available at `/metrics` endpoint (secured with HTTP Basic Auth in production):
-
-```promql
-# Queue depth by status
-fune_queue_depth{status="pending"}
-
-# Delivery attempts by outcome
-fune_delivery_attempts_total{outcome="success"}
-fune_delivery_attempts_total{outcome="permanent_error"}
-fune_delivery_attempts_total{outcome="temporary_error"}
-
-# Delivery duration (histogram)
-fune_delivery_duration_seconds
-
-# Circuit breaker state (0=closed, 1=half-open, 2=open)
-fune_circuit_breaker_state
-
-# IP reputation status
-fune_ip_reputation_degraded{source_ip="192.168.1.100"}
-fune_ip_reputation_events_total{event_type="degraded",source_ip="192.168.1.100"}
-
-# HTTP requests
-fune_http_requests_total{method="POST",path="/",status="200"}
-fune_http_requests_total{method="POST",path="/",status="202"}  # idempotent responses
-
-# Callback attempts
-fune_callback_attempts_total{outcome="success",event_type="delivered"}
-```
-
-**Securing the Metrics Endpoint:**
-
-Configure HTTP Basic Auth for production deployments:
-
-```toml
-[metrics]
-enabled = true
-path = "/metrics"
-username = "admin"
-password = "secure-random-password"
-```
-
-Access metrics with authentication:
-```bash
-curl -u admin:secure-random-password https://mail.example.com/metrics
-```
-
-Configure Prometheus scrape config:
-```yaml
-scrape_configs:
-  - job_name: 'fune'
-    basic_auth:
-      username: 'admin'
-      password: 'secure-random-password'
-    static_configs:
-      - targets: ['mail.example.com:443']
-```
-
-### Recommended Alerts
-
-```yaml
-# Circuit breaker open (infrastructure failure)
-- alert: CircuitBreakerOpen
-  expr: fune_circuit_breaker_state == 2
-  for: 1m
-
-# Source IP degraded due to reputation
-- alert: SourceIPDegraded
-  expr: fune_ip_reputation_degraded == 1
-  for: 5m
-
-# Queue backlog growing
-- alert: QueueBacklogGrowing
-  expr: fune_queue_depth{status="pending"} > 1000
-  for: 10m
-
-# Low delivery success rate
-- alert: LowDeliverySuccessRate
-  expr: rate(fune_delivery_attempts_total{outcome="success"}[5m]) / rate(fune_delivery_attempts_total[5m]) < 0.8
-  for: 15m
-```
-
-### Admin CLI
-
-```bash
-# Queue statistics
-./fune-admin queue
-
-# Output:
-# Total messages: 152
-# Pending: 45
-# Processing: 3
-# Delivered: 98
-# Hard Bounces: 4
-# Expired: 2
-
-# Queue details with pagination
-./fune-admin queue -db queue.db -json | jq
-
-# Top domains in queue
-./fune-admin queue-domains
-
-# Top senders
-./fune-admin queue-senders
-
-# Recent failures
-./fune-admin failures
-
-# Callback queue status
-./fune-admin callbacks
-
-# Throughput statistics
-./fune-admin throughput
-
-# Reload configuration
-./fune-admin reload -pid fune.pid
-
-# Check version
-./fune-admin version
-```
-
-## Deployment
-
-### systemd Service
-
-Create `/etc/systemd/system/fune.service`:
-
-```ini
-[Unit]
-Description=Fune SMTP Delivery Service
-After=network.target
-
-[Service]
-Type=simple
-User=fune
-WorkingDirectory=/opt/fune
-ExecStart=/opt/fune/fune-server
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
-RestartSec=5
-PIDFile=/opt/fune/fune.pid
-
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/fune
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable fune
-sudo systemctl start fune
-sudo systemctl status fune
-
-# Reload configuration
-sudo systemctl reload fune
-
-# View logs
-sudo journalctl -u fune -f
-```
-
-### Horizontal Scaling
-
-Run multiple instances behind a load balancer:
-
-```
-        ┌─────────────┐
-        │ Load Balancer│ (nginx/HAProxy)
-        └──────┬───────┘
-               │
-    ┌──────────┼──────────┬──────────┐
-    │          │          │          │
-┌───▼───┐  ┌───▼───┐  ┌───▼───┐  ┌───▼───┐
-│Inst 1 │  │Inst 2 │  │Inst 3 │  │Inst 4 │
-│:8081  │  │:8082  │  │:8083  │  │:8084  │
-└───┬───┘  └───┬───┘  └───┬───┘  └───┬───┘
-    │          │          │          │
-queue1.db  queue2.db  queue3.db  queue4.db
-```
-
-Each instance:
-- Has its own SQLite database (shared-nothing architecture)
-- Processes its own queue independently
-- No coordination needed between instances
-- Scales linearly with traffic
-
-**HAProxy config with idempotency:**
-```
-backend fune
-    balance hdr(X-Idempotency-Key)
-    hash-type consistent
-    server fune1 127.0.0.1:8081 check
-    server fune2 127.0.0.1:8082 check
-    server fune3 127.0.0.1:8083 check
-    server fune4 127.0.0.1:8084 check
-```
-
-## Requirements
-
-### System Requirements
-- Go 1.23+ (for building)
-- Outbound SMTP access (port 25)
-- Linux/macOS/BSD (Windows untested)
-
-### Network Requirements
-- Multiple IP addresses (optional, for IP rotation)
-- Proper reverse DNS (PTR records) for all source IPs
-- No port 25 blocking by ISP/cloud provider
-
-### DNS Requirements
-For best deliverability:
-- **PTR records**: Reverse DNS for all source IPs
-- **SPF records**: Authorize your IPs to send email
-- **DKIM records**: If using DKIM signing (recommended)
-- **DMARC policy**: Optional but recommended
-
-Example DNS records:
-```
-# PTR (reverse DNS)
-100.1.168.192.in-addr.arpa. PTR mail.example.com.
-
-# SPF
-example.com. TXT "v=spf1 ip4:192.168.1.100 -all"
-
-# DKIM
-default._domainkey.example.com. TXT "v=DKIM1; k=rsa; p=MIIBIjAN..."
-
-# DMARC
-_dmarc.example.com. TXT "v=DMARC1; p=none; rua=mailto:dmarc@example.com"
-```
-
-## Testing
-
-```bash
-# Run all tests
-go test ./...
-
-# Run with race detection
-go test -race ./...
-
-# Run with coverage
-go test -cover ./...
-
-# Run specific package tests
-go test ./internal/delivery -v
-
-# Run specific test
-go test ./internal/delivery -run TestIPReputationTracker
-```
-
-**Test Coverage**: 135+ unit tests including:
-- Queue operations (9 tests)
-- Delivery engine (90 tests, including 24 IP reputation tests)
-- Callback system (14 tests)
-- Worker pool (13 tests)
-- HTTP handler (4 tests)
-- Configuration (5 tests)
-- Integration tests
-
-## Architecture
-
-```
-HTTP Request → Handler → Queue (SQLite) → Returns 200 OK (or 202 if idempotent)
-                             ↓
-                    Event Notification
-                             ↓
-                     Worker Pool (concurrent)
-                             ↓
-                Filter Degraded IPs (reputation tracker)
-                             ↓
-                   Select Source IP (rotator)
-                             ↓
-              MX Lookup (DNS with caching)
-                             ↓
-           Circuit Breaker Check (if enabled)
-                             ↓
-              Destination Throttle Check
-                             ↓
-            Direct SMTP Delivery (IPv6 first)
-                             ↓
-          ┌──────────────────┴──────────────────┐
-          ▼                                     ▼
-      Success                               Failure
-          │                                     │
-          ├─ Update metrics                     ├─ Classify error
-          ├─ Mark as delivered                  ├─ Update metrics
-          ├─ Queue callback                     ├─ Check if reputation error
-          └─ Record reputation (if degraded IP) │   └─ Mark IP degraded
-                                                ├─ Schedule retry or mark terminal
-                                                └─ Queue callback
-
-                             ↓
-                    Callback Handler
-                             ↓
-              POST to webhook with retry
-                             ↓
-                      Success → Delete
-```
-
-## Error Classification
-
-### Permanent Errors (5xx) - No Retry
-- **550**: User not found, mailbox unavailable
-- **551**: User not local, will not relay
-- **552**: Message too large, mailbox full
-- **553**: Invalid mailbox name
-- **554**: Transaction failed
-
-### Temporary Errors (4xx) - Retry with Backoff
-- **421**: Service unavailable (greylisting - aggressive retry)
-- **450**: Mailbox busy
-- **451**: Local error, rate limiting
-- **452**: Insufficient storage
-- **454**: TLS not available
-
-### Reputation Errors - IP Degradation
-Triggered by SMTP responses containing keywords:
-- "blocked", "blacklist", "rbl", "dnsbl"
-- "poor reputation", "spamhaus", "barracuda"
-- "rejected for policy reasons"
-
-### Network Errors - Retry with Backoff
-- DNS failures (NXDOMAIN, SERVFAIL)
-- Connection refused, timeout
-- TLS handshake failures
-
-## Troubleshooting
-
-### Deliveries Not Working
-
-1. **Check circuit breaker status:**
-   ```bash
-   curl http://localhost:8080/health
-   # Should return {"status": "healthy", "circuit_breaker": "closed"}
-   ```
-
-2. **Check queue:**
-   ```bash
-   ./fune-admin queue
-   # Look for stuck messages in "processing" or high retry counts
-   ```
-
-3. **Check logs:**
-   ```bash
-   journalctl -u fune -f
-   # Look for network errors, DNS failures, or SMTP rejections
-   ```
-
-4. **Verify source IP can send mail:**
-   ```bash
-   telnet mx.example.com 25
-   # Should connect successfully
-   ```
-
-### High Bounce Rate
-
-1. **Check IP reputation:**
-   ```bash
-   # Check if IPs are on blacklists
-   curl http://multirbl.valli.org/lookup/192.168.1.100.html
-   ```
-
-2. **Verify DNS records:**
-   ```bash
-   # Check SPF
-   dig txt example.com
-
-   # Check reverse DNS
-   dig -x 192.168.1.100
-
-   # Check DKIM (if using)
-   dig txt default._domainkey.example.com
-   ```
-
-3. **Monitor metrics:**
-   ```promql
-   # Check delivery success rate
-   rate(fune_delivery_attempts_total{outcome="success"}[5m])
-   ```
-
-### All IPs Degraded
-
-If all source IPs are degraded due to reputation issues:
-
-1. **Check reputation alerts:**
-   - Review reputation webhook payloads
-   - Check which blacklists are blocking your IPs
-
-2. **Temporary fix:**
-   - System automatically falls back to default IP (no binding)
-   - Or disable reputation tracking temporarily:
-     ```toml
-     [reputation]
-     enable_ip_tracking = false
-     ```
-
-3. **Long-term fix:**
-   - Request delisting from blacklists
-   - Improve email sending practices
-   - Warm up new IPs gradually
-
-## Performance Tuning
-
-### Worker Count
-```toml
-[queue]
-worker_count = 10  # Adjust based on CPU cores and delivery volume
-```
-- **Low traffic**: 5-10 workers
-- **Medium traffic**: 10-20 workers
-- **High traffic**: 20-50 workers per instance
-
-### Batch Size
-```toml
-[queue]
-batch_size = 5  # Messages per worker iteration
-```
-- Larger = fewer DB queries, but potential head-of-line blocking
-- Smaller = more responsive, but more DB overhead
-- **Optimization**: Larger batches enable DNS prefetching (e.g., 5-10 messages)
-
-**DNS Batch Prefetching** (automatic, no configuration needed):
-- Workers automatically prefetch DNS for all unique domains in a batch
-- **Example**: Batch of 5 messages to `gmail.com`, `yahoo.com`, `gmail.com`, `outlook.com`, `gmail.com`
-  - Traditional: 5 sequential DNS lookups
-  - With batching: 3 parallel DNS lookups (deduplicated)
-- Benefits compound with larger batches and common domains
-- All prefetched results are cached for instant reuse
-
-### MX Cache TTL
-```toml
-[delivery]
-mx_cache_ttl_seconds = 3600  # 1 hour
-```
-- Longer = fewer DNS queries, faster delivery
-- Shorter = more current MX records
+For more details on the API, including DKIM signing and idempotency, see the [**API Usage**](DOCUMENTATION.md#api-usage) section in our documentation.
 
 ## Documentation
 
-- **README.md** (this file): User guide and quick reference
-- **DOCUMENTATION.md**: Detailed technical documentation, architecture, design decisions
-- **config.toml.example**: Complete configuration reference with comments
+For detailed information about Fune's architecture, features, and deployment, please refer to the [**`DOCUMENTATION.md`**](DOCUMENTATION.md) file.
 
+## Contributing
+
+We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for more information.
+
+## License
+
+Fune is licensed under the [MIT License](LICENSE).
