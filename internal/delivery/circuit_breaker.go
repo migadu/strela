@@ -223,6 +223,11 @@ func IsLocalError(err *DeliveryError) bool {
 		return false
 	}
 
+	// Reputation errors are external, not local
+	if err.Category == ErrorReputation {
+		return false
+	}
+
 	// Temporary and permanent SMTP errors are remote, not local
 	return false
 }

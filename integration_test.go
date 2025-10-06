@@ -87,8 +87,8 @@ func TestFullMessageFlow(t *testing.T) {
 	w := httptest.NewRecorder()
 	httpHandler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("Expected status 202, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var response map[string]string
@@ -191,7 +191,8 @@ func TestFullMessageFlow(t *testing.T) {
 	// Test 6: Test worker components (without actual SMTP)
 	// This tests the worker initialization
 	mxLookup := delivery.NewMXLookup(q, deliveryCfg, logger)
-	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger)
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
+	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
 
 	callbackCfg := &config.CallbacksConfig{
 		WebhookURL:               "http://localhost:9999/webhook",
@@ -462,7 +463,8 @@ func TestWorkerLifecycle(t *testing.T) {
 	}
 
 	mxLookup := delivery.NewMXLookup(q, deliveryCfg, logger)
-	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger)
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
+	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackCfg, logger)
 
@@ -829,7 +831,8 @@ func TestConcurrentWorkers(t *testing.T) {
 	}
 
 	mxLookup := delivery.NewMXLookup(q, deliveryCfg, logger)
-	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger)
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
+	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackCfg, logger)
 
@@ -946,8 +949,8 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 	w := httptest.NewRecorder()
 	httpHandler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("Expected status 202, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var response map[string]string
@@ -1009,8 +1012,8 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 	w = httptest.NewRecorder()
 	httpHandler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("Expected status 202, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	json.Unmarshal(w.Body.Bytes(), &response)
@@ -1063,8 +1066,8 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 	w = httptest.NewRecorder()
 	httpHandler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("Expected status 202, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
 	}
 
 	json.Unmarshal(w.Body.Bytes(), &response)
@@ -1098,8 +1101,8 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 	w = httptest.NewRecorder()
 	httpHandler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("Expected status 202, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
 	}
 
 	// Clear old messages and get new one

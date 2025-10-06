@@ -15,6 +15,7 @@
 - [Security Features](#security-features)
 - [Error Handling & Retry Logic](#error-handling--retry-logic)
 - [Circuit Breaker & Failover](#circuit-breaker--failover)
+- [IP Reputation Tracking](#ip-reputation-tracking)
 - [Anti-Spam Measures](#anti-spam-measures)
 - [Observability & Metrics](#observability--metrics)
 - [Performance Optimizations](#performance-optimizations)
@@ -960,6 +961,362 @@ Message to gmail.com
 
 ---
 
+## IP Reputation Tracking
+
+### Overview
+
+Fune includes an intelligent IP reputation tracking system that automatically detects and manages source IPs with poor reputation or blacklist issues. When a delivery fails due to reputation problems, the affected IP is temporarily removed from the rotation pool, preventing further failures and automatically retried after a configurable period.
+
+**Location**: `internal/delivery/ip_reputation.go`
+
+### How It Works
+
+```
+1. Normal delivery attempt from IP 192.168.1.100
+2. Remote server rejects: "550 blocked by Spamhaus"
+3. Error classified as ErrorReputation
+4. IP 192.168.1.100 marked as "degraded"
+5. Alert sent to configured webhook
+6. IP removed from rotation pool
+7. Subsequent deliveries use other healthy IPs
+8. After 48 hours (configurable), IP is retried
+9. If successful → IP marked "recovered", alert sent
+10. If failed → IP remains degraded for another 48 hours
+```
+
+### IP States
+
+```go
+type IPState string
+
+const (
+  IPStateHealthy  IPState = "healthy"   // Normal operation
+  IPStateDegraded IPState = "degraded"  // Temporarily removed from pool
+)
+```
+
+**State Transitions**:
+```
+healthy → degraded (on reputation error)
+        ← recovered (on successful delivery after retry time)
+        → degraded (if retry fails)
+```
+
+### Configuration
+
+```toml
+[reputation]
+# IP reputation tracking and alerting
+enable_ip_tracking = true              # Enable IP reputation tracking (default: true)
+alert_webhook_url = "https://example.com/api/reputation-alert"
+alert_auth_token = "secret-token"      # Optional bearer token
+alert_timeout_seconds = 10             # Webhook timeout (default: 10)
+degraded_retry_hours = 48              # Hours before retrying (default: 48)
+degraded_ip_cleanup_hours = 168        # History retention in hours - 7 days (default: 168)
+```
+
+### Reputation Alert Webhook
+
+When an IP is degraded or recovered, a JSON POST request is sent to the configured webhook:
+
+```json
+{
+  "timestamp": "2025-10-06T10:30:00Z",
+  "source_ip": "192.168.1.100",
+  "event_type": "degraded",              // or "recovered"
+  "from": "sender@example.com",
+  "to": "recipient@example.com",
+  "subject": "Important Message",
+  "idempotency_key": "abc123",           // if provided
+  "smtp_code": 550,
+  "smtp_response": "IP blocked by Spamhaus RBL",
+  "mx_host": "mx.example.com",
+  "retry_after": "2025-10-08T10:30:00Z",
+  "degraded_ips_count": 1                // Total degraded IPs
+}
+```
+
+**HTTP Headers**:
+```
+Content-Type: application/json
+Authorization: Bearer <alert_auth_token>  // if configured
+```
+
+**Response Codes**:
+- `200-299`: Alert received successfully
+- `4xx/5xx`: Alert failed (logged but doesn't affect delivery)
+
+### Error Classification
+
+The system identifies reputation issues by analyzing SMTP responses for specific keywords:
+
+```go
+reputationKeywords := []string{
+  "blocked",
+  "blacklist",
+  "poor reputation",
+  "rejected for policy reasons",
+  "rbl",           // Real-time Blackhole List
+  "dnsbl",         // DNS-based Blacklist
+  "spamhaus",      // Spamhaus blacklist
+  "proofpoint",    // Proofpoint filters
+  "cloudmark",     // Cloudmark reputation
+  "barracuda",     // Barracuda filters
+}
+```
+
+**Example SMTP responses triggering degradation**:
+- `550 5.7.1 IP blocked by Spamhaus`
+- `554 rejected for poor reputation`
+- `550 Your IP is on the RBL list`
+- `554 Connection refused due to DNSBL match`
+
+**Not triggered by**:
+- User not found errors (550)
+- Mailbox full errors (552)
+- Rate limiting (421, 450)
+- Generic temporary failures (4xx)
+
+### Delivery Flow with Reputation Tracking
+
+```go
+DeliverMessage(ctx, msg):
+  1. Get all configured source IPs
+  2. Filter out degraded IPs
+  3. If all IPs degraded:
+     → Log warning
+     → Fall back to system default IP (no binding)
+  4. Select from healthy IPs using strategy (round-robin/random/hash)
+  5. Attempt delivery
+  6. Record delivery result:
+     - Success + IP was degraded → Mark recovered, send alert
+     - Failure + Reputation error → Mark degraded, send alert
+     - Failure + Other error → No reputation change
+```
+
+### Automatic IP Recovery
+
+**Retry Schedule**:
+```
+IP degraded at:    2025-10-06 10:00
+Retry after:       2025-10-08 10:00 (48 hours later)
+Status:           "degraded" but eligible for retry
+Action:           IP included in selection pool
+Result if success: IP marked "recovered", alert sent
+Result if failure: Retry after pushed forward another 48 hours
+```
+
+**Why 48 hours**:
+- Blacklists typically update within 24-48 hours
+- Allows time for reputation to improve
+- Prevents rapid retry loops
+
+### Cleanup & Maintenance
+
+**Automatic Cleanup**:
+```go
+// Runs hourly via background job
+tracker.Cleanup()
+```
+
+Removes degraded IP entries that are:
+- Older than `degraded_ip_cleanup_hours` (default: 7 days)
+- AND past their retry time
+
+**Why cleanup**: Prevents unbounded memory growth while maintaining recent history for debugging.
+
+### Fallback Behavior
+
+**All IPs Degraded Scenario**:
+```
+Configured IPs: [192.168.1.100, 192.168.1.101, 192.168.1.102]
+Degraded IPs:   [192.168.1.100, 192.168.1.101, 192.168.1.102]
+Healthy IPs:    [] (empty)
+
+Action: Fall back to system default IP (no source binding)
+Log:    "all source IPs are degraded, using default"
+```
+
+**Why**: Ensures deliveries can continue even when all configured IPs have issues. System default IP may have different reputation.
+
+### Thread Safety
+
+The reputation tracker is thread-safe and supports concurrent access:
+
+```go
+type IPReputationTracker struct {
+  mu          sync.RWMutex
+  degradedIPs map[string]*DegradedIPInfo
+  // ... other fields
+}
+```
+
+**Concurrent operations**:
+- Multiple workers can check IP health simultaneously (read lock)
+- IP degradation/recovery operations are serialized (write lock)
+- Webhook alerts sent in background goroutines (non-blocking)
+
+### Disabling Reputation Tracking
+
+To disable IP reputation tracking:
+
+```toml
+[reputation]
+enable_ip_tracking = false
+```
+
+**When disabled**:
+- All IPs always considered healthy
+- No degradation or recovery tracking
+- No webhook alerts sent
+- Zero performance overhead
+
+**Use cases**:
+- Testing/development environments
+- Single IP deployments
+- When using external reputation management
+
+### Integration with Source IP Rotation
+
+Reputation tracking integrates seamlessly with IP rotation strategies:
+
+```toml
+[delivery]
+source_ips = ["192.168.1.100", "192.168.1.101", "192.168.1.102"]
+ip_selection = "round-robin"  # or "random", "hash-domain"
+
+[reputation]
+enable_ip_tracking = true
+```
+
+**Flow**:
+1. IP rotator provides all configured IPs
+2. Reputation tracker filters out degraded IPs
+3. Rotation strategy applied to healthy IPs only
+
+**Example**:
+```
+All IPs:     [.100, .101, .102]
+Degraded:    [.101]
+Healthy:     [.100, .102]
+Round-robin: .100 → .102 → .100 → .102 (skips .101)
+```
+
+### Monitoring & Observability
+
+**Prometheus Metrics**:
+```promql
+# IP reputation status (1=degraded, 0=healthy)
+fune_ip_reputation_degraded{source_ip="192.168.1.100"}
+
+# Total degradation/recovery events
+fune_ip_reputation_events_total{event_type="degraded",source_ip="192.168.1.100"}
+fune_ip_reputation_events_total{event_type="recovered",source_ip="192.168.1.100"}
+```
+
+**Example Queries**:
+```promql
+# Count currently degraded IPs
+count(fune_ip_reputation_degraded == 1)
+
+# List degraded IPs
+fune_ip_reputation_degraded == 1
+
+# Rate of degradation events per hour
+rate(fune_ip_reputation_events_total{event_type="degraded"}[1h])
+```
+
+**Recommended Alerts**:
+- `SourceIPDegraded`: Alert when any IP becomes degraded
+- `MultipleIPsDegraded`: Alert when 2+ IPs are degraded
+- `FrequentIPDegradation`: Alert on high degradation rate
+
+See [Observability & Metrics](#observability--metrics) section for complete Prometheus documentation.
+
+**Degraded IP Status**:
+```go
+tracker.GetDegradedIPs()  // Returns map[IP]*DegradedIPInfo
+
+type DegradedIPInfo struct {
+  IP               string
+  DegradedAt       time.Time
+  RetryAfter       time.Time
+  FailureCount     int
+  LastFailureError string
+  LastSMTPCode     int
+  LastSMTPResponse string
+}
+```
+
+**Logging**:
+```
+INFO  IP marked as degraded due to reputation failure
+      ip=192.168.1.100 smtp_code=550 retry_after=2025-10-08T10:30:00Z
+
+INFO  IP recovered from degraded state
+      ip=192.168.1.100 degraded_duration=48h5m total_failures=3
+
+WARN  all source IPs are degraded, using default
+      message_id=msg_abc123 total_ips=3
+```
+
+### Performance Characteristics
+
+**Memory Usage**:
+- ~200 bytes per degraded IP entry
+- Bounded by number of configured source IPs
+- Automatic cleanup prevents growth
+
+**CPU Overhead**:
+- Negligible for IP health checks (map lookup)
+- Webhook alerts sent in background goroutines
+- No impact on delivery latency
+
+**Network**:
+- One HTTP POST per degradation/recovery event
+- Non-blocking (failures logged but don't affect delivery)
+
+### Testing
+
+**Comprehensive test coverage** (24 tests):
+- IP lifecycle: healthy → degraded → recovered
+- Webhook alert validation (payload, headers, auth)
+- Thread safety (100 concurrent goroutines)
+- Edge cases (empty IPs, all degraded, disabled tracking)
+- Integration with delivery system
+
+See `internal/delivery/ip_reputation_test.go` for complete test suite.
+
+### Design Decisions
+
+**Why track reputation separately from circuit breaker?**
+- Circuit breaker: Local network failures (affects all traffic)
+- Reputation tracker: Remote reputation issues (IP-specific)
+- Different failure modes, different solutions
+
+**Why 48-hour default retry?**
+- Most blacklists update within 24-48 hours
+- Balances recovery time with avoiding rapid retries
+- Can be configured per deployment needs
+
+**Why webhook alerts?**
+- Real-time notification of reputation issues
+- Enables external monitoring/alerting
+- Allows integration with ticketing systems
+- Provides delivery context (from, to, subject)
+
+**Why filter before rotation?**
+- Simpler logic: rotation strategy unaware of reputation
+- Clean separation of concerns
+- Easy to test independently
+
+**Why automatic recovery?**
+- Reduces manual intervention
+- IPs can recover naturally over time
+- Alert on recovery provides visibility
+
+---
+
 ## Anti-Spam Measures
 
 ### 1. **Destination Rate Limiting**
@@ -1117,6 +1474,24 @@ fune_circuit_breaker_transitions_total{from_state="half_open",to_state="closed"}
 - Track how often circuit breaker activates
 - Monitor recovery patterns
 
+#### 6. IP Reputation Metrics
+
+```promql
+# IP reputation status (1=degraded, 0=healthy) by source IP
+fune_ip_reputation_degraded{source_ip="192.168.1.100"}
+fune_ip_reputation_degraded{source_ip="192.168.1.101"}
+
+# Total IP reputation events by event type and source IP
+fune_ip_reputation_events_total{event_type="degraded",source_ip="192.168.1.100"}
+fune_ip_reputation_events_total{event_type="recovered",source_ip="192.168.1.100"}
+```
+
+**Use cases**:
+- Monitor which source IPs are currently degraded
+- Alert when an IP becomes degraded due to blacklisting
+- Track IP degradation/recovery frequency
+- Identify IPs with persistent reputation issues
+
 ### Example Prometheus Queries
 
 ```promql
@@ -1138,6 +1513,15 @@ fune_circuit_breaker_state == 2
 
 # Network error rate spike
 rate(fune_delivery_attempts_total{outcome="network_error"}[5m]) > 0.1
+
+# Number of degraded IPs
+count(fune_ip_reputation_degraded == 1)
+
+# Rate of IP degradation events
+rate(fune_ip_reputation_events_total{event_type="degraded"}[1h])
+
+# IPs that are currently degraded
+fune_ip_reputation_degraded == 1
 ```
 
 ### Recommended Alerts
@@ -1173,6 +1557,27 @@ groups:
         for: 15m
         annotations:
           summary: "Delivery success rate below 80%"
+
+      - alert: SourceIPDegraded
+        expr: fune_ip_reputation_degraded == 1
+        for: 5m
+        annotations:
+          summary: "Source IP {{ $labels.source_ip }} is degraded due to reputation issues"
+          description: "IP has been removed from rotation pool due to blacklisting or poor reputation"
+
+      - alert: MultipleIPsDegraded
+        expr: count(fune_ip_reputation_degraded == 1) >= 2
+        for: 10m
+        annotations:
+          summary: "Multiple source IPs are degraded ({{ $value }})"
+          description: "Multiple IPs experiencing reputation issues - may indicate systemic problem"
+
+      - alert: FrequentIPDegradation
+        expr: rate(fune_ip_reputation_events_total{event_type="degraded"}[6h]) > 0.1
+        for: 30m
+        annotations:
+          summary: "High rate of IP degradation events for {{ $labels.source_ip }}"
+          description: "IP is being degraded frequently - investigate reputation issues"
 ```
 
 ### Configuration
@@ -1399,12 +1804,54 @@ cp queue.db queue-backup.db
 
 - 14 tests: `internal/callback`
 - 5 tests: `internal/config`
-- 66 tests: `internal/delivery`
+- 90 tests: `internal/delivery` (includes 24 IP reputation tests)
 - 4 tests: `internal/handler`
 - 9 tests: `internal/queue`
 - 13 tests: `internal/worker`
 
-**Total**: 111 unit tests
+**Total**: 135 unit tests
+
+#### IP Reputation Test Coverage
+
+The IP reputation system has comprehensive test coverage (24 tests):
+
+**Basic Functionality** (5 tests):
+- Tracker initialization
+- Disabled state behavior
+- IP health status checks
+- Single IP degradation
+- Multiple failures on same IP
+
+**Recovery & State Management** (4 tests):
+- IP recovery flow
+- Automatic recovery on successful delivery
+- Reputation error handling
+- Non-reputation errors ignored
+
+**IP Filtering & Selection** (3 tests):
+- Filtering degraded IPs from pool
+- Retry time expiration logic
+- Multiple IPs in different states
+
+**Cleanup & Maintenance** (2 tests):
+- Old entry cleanup
+- Recent entry preservation
+
+**Webhook Alerting** (3 tests):
+- Degradation alerts with full payload validation
+- Recovery alerts
+- Graceful handling when webhook not configured
+
+**Thread Safety & Edge Cases** (3 tests):
+- 100 concurrent goroutines
+- Defensive copy returns
+- Empty IP string handling
+
+**Integration Tests** (4 tests):
+- Full workflow with webhook alerts
+- All IPs degraded scenario
+- Non-reputation errors don't degrade IPs
+- Disabled tracking behavior
 
 ### Integration Test
 

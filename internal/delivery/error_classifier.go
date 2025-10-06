@@ -23,6 +23,9 @@ const (
 
 	// ErrorThrottled - rate limit active for destination domain
 	ErrorThrottled ErrorCategory = "throttled"
+
+	// ErrorReputation - IP blacklisted or poor reputation
+	ErrorReputation ErrorCategory = "reputation"
 )
 
 // DeliveryError represents a classified delivery error
@@ -102,6 +105,16 @@ func classifyNetworkError(err error) *DeliveryError {
 
 // classifySMTPCode categorizes errors based on SMTP response code
 func classifySMTPCode(code int, response string) *DeliveryError {
+	// Check for reputation issues first
+	if isReputationError(response) {
+		return &DeliveryError{
+			Category:     ErrorReputation,
+			SMTPCode:     code,
+			SMTPResponse: response,
+			Message:      "IP reputation/blacklist error",
+		}
+	}
+
 	switch {
 	// 2xx - Success (shouldn't be an error)
 	case code >= 200 && code < 300:
@@ -143,6 +156,31 @@ func classifySMTPCode(code int, response string) *DeliveryError {
 			Message:      fmt.Sprintf("Unknown SMTP code: %d", code),
 		}
 	}
+}
+
+// isReputationError checks for keywords indicating a reputation issue
+func isReputationError(response string) bool {
+	responseLower := strings.ToLower(response)
+	reputationKeywords := []string{
+		"blocked",
+		"blacklist",
+		"poor reputation",
+		"rejected for policy reasons",
+		"rbl",
+		"dnsbl",
+		"spamhaus",
+		"proofpoint",
+		"cloudmark",
+		"barracuda",
+		"unfortunately",
+	}
+
+	for _, keyword := range reputationKeywords {
+		if strings.Contains(responseLower, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyTemporaryError provides detailed categorization of 4xx errors
@@ -254,7 +292,7 @@ func ShouldDeactivateEmail(category ErrorCategory, smtpCode int, response string
 // IsRetryable determines if an error should be retried
 func IsRetryable(category ErrorCategory) bool {
 	switch category {
-	case ErrorTemporary, ErrorGreylist, ErrorNetwork, ErrorThrottled:
+	case ErrorTemporary, ErrorGreylist, ErrorNetwork, ErrorThrottled, ErrorReputation:
 		return true
 	case ErrorPermanent:
 		return false

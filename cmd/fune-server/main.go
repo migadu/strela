@@ -168,7 +168,7 @@ func main() {
 	mxLookup := delivery.NewMXLookup(q, &cfg.Delivery, logger)
 
 	// Initialize deliverer
-	deliverer := delivery.NewDeliverer(&cfg.Delivery, mxLookup, logger)
+	deliverer := delivery.NewDeliverer(&cfg.Delivery, mxLookup, logger, &cfg.Reputation)
 
 	// Wire metrics to deliverer
 	if m != nil {
@@ -178,6 +178,11 @@ func main() {
 	// Wire metrics to circuit breaker (if enabled)
 	if m != nil && deliverer.GetCircuitBreaker() != nil {
 		deliverer.GetCircuitBreaker().SetMetrics(m)
+	}
+
+	// Wire metrics to reputation tracker (if enabled)
+	if m != nil && deliverer.GetReputationTracker() != nil {
+		deliverer.GetReputationTracker().SetMetrics(m)
 	}
 
 	// Initialize retry scheduler
@@ -217,6 +222,38 @@ func main() {
 		})
 		logger.Info("queue metrics updater started")
 	}
+
+	// Start terminal message cleanup job (handles both idempotent and non-idempotent messages)
+	recovery.SafeGo(logger, "terminal message cleanup", func() {
+		ticker := time.NewTicker(5 * time.Minute) // Cleanup every 5 minutes
+		defer ticker.Stop()
+
+		for range ticker.C {
+			deleted, err := q.CleanupTerminalMessages(cfg.HTTP.IdempotencyTTLHours)
+			if err != nil {
+				logger.Error("failed to cleanup terminal messages", zap.Error(err))
+			} else if deleted > 0 {
+				logger.Info("cleaned up terminal messages",
+					zap.Int64("deleted_count", deleted),
+					zap.Int("idempotency_ttl_hours", cfg.HTTP.IdempotencyTTLHours))
+			}
+		}
+	})
+	logger.Info("terminal message cleanup job started",
+		zap.Int("idempotency_ttl_hours", cfg.HTTP.IdempotencyTTLHours))
+
+	// Start degraded IP cleanup job
+	recovery.SafeGo(logger, "degraded IP cleanup", func() {
+		ticker := time.NewTicker(1 * time.Hour) // Cleanup every hour
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if reputationTracker := deliverer.GetReputationTracker(); reputationTracker != nil {
+				reputationTracker.Cleanup()
+			}
+		}
+	})
+	logger.Info("degraded IP cleanup job started")
 
 	// Initialize HTTP handler with circuit breaker reference
 	httpHandler := handler.NewQueueMessageHandler(q, &cfg.Delivery, &cfg.HTTP, deliverer.GetCircuitBreaker(), logger)

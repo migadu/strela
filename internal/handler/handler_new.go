@@ -160,6 +160,38 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Check for idempotency key if enabled
+	var idempotencyKey string
+	if h.httpConfig.IdempotencyEnabled {
+		idempotencyKey = r.Header.Get(h.httpConfig.IdempotencyHeader)
+
+		if idempotencyKey != "" {
+			// Check if message with this idempotency key already exists
+			existing, err := h.queue.GetMessageByIdempotencyKey(idempotencyKey)
+			if err != nil {
+				h.logger.Error("failed to check idempotency key",
+					zap.String("idempotency_key", idempotencyKey),
+					zap.Error(err))
+				// Don't fail the request, continue without idempotency
+			} else if existing != nil {
+				// Duplicate request - return existing message with 202 Accepted (idempotent response)
+				h.logger.Info("duplicate request detected via idempotency key",
+					zap.String("idempotency_key", idempotencyKey),
+					zap.String("existing_message_id", existing.MessageID),
+					zap.String("status", string(existing.Status)))
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted) // 202 = idempotent response
+				json.NewEncoder(w).Encode(EnqueueResponse{
+					MessageID: existing.MessageID,
+					Status:    string(existing.Status),
+					QueuedAt:  existing.CreatedAt.Format(time.RFC3339),
+				})
+				return
+			}
+		}
+	}
+
 	// Generate message ID
 	messageID := queue.GenerateMessageID()
 
@@ -197,6 +229,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Create queued message
 	queuedMsg := &queue.QueuedMessage{
 		MessageID:      messageID,
+		IdempotencyKey: idempotencyKey,
 		FromAddr:       msgReq.From,
 		ToAddr:         msgReq.To,
 		ToDomain:       toDomain,
@@ -226,7 +259,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		zap.String("subject", msgReq.Subject),
 		zap.Duration("duration", duration))
 
-	// Return 202 Accepted with message ID
+	// Return 200 OK with message ID
 	response := EnqueueResponse{
 		MessageID: messageID,
 		Status:    "queued",
@@ -234,7 +267,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
 

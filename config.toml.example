@@ -59,6 +59,15 @@ tls_key_file = "/path/to/key.pem"      # TLS private key file (required if tls_e
 metrics_enabled = true                 # Enable Prometheus metrics endpoint (recommended for production)
 metrics_path = "/metrics"              # Path for metrics endpoint (default: /metrics)
 
+# Idempotency configuration (prevents duplicate message delivery)
+idempotency_enabled = false            # Enable idempotency key support (default: false)
+idempotency_header = "X-Idempotency-Key"  # Header name for idempotency key (default: X-Idempotency-Key)
+idempotency_ttl_hours = 24             # How long to keep idempotency keys in hours (default: 24)
+# When enabled, clients can send X-Idempotency-Key header to prevent duplicate deliveries
+# Same key within TTL period returns existing message_id with 202 Accepted (idempotent response)
+# Keys are automatically cleaned up after TTL expires
+# Recommended for use with HAProxy consistent hashing: balance hdr(X-Idempotency-Key)
+
 [queue]
 worker_count = 10               # Concurrent delivery workers per instance
 batch_size = 5                  # Messages to process per worker iteration
@@ -117,3 +126,37 @@ batch_size = 10                        # Callbacks to process per iteration
 
 # Callback retry pattern: 30s, 60s, 120s, 240s, 480s, 960s, 1800s, 3600s (max), ...
 # Total retries depend on max_callback_age_hours - retries until age exceeds limit
+
+[reputation]
+# IP reputation tracking and alerting
+# When an IP fails delivery due to blacklisting or poor reputation, it's marked as "degraded"
+# and temporarily removed from the rotation pool
+enable_ip_tracking = true              # Enable IP reputation tracking (default: true)
+alert_webhook_url = "https://worker.example.com/api/reputation-alert"  # URL for reputation alerts
+alert_auth_token = "alert-secret-token"  # Auth token for alert webhook (optional)
+alert_timeout_seconds = 10             # Timeout for alert requests (default: 10)
+degraded_retry_hours = 48              # Hours before retrying degraded IP (default: 48)
+degraded_ip_cleanup_hours = 168        # Hours to keep degraded IP history - 7 days (default: 168)
+
+# Reputation alert payload (sent as JSON POST):
+# {
+#   "timestamp": "2024-01-15T10:30:00Z",
+#   "source_ip": "192.168.1.100",
+#   "event_type": "degraded" or "recovered",
+#   "from": "sender@example.com",
+#   "to": "recipient@example.com",
+#   "subject": "Message subject",
+#   "idempotency_key": "abc123" (if provided),
+#   "smtp_code": 550,
+#   "smtp_response": "IP blocked by Spamhaus",
+#   "mx_host": "mx.example.com",
+#   "retry_after": "2024-01-17T10:30:00Z",
+#   "degraded_ips_count": 1
+# }
+#
+# When an IP is degraded:
+# - It's removed from the delivery rotation pool
+# - Alert webhook is called with event_type="degraded"
+# - IP is retried after degraded_retry_hours (default: 48 hours)
+# - If retry succeeds, alert webhook is called with event_type="recovered"
+# - If retry fails, IP remains degraded for another degraded_retry_hours period

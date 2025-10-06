@@ -178,8 +178,9 @@ func TestDeliverer_DeliverMessage_NoMXRecords(t *testing.T) {
 		SMTPTimeoutSeconds:       10,
 	}
 
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := NewMXLookup(q, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	msg := &queue.QueuedMessage{
 		MessageID:  "test_msg",
@@ -220,8 +221,9 @@ func TestDeliverer_SelectSourceIP(t *testing.T) {
 		SMTPTimeoutSeconds:       10,
 	}
 
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := NewMXLookup(q, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	// Verify IP rotator is initialized
 	if deliverer.ipRotator == nil {
@@ -242,12 +244,8 @@ func TestDeliverer_SelectSourceIP(t *testing.T) {
 
 func TestDeliveryResult_Success(t *testing.T) {
 	result := &DeliveryResult{
-		Success:      true,
-		SMTPCode:     250,
-		SMTPResponse: "OK",
-		MXHost:       "mx1.example.com",
-		SourceIP:     "192.168.1.1",
-		DurationMs:   1500,
+		Success:  true,
+		SMTPCode: 250,
 	}
 
 	if !result.Success {
@@ -265,18 +263,13 @@ func TestDeliveryResult_Success(t *testing.T) {
 
 func TestDeliveryResult_Failure(t *testing.T) {
 	result := &DeliveryResult{
-		Success:      false,
-		SMTPCode:     550,
-		SMTPResponse: "User not found",
-		MXHost:       "mx1.example.com",
-		SourceIP:     "192.168.1.1",
+		Success: false,
 		Error: &DeliveryError{
 			Category:     ErrorPermanent,
 			SMTPCode:     550,
 			SMTPResponse: "User not found",
 			Message:      "User not found",
 		},
-		DurationMs: 500,
 	}
 
 	if result.Success {
@@ -359,8 +352,9 @@ func TestDeliverer_LoggingOnFailure(t *testing.T) {
 		SMTPTimeoutSeconds:       10,
 	}
 
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := NewMXLookup(q, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	msg := &queue.QueuedMessage{
 		MessageID:  "test_msg",
@@ -398,8 +392,9 @@ func TestDeliverer_EmptySourceIPs(t *testing.T) {
 		SMTPTimeoutSeconds:       10,
 	}
 
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := NewMXLookup(q, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 
 	// Should handle empty source IPs gracefully
 	if deliverer.ipRotator == nil {
@@ -421,7 +416,6 @@ func TestDeliveryResult_Duration(t *testing.T) {
 	duration := time.Since(start).Milliseconds()
 
 	result := &DeliveryResult{
-		Success:    true,
 		DurationMs: duration,
 	}
 
@@ -468,8 +462,9 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 		CircuitBreakerOpenTimeoutSecs:  60,
 	}
 
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := &MXLookup{logger: logger}
-	deliverer := NewDeliverer(initialCfg, mxLookup, logger)
+	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg)
 
 	// Verify initial config
 	if len(deliverer.ipRotator.GetAllIPs()) != 1 {
@@ -530,8 +525,9 @@ func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
 		CircuitBreakerOpenTimeoutSecs:  60,
 	}
 
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := &MXLookup{logger: logger}
-	deliverer := NewDeliverer(initialCfg, mxLookup, logger)
+	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg)
 
 	if deliverer.circuitBreaker == nil {
 		t.Error("circuit breaker should be enabled initially")
@@ -565,8 +561,9 @@ func TestDeliverer_ReloadConfig_EnableCircuitBreaker(t *testing.T) {
 		CircuitBreakerEnabled: false,
 	}
 
+	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := &MXLookup{logger: logger}
-	deliverer := NewDeliverer(initialCfg, mxLookup, logger)
+	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg)
 
 	if deliverer.circuitBreaker != nil {
 		t.Error("circuit breaker should be disabled initially")

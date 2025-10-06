@@ -25,6 +25,10 @@ type Metrics struct {
 	// Circuit breaker metrics
 	CircuitBreakerState       prometheus.Gauge
 	CircuitBreakerTransitions *prometheus.CounterVec
+
+	// IP reputation metrics
+	IPReputationDegraded *prometheus.GaugeVec
+	IPReputationEvents   *prometheus.CounterVec
 }
 
 // NewMetrics creates and registers all Prometheus metrics
@@ -112,6 +116,24 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"from_state", "to_state"},
 		),
+
+		// IP reputation - number of degraded IPs by source IP
+		IPReputationDegraded: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "fune_ip_reputation_degraded",
+				Help: "IP reputation status (1=degraded, 0=healthy) by source IP",
+			},
+			[]string{"source_ip"},
+		),
+
+		// IP reputation events (degraded, recovered)
+		IPReputationEvents: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "fune_ip_reputation_events_total",
+				Help: "Total number of IP reputation events by event type and source IP",
+			},
+			[]string{"event_type", "source_ip"},
+		),
 	}
 }
 
@@ -146,4 +168,18 @@ func (m *Metrics) SetCircuitBreakerState(state int) {
 // RecordCircuitBreakerTransition records a state transition
 func (m *Metrics) RecordCircuitBreakerTransition(fromState, toState string) {
 	m.CircuitBreakerTransitions.WithLabelValues(fromState, toState).Inc()
+}
+
+// SetIPReputationDegraded sets the degraded status for a source IP
+func (m *Metrics) SetIPReputationDegraded(sourceIP string, degraded bool) {
+	value := 0.0
+	if degraded {
+		value = 1.0
+	}
+	m.IPReputationDegraded.WithLabelValues(sourceIP).Set(value)
+}
+
+// RecordIPReputationEvent records an IP reputation event (degraded or recovered)
+func (m *Metrics) RecordIPReputationEvent(eventType, sourceIP string) {
+	m.IPReputationEvents.WithLabelValues(eventType, sourceIP).Inc()
 }

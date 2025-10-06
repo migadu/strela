@@ -8,12 +8,13 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `toml:"server"`
-	Logging   LoggingConfig   `toml:"logging"`
-	HTTP      HTTPConfig      `toml:"http"`
-	Queue     QueueConfig     `toml:"queue"`
-	Delivery  DeliveryConfig  `toml:"delivery"`
-	Callbacks CallbacksConfig `toml:"callbacks"`
+	Server     ServerConfig     `toml:"server"`
+	Logging    LoggingConfig    `toml:"logging"`
+	HTTP       HTTPConfig       `toml:"http"`
+	Queue      QueueConfig      `toml:"queue"`
+	Delivery   DeliveryConfig   `toml:"delivery"`
+	Callbacks  CallbacksConfig  `toml:"callbacks"`
+	Reputation ReputationConfig `toml:"reputation"`
 }
 
 type ServerConfig struct {
@@ -44,6 +45,11 @@ type HTTPConfig struct {
 	// Metrics configuration
 	MetricsEnabled bool   `toml:"metrics_enabled"` // Enable Prometheus metrics endpoint (default: true)
 	MetricsPath    string `toml:"metrics_path"`    // Path for metrics endpoint (default: /metrics)
+
+	// Idempotency configuration
+	IdempotencyEnabled  bool   `toml:"idempotency_enabled"`   // Enable idempotency key support (default: false)
+	IdempotencyHeader   string `toml:"idempotency_header"`    // Header name for idempotency key (default: X-Idempotency-Key)
+	IdempotencyTTLHours int    `toml:"idempotency_ttl_hours"` // How long to keep idempotency keys (default: 24)
 }
 
 type QueueConfig struct {
@@ -93,6 +99,15 @@ type CallbacksConfig struct {
 	BatchSize                int     `toml:"batch_size"`                  // Number of callbacks to process per iteration
 }
 
+type ReputationConfig struct {
+	AlertWebhookURL        string `toml:"alert_webhook_url"`         // URL to send reputation alerts
+	AlertAuthToken         string `toml:"alert_auth_token"`          // Auth token for alert webhook
+	AlertTimeoutSeconds    int    `toml:"alert_timeout_seconds"`     // Timeout for alert requests
+	DegradedRetryHours     int    `toml:"degraded_retry_hours"`      // Hours before retrying degraded IP (default: 48)
+	EnableIPTracking       bool   `toml:"enable_ip_tracking"`        // Enable IP reputation tracking (default: true)
+	DegradedIPCleanupHours int    `toml:"degraded_ip_cleanup_hours"` // Hours to keep degraded IP history (default: 168 = 7 days)
+}
+
 // SetDefaults sets default values for optional config fields
 func (c *Config) SetDefaults() {
 	// Server defaults
@@ -126,6 +141,14 @@ func (c *Config) SetDefaults() {
 	}
 	// Metrics enabled by default
 	// Set MetricsEnabled explicitly to false to disable
+
+	// Idempotency defaults
+	if c.HTTP.IdempotencyHeader == "" {
+		c.HTTP.IdempotencyHeader = "X-Idempotency-Key"
+	}
+	if c.HTTP.IdempotencyTTLHours == 0 {
+		c.HTTP.IdempotencyTTLHours = 24
+	}
 
 	if c.Queue.WorkerCount == 0 {
 		c.Queue.WorkerCount = 10
@@ -215,6 +238,18 @@ func (c *Config) SetDefaults() {
 	if len(c.Delivery.DNSResolvers) == 0 {
 		c.Delivery.DNSResolvers = []string{} // Empty means use system resolver
 	}
+
+	// Reputation defaults
+	if c.Reputation.AlertTimeoutSeconds == 0 {
+		c.Reputation.AlertTimeoutSeconds = 10
+	}
+	if c.Reputation.DegradedRetryHours == 0 {
+		c.Reputation.DegradedRetryHours = 48 // 48 hours default
+	}
+	if c.Reputation.DegradedIPCleanupHours == 0 {
+		c.Reputation.DegradedIPCleanupHours = 168 // 7 days
+	}
+	// EnableIPTracking is enabled by default (set to false to disable)
 }
 
 func LoadConfig(path string) (*Config, error) {

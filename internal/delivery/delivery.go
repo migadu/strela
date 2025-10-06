@@ -84,14 +84,15 @@ type DeliveryMetrics interface {
 
 // Deliverer handles direct SMTP delivery to recipient MX servers
 type Deliverer struct {
-	mu             sync.RWMutex
-	config         *config.DeliveryConfig
-	mxLookup       *MXLookup
-	logger         *zap.Logger
-	ipRotator      *IPRotator
-	throttle       *DestinationThrottle
-	circuitBreaker *CircuitBreaker
-	metrics        DeliveryMetrics
+	mu                sync.RWMutex
+	config            *config.DeliveryConfig
+	mxLookup          *MXLookup
+	logger            *zap.Logger
+	ipRotator         *IPRotator
+	throttle          *DestinationThrottle
+	circuitBreaker    *CircuitBreaker
+	metrics           DeliveryMetrics
+	reputationTracker *IPReputationTracker
 }
 
 // DeliveryResult contains the result of a delivery attempt
@@ -106,7 +107,7 @@ type DeliveryResult struct {
 }
 
 // NewDeliverer creates a new delivery engine
-func NewDeliverer(config *config.DeliveryConfig, mxLookup *MXLookup, logger *zap.Logger) *Deliverer {
+func NewDeliverer(config *config.DeliveryConfig, mxLookup *MXLookup, logger *zap.Logger, reputationConfig *config.ReputationConfig) *Deliverer {
 	// Create circuit breaker with configured values
 	var circuitBreaker *CircuitBreaker
 	if !config.CircuitBreakerEnabled {
@@ -126,13 +127,17 @@ func NewDeliverer(config *config.DeliveryConfig, mxLookup *MXLookup, logger *zap
 			zap.Duration("open_timeout", openTimeout))
 	}
 
+	// Create reputation tracker
+	reputationTracker := NewIPReputationTracker(reputationConfig, logger)
+
 	return &Deliverer{
-		config:         config,
-		mxLookup:       mxLookup,
-		logger:         logger,
-		ipRotator:      NewIPRotator(config.SourceIPs, config.IPSelection),
-		throttle:       NewDestinationThrottle(config.MinDeliveryIntervalSeconds),
-		circuitBreaker: circuitBreaker,
+		config:            config,
+		mxLookup:          mxLookup,
+		logger:            logger,
+		ipRotator:         NewIPRotator(config.SourceIPs, config.IPSelection),
+		throttle:          NewDestinationThrottle(config.MinDeliveryIntervalSeconds),
+		circuitBreaker:    circuitBreaker,
+		reputationTracker: reputationTracker,
 	}
 }
 
@@ -192,9 +197,24 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 
 	// Try each MX in priority order with source IP rotation on local failures
 	var lastResult *DeliveryResult
-	sourceIPs := d.ipRotator.GetAllIPs() // Get all available source IPs
+	allSourceIPs := d.ipRotator.GetAllIPs() // Get all available source IPs
+
+	// Filter out degraded IPs
+	sourceIPs := d.reputationTracker.GetHealthyIPs(allSourceIPs)
+
 	if len(sourceIPs) == 0 {
+		if len(allSourceIPs) > 0 {
+			// All IPs are degraded, log warning
+			d.logger.Warn("all source IPs are degraded, using default",
+				zap.String("message_id", msg.MessageID),
+				zap.Int("total_ips", len(allSourceIPs)))
+		}
 		sourceIPs = []string{""} // Empty string means use default source IP
+	} else if len(sourceIPs) < len(allSourceIPs) {
+		d.logger.Info("some source IPs are degraded",
+			zap.String("message_id", msg.MessageID),
+			zap.Int("healthy_ips", len(sourceIPs)),
+			zap.Int("total_ips", len(allSourceIPs)))
 	}
 
 	for i, mx := range mxRecords {
@@ -213,6 +233,16 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 			result := d.attemptDelivery(ctx, msg, mx.Host, sourceIP)
 			result.DurationMs = time.Since(startTime).Milliseconds()
 			lastResult = result
+
+			// Track reputation for this IP
+			deliveryInfo := DeliveryInfo{
+				From:           msg.FromAddr,
+				To:             msg.ToAddr,
+				Subject:        msg.Subject,
+				IdempotencyKey: msg.IdempotencyKey,
+				MXHost:         mx.Host,
+			}
+			d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Success, result.Error, deliveryInfo)
 
 			// Record circuit breaker metrics (if enabled)
 			if result.Success {
@@ -252,12 +282,13 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 				return result
 			}
 
-			// If local network error, try next source IP
-			if isLocalError && ipIdx < len(sourceIPs)-1 {
-				d.logger.Info("local network error, trying next source IP",
+			// If local network error or reputation error, try next source IP
+			if (isLocalError || result.Error.Category == ErrorReputation) && ipIdx < len(sourceIPs)-1 {
+				d.logger.Info("local network or reputation error, trying next source IP",
 					zap.String("message_id", msg.MessageID),
 					zap.String("failed_source_ip", sourceIP),
-					zap.String("next_source_ip", sourceIPs[ipIdx+1]))
+					zap.String("next_source_ip", sourceIPs[ipIdx+1]),
+					zap.String("error_category", string(result.Error.Category)))
 				continue
 			}
 
@@ -664,6 +695,11 @@ func (d *Deliverer) GetCircuitBreaker() *CircuitBreaker {
 	return d.circuitBreaker
 }
 
+// GetReputationTracker returns the IP reputation tracker
+func (d *Deliverer) GetReputationTracker() *IPReputationTracker {
+	return d.reputationTracker
+}
+
 // SetMetrics sets the metrics recorder for delivery
 func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
 	d.metrics = metrics
@@ -743,6 +779,8 @@ func (d *Deliverer) recordDeliveryMetrics(result *DeliveryResult) {
 			outcome = "network_error"
 		case ErrorThrottled:
 			outcome = "throttled"
+		case ErrorReputation:
+			outcome = "reputation_error"
 		default:
 			outcome = "unknown_error"
 		}

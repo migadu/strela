@@ -201,8 +201,8 @@ func (w *Worker) handleSuccess(msg *queue.QueuedMessage, result *delivery.Delive
 	// Send callback
 	w.callbackHandler.EnqueueDeliveredCallback(msg, result)
 
-	// Delete from queue
-	w.queue.DeleteMessage(msg.MessageID)
+	// Don't delete - let cleanup job handle it after idempotency TTL expires
+	// This preserves idempotency_key for deduplication during retry window
 }
 
 // handleFailure processes failed delivery
@@ -260,8 +260,8 @@ func (w *Worker) handlePermanentFailure(msg *queue.QueuedMessage, result *delive
 	// Send callback
 	w.callbackHandler.EnqueueHardBounceCallback(msg, result)
 
-	// Delete from queue
-	w.queue.DeleteMessage(msg.MessageID)
+	// Don't delete - let cleanup job handle it after idempotency TTL expires
+	// This preserves idempotency_key for deduplication during retry window
 }
 
 // handleThrottledDelivery schedules quick retry for rate-limited deliveries
@@ -308,8 +308,8 @@ func (w *Worker) handleTemporaryFailure(msg *queue.QueuedMessage, result *delive
 		// Send callback
 		w.callbackHandler.EnqueueTempExpiredCallback(msg, result)
 
-		// Delete from queue
-		w.queue.DeleteMessage(msg.MessageID)
+		// Don't delete - let cleanup job handle it after idempotency TTL expires
+		// This preserves idempotency_key for deduplication during retry window
 		return
 	}
 
@@ -353,8 +353,8 @@ func (w *Worker) handleExpired(msg *queue.QueuedMessage, result *delivery.Delive
 	// Send callback
 	w.callbackHandler.EnqueueExpiredCallback(msg, result)
 
-	// Delete from queue
-	w.queue.DeleteMessage(msg.MessageID)
+	// Don't delete - let cleanup job handle it after idempotency TTL expires
+	// This preserves idempotency_key for deduplication during retry window
 }
 
 // cleanupExpired periodically cleans up expired messages
@@ -407,7 +407,7 @@ func (w *Worker) performCleanup() {
 		// Send callback
 		w.callbackHandler.EnqueueExpiredCallback(msg, nil)
 
-		// Delete from queue
-		w.queue.DeleteMessage(msg.MessageID)
+		// Don't delete - let cleanup job handle it after idempotency TTL expires
+		// This preserves idempotency_key for deduplication during retry window
 	}
 }

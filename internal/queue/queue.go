@@ -32,6 +32,9 @@ type QueuedMessage struct {
 	ID        int64
 	MessageID string
 
+	// Idempotency (optional)
+	IdempotencyKey string
+
 	// Message data
 	FromAddr   string
 	ToAddr     string
@@ -125,6 +128,7 @@ func (q *Queue) initSchema() error {
 	CREATE TABLE IF NOT EXISTS messages (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		message_id TEXT UNIQUE NOT NULL,
+		idempotency_key TEXT,
 
 		from_addr TEXT NOT NULL,
 		to_addr TEXT NOT NULL,
@@ -154,6 +158,7 @@ func (q *Queue) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_status_retry ON messages(status, next_retry_at) WHERE status IN ('queued', 'sending');
 	CREATE INDEX IF NOT EXISTS idx_expires ON messages(expires_at) WHERE status IN ('queued', 'sending');
 	CREATE INDEX IF NOT EXISTS idx_message_id ON messages(message_id);
+	CREATE INDEX IF NOT EXISTS idx_idempotency_key ON messages(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 	CREATE TABLE IF NOT EXISTS delivery_attempts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,14 +218,22 @@ func (q *Queue) Enqueue(msg *QueuedMessage) error {
 
 	query := `
 		INSERT INTO messages (
-			message_id, from_addr, to_addr, to_domain, subject, raw_message,
+			message_id, idempotency_key, from_addr, to_addr, to_domain, subject, raw_message,
 			dkim_private_key, dkim_selector, dkim_domain,
 			status, attempts, next_retry_at, expires_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
+
+	var idempotencyKey interface{}
+	if msg.IdempotencyKey != "" {
+		idempotencyKey = msg.IdempotencyKey
+	} else {
+		idempotencyKey = nil
+	}
 
 	_, err := q.db.Exec(query,
 		msg.MessageID,
+		idempotencyKey,
 		msg.FromAddr,
 		msg.ToAddr,
 		msg.ToDomain,
@@ -616,6 +629,40 @@ func (q *Queue) ScheduleCallbackRetry(callbackID int64, nextRetry time.Time) err
 	return err
 }
 
+// GetMessageByIdempotencyKey retrieves a message by idempotency key
+func (q *Queue) GetMessageByIdempotencyKey(idempotencyKey string) (*QueuedMessage, error) {
+	query := `
+		SELECT
+			id, message_id, from_addr, to_addr, to_domain, subject,
+			status, attempts, created_at, updated_at
+		FROM messages
+		WHERE idempotency_key = ?
+		LIMIT 1
+	`
+
+	msg := &QueuedMessage{}
+	var createdAt, updatedAt string
+
+	err := q.db.QueryRow(query, idempotencyKey).Scan(
+		&msg.ID, &msg.MessageID, &msg.FromAddr, &msg.ToAddr, &msg.ToDomain,
+		&msg.Subject, &msg.Status, &msg.Attempts, &createdAt, &updatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get message by idempotency key: %w", err)
+	}
+
+	// Parse timestamps
+	msg.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	msg.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	msg.IdempotencyKey = idempotencyKey
+
+	return msg, nil
+}
+
 // GetMessage retrieves a single message by ID
 func (q *Queue) GetMessage(messageID string) (*QueuedMessage, error) {
 	query := `
@@ -737,6 +784,51 @@ func (q *Queue) CleanupExpiredMXCache() (int64, error) {
 		WHERE datetime(cached_at, '+' || ttl_seconds || ' seconds') < datetime('now')
 	`
 	result, err := q.db.Exec(query)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// CleanupTerminalMessages removes terminal state messages based on idempotency configuration
+func (q *Queue) CleanupTerminalMessages(idempotencyTTLHours int) (int64, error) {
+	q.writeMu.Lock()
+	defer q.writeMu.Unlock()
+
+	// Two cleanup strategies:
+	// 1. Messages WITH idempotency_key: Keep for TTL duration (for deduplication)
+	// 2. Messages WITHOUT idempotency_key: Delete immediately (no deduplication needed)
+
+	var query string
+	if idempotencyTTLHours <= 0 {
+		// TTL=0 means delete all terminal messages immediately (regardless of idempotency key)
+		query = `
+			DELETE FROM messages
+			WHERE status IN ('delivered', 'hard_bounce', 'temp_expired', 'expired')
+		`
+	} else {
+		// Normal cleanup with TTL consideration
+		query = `
+			DELETE FROM messages
+			WHERE status IN ('delivered', 'hard_bounce', 'temp_expired', 'expired')
+			  AND (
+			    -- Delete immediately if no idempotency key
+			    idempotency_key IS NULL
+			    OR
+			    -- Delete after TTL if has idempotency key
+			    (idempotency_key IS NOT NULL AND datetime(created_at, '+' || ? || ' hours') < datetime('now'))
+			  )
+		`
+	}
+
+	var result sql.Result
+	var err error
+	if idempotencyTTLHours <= 0 {
+		result, err = q.db.Exec(query)
+	} else {
+		result, err = q.db.Exec(query, idempotencyTTLHours)
+	}
+
 	if err != nil {
 		return 0, err
 	}

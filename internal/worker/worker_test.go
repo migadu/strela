@@ -48,8 +48,15 @@ func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 		PollIntervalSeconds:    30,
 	}
 
+	reputationCfg := &config.ReputationConfig{
+		EnableIPTracking:       false, // Disable for tests
+		DegradedRetryHours:     48,
+		AlertTimeoutSeconds:    10,
+		DegradedIPCleanupHours: 168,
+	}
+
 	mxLookup := delivery.NewMXLookup(q, cfg, logger)
-	deliverer := delivery.NewDeliverer(cfg, mxLookup, logger)
+	deliverer := delivery.NewDeliverer(cfg, mxLookup, logger, reputationCfg)
 	retryScheduler := delivery.NewRetryScheduler(cfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackConfig, logger)
 
@@ -118,10 +125,14 @@ func TestWorker_HandleSuccess(t *testing.T) {
 	// Handle success
 	worker.handleSuccess(msg, result)
 
-	// Verify message was deleted
+	// Verify message has terminal status (not deleted immediately)
 	retrieved, _ := q.GetMessage("test_success")
-	if retrieved != nil {
-		t.Error("Message should be deleted after successful delivery")
+	if retrieved == nil {
+		t.Fatal("Message should still exist after successful delivery")
+	}
+
+	if retrieved.Status != queue.StatusDelivered {
+		t.Errorf("Expected status delivered, got %s", retrieved.Status)
 	}
 
 	// Verify callback was enqueued
@@ -168,10 +179,14 @@ func TestWorker_HandlePermanentFailure(t *testing.T) {
 
 	worker.handlePermanentFailure(msg, result)
 
-	// Verify message was deleted
+	// Verify message has terminal status (not deleted immediately)
 	retrieved, _ := q.GetMessage("test_permanent")
-	if retrieved != nil {
-		t.Error("Message should be deleted after permanent failure")
+	if retrieved == nil {
+		t.Fatal("Message should still exist after permanent failure")
+	}
+
+	if retrieved.Status != queue.StatusHardBounce {
+		t.Errorf("Expected status hard_bounce, got %s", retrieved.Status)
 	}
 
 	// Verify hard bounce callback was enqueued
@@ -266,10 +281,14 @@ func TestWorker_HandleTemporaryFailure_Expired(t *testing.T) {
 
 	worker.handleTemporaryFailure(msg, result)
 
-	// Verify message was deleted
+	// Verify message has terminal status (not deleted immediately)
 	retrieved, _ := q.GetMessage("test_expired")
-	if retrieved != nil {
-		t.Error("Expired message should be deleted")
+	if retrieved == nil {
+		t.Fatal("Message should still exist after expiration")
+	}
+
+	if retrieved.Status != queue.StatusTempExpired {
+		t.Errorf("Expected status temp_expired, got %s", retrieved.Status)
 	}
 
 	// Verify temp_expired callback was enqueued
@@ -303,10 +322,14 @@ func TestWorker_HandleExpired(t *testing.T) {
 
 	worker.handleExpired(msg, nil)
 
-	// Verify message was deleted
+	// Verify message has terminal status (not deleted immediately)
 	retrieved, _ := q.GetMessage("test_handle_expired")
-	if retrieved != nil {
-		t.Error("Expired message should be deleted")
+	if retrieved == nil {
+		t.Fatal("Message should still exist after expiration")
+	}
+
+	if retrieved.Status != queue.StatusExpired {
+		t.Errorf("Expected status expired, got %s", retrieved.Status)
 	}
 
 	// Verify expired callback was enqueued
@@ -342,12 +365,17 @@ func TestWorker_PerformCleanup(t *testing.T) {
 	// Perform cleanup
 	worker.performCleanup()
 
-	// Verify all expired messages were deleted
+	// Verify all expired messages have terminal status (not deleted immediately)
 	for i := 0; i < 3; i++ {
 		msgID := "expired_" + string(rune('a'+i))
 		retrieved, _ := q.GetMessage(msgID)
-		if retrieved != nil {
-			t.Errorf("Message %s should be deleted after cleanup", msgID)
+		if retrieved == nil {
+			t.Errorf("Message %s should still exist after cleanup", msgID)
+			continue
+		}
+
+		if retrieved.Status != queue.StatusExpired {
+			t.Errorf("Message %s: expected status expired, got %s", msgID, retrieved.Status)
 		}
 	}
 

@@ -43,7 +43,7 @@ func TestQueueMessageHandler_Authentication(t *testing.T) {
 		{
 			name:           "valid token",
 			authHeader:     "Bearer test-secret-token-123",
-			expectedStatus: http.StatusAccepted,
+			expectedStatus: http.StatusOK,
 		},
 		{
 			name:           "invalid token",
@@ -124,8 +124,8 @@ func TestQueueMessageHandler_NoAuth(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	// Should succeed even without auth header when auth is disabled
-	if w.Code != http.StatusAccepted {
-		t.Errorf("Expected status %d (no auth required), got %d", http.StatusAccepted, w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d (no auth required), got %d", http.StatusOK, w.Code)
 	}
 }
 
@@ -158,8 +158,8 @@ func TestQueueMessageHandler_ValidRequest(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Errorf("Expected status %d, got %d", http.StatusAccepted, w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
 	}
 
 	// Verify response contains message_id
