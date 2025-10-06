@@ -9,7 +9,7 @@ import (
 )
 
 func TestRetryScheduler_CalculateNextRetry_Permanent(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -26,7 +26,7 @@ func TestRetryScheduler_CalculateNextRetry_Permanent(t *testing.T) {
 }
 
 func TestRetryScheduler_CalculateNextRetry_Greylist(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -51,7 +51,7 @@ func TestRetryScheduler_CalculateNextRetry_Greylist(t *testing.T) {
 }
 
 func TestRetryScheduler_CalculateNextRetry_ExponentialBackoff(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,   // 5 minutes
 		MaxRetryDelaySeconds:      43200, // 12 hours
 		BackoffMultiplier:         2.0,
@@ -82,7 +82,7 @@ func TestRetryScheduler_CalculateNextRetry_ExponentialBackoff(t *testing.T) {
 }
 
 func TestRetryScheduler_CalculateNextRetry_MaxDelayCap(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200, // 12 hours
 		BackoffMultiplier:         2.0,
@@ -106,7 +106,7 @@ func TestRetryScheduler_CalculateNextRetry_MaxDelayCap(t *testing.T) {
 }
 
 func TestRetryScheduler_ShouldRetry_Permanent(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -127,7 +127,7 @@ func TestRetryScheduler_ShouldRetry_Permanent(t *testing.T) {
 }
 
 func TestRetryScheduler_ShouldRetry_Temporary(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -148,7 +148,7 @@ func TestRetryScheduler_ShouldRetry_Temporary(t *testing.T) {
 }
 
 func TestRetryScheduler_ShouldRetry_Expired(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -170,7 +170,7 @@ func TestRetryScheduler_ShouldRetry_Expired(t *testing.T) {
 }
 
 func TestRetryScheduler_GetNextRetryTime(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -192,7 +192,7 @@ func TestRetryScheduler_GetNextRetryTime(t *testing.T) {
 }
 
 func TestRetryScheduler_GetNextRetryTime_Permanent(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -210,7 +210,7 @@ func TestRetryScheduler_GetNextRetryTime_Permanent(t *testing.T) {
 }
 
 func TestRetryScheduler_GetRetrySchedule(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -289,7 +289,7 @@ func TestCalculateExpiresAt(t *testing.T) {
 }
 
 func TestRetryScheduler_NetworkError(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -308,7 +308,7 @@ func TestRetryScheduler_NetworkError(t *testing.T) {
 }
 
 func TestRetryScheduler_ZeroAttempt(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  300,
 		MaxRetryDelaySeconds:      43200,
 		BackoffMultiplier:         2.0,
@@ -327,7 +327,7 @@ func TestRetryScheduler_ZeroAttempt(t *testing.T) {
 }
 
 func TestRetryScheduler_CustomBackoffMultiplier(t *testing.T) {
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		InitialRetryDelaySeconds:  60,   // 1 min
 		MaxRetryDelaySeconds:      3600, // 1 hour
 		BackoffMultiplier:         3.0,  // Triple each time

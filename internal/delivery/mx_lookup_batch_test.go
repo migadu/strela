@@ -23,7 +23,7 @@ func TestBatchPrefetch(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -73,7 +73,7 @@ func TestBatchPrefetchEmptyList(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -103,7 +103,7 @@ func TestBatchPrefetchSkipsCached(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -155,7 +155,7 @@ func TestBatchPrefetchContextCancellation(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 

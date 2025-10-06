@@ -14,7 +14,7 @@ import (
 func TestDeliverer_GetCircuitBreaker(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
 		SourceIPSelection:              "round-robin",
 		CircuitBreakerEnabled:          true,
@@ -42,7 +42,7 @@ func TestDeliverer_GetCircuitBreaker(t *testing.T) {
 func TestDeliverer_GetCircuitBreaker_Disabled(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:             []string{"192.168.1.100"},
 		SourceIPSelection:     "round-robin",
 		CircuitBreakerEnabled: false,
@@ -63,7 +63,7 @@ func TestDeliverer_GetCircuitBreaker_Disabled(t *testing.T) {
 func TestDeliverer_GetReputationTracker(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:         []string{"192.168.1.100"},
 		SourceIPSelection: "round-robin",
 	}
@@ -139,7 +139,7 @@ func TestDestinationThrottle_ConcurrentCleanup(t *testing.T) {
 func TestAttemptDelivery_NetworkMismatch(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100"}, // IPv4
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 5,
@@ -184,7 +184,7 @@ func TestAttemptDelivery_NetworkMismatch(t *testing.T) {
 func TestAttemptDelivery_IPv6SourceIPv4Target(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"2001:db8::1"}, // IPv6
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 5,

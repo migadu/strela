@@ -26,11 +26,11 @@ func TestHandlerIdempotency_Disabled(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := &config.HTTPConfig{
+	httpCfg := &config.InboundConfig{
 		IdempotencyEnabled: false, // Disabled
 		IdempotencyHeader:  "X-Idempotency-Key",
 		MaxBodySizeBytes:   10 * 1024 * 1024, // 10MB
@@ -93,11 +93,11 @@ func TestHandlerIdempotency_Enabled_SameKey(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := &config.HTTPConfig{
+	httpCfg := &config.InboundConfig{
 		IdempotencyEnabled:  true, // Enabled
 		IdempotencyHeader:   "X-Idempotency-Key",
 		IdempotencyTTLHours: 24,
@@ -171,11 +171,11 @@ func TestHandlerIdempotency_Enabled_DifferentKeys(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := &config.HTTPConfig{
+	httpCfg := &config.InboundConfig{
 		IdempotencyEnabled:  true,
 		IdempotencyHeader:   "X-Idempotency-Key",
 		IdempotencyTTLHours: 24,
@@ -241,11 +241,11 @@ func TestHandlerIdempotency_CustomHeader(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := &config.HTTPConfig{
+	httpCfg := &config.InboundConfig{
 		IdempotencyEnabled:  true,
 		IdempotencyHeader:   "X-Custom-Dedup-Key", // Custom header
 		IdempotencyTTLHours: 24,
@@ -303,11 +303,11 @@ func TestHandlerIdempotency_AfterTerminalState(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := &config.HTTPConfig{
+	httpCfg := &config.InboundConfig{
 		IdempotencyEnabled:  true,
 		IdempotencyHeader:   "X-Idempotency-Key",
 		IdempotencyTTLHours: 24,

@@ -28,15 +28,15 @@ type GossipService interface {
 // QueueMessageHandler handles HTTP requests and enqueues messages
 type QueueMessageHandler struct {
 	queue          *queue.Queue
-	deliveryConfig *config.DeliveryConfig
-	httpConfig     *config.HTTPConfig
+	deliveryConfig *config.OutboundConfig
+	httpConfig     *config.InboundConfig
 	circuitBreaker *delivery.CircuitBreaker
 	gossip         GossipService
 	logger         *zap.Logger
 }
 
 // NewQueueMessageHandler creates a new queue-based message handler
-func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.DeliveryConfig, httpCfg *config.HTTPConfig, circuitBreaker *delivery.CircuitBreaker, logger *zap.Logger) *QueueMessageHandler {
+func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.OutboundConfig, httpCfg *config.InboundConfig, circuitBreaker *delivery.CircuitBreaker, logger *zap.Logger) *QueueMessageHandler {
 	return &QueueMessageHandler{
 		queue:          q,
 		deliveryConfig: deliveryCfg,

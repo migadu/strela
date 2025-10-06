@@ -30,7 +30,7 @@ type MXRecord struct {
 }
 
 // NewMXLookup creates a new MX lookup service
-func NewMXLookup(q *queue.Queue, dnsCfg *config.DNSConfig, deliveryCfg *config.DeliveryConfig, logger *zap.Logger) *MXLookup {
+func NewMXLookup(q *queue.Queue, dnsCfg *config.DNSConfig, deliveryCfg *config.OutboundConfig, logger *zap.Logger) *MXLookup {
 	return &MXLookup{
 		queue:       q,
 		dnsResolver: NewDNSResolver(dnsCfg, logger),
@@ -203,7 +203,7 @@ func (m *MXLookup) CleanupExpiredCache() (int, error) {
 }
 
 // ReloadConfig updates DNS resolver configuration (hot reload)
-func (m *MXLookup) ReloadConfig(dnsCfg *config.DNSConfig, deliveryCfg *config.DeliveryConfig) error {
+func (m *MXLookup) ReloadConfig(dnsCfg *config.DNSConfig, deliveryCfg *config.OutboundConfig) error {
 	m.logger.Info("reloading DNS resolver configuration")
 
 	// Update cache TTLs

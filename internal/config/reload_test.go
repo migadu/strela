@@ -17,7 +17,7 @@ func TestReloadableConfig_Reload(t *testing.T) {
 
 	// Write initial config
 	initialConfig := `
-[http]
+[inbound]
 listen = ":8080"
 auth_token = "initial-token"
 max_body_size_bytes = 10485760
@@ -27,7 +27,7 @@ database_path = "./queue.db"
 worker_count = 10
 batch_size = 5
 
-[delivery]
+[outbound]
 source_ips = ["192.168.1.100"]
 source_ip_selection = "round-robin"
 mx_cache_ttl_seconds = 3600
@@ -50,19 +50,19 @@ timeout_seconds = 10
 
 	// Verify initial config
 	cfg := rc.Get()
-	if cfg.HTTP.AuthToken != "initial-token" {
-		t.Errorf("expected auth_token 'initial-token', got '%s'", cfg.HTTP.AuthToken)
+	if cfg.Inbound.AuthToken != "initial-token" {
+		t.Errorf("expected auth_token 'initial-token', got '%s'", cfg.Inbound.AuthToken)
 	}
-	if len(cfg.Delivery.SourceIPs) != 1 {
-		t.Errorf("expected 1 source IP, got %d", len(cfg.Delivery.SourceIPs))
+	if len(cfg.Outbound.SourceIPs) != 1 {
+		t.Errorf("expected 1 source IP, got %d", len(cfg.Outbound.SourceIPs))
 	}
-	if cfg.Delivery.CircuitBreakerFailureThreshold != 5 {
-		t.Errorf("expected threshold 5, got %d", cfg.Delivery.CircuitBreakerFailureThreshold)
+	if cfg.Outbound.CircuitBreakerFailureThreshold != 5 {
+		t.Errorf("expected threshold 5, got %d", cfg.Outbound.CircuitBreakerFailureThreshold)
 	}
 
 	// Write updated config (valid changes)
 	updatedConfig := `
-[http]
+[inbound]
 listen = ":8080"
 auth_token = "updated-token"
 max_body_size_bytes = 20971520
@@ -72,7 +72,7 @@ database_path = "./queue.db"
 worker_count = 10
 batch_size = 5
 
-[delivery]
+[outbound]
 source_ips = ["192.168.1.100", "192.168.1.101", "192.168.1.102"]
 source_ip_selection = "random"
 mx_cache_ttl_seconds = 7200
@@ -94,20 +94,20 @@ timeout_seconds = 10
 
 	// Verify updated config
 	cfg = rc.Get()
-	if cfg.HTTP.AuthToken != "updated-token" {
-		t.Errorf("expected auth_token 'updated-token', got '%s'", cfg.HTTP.AuthToken)
+	if cfg.Inbound.AuthToken != "updated-token" {
+		t.Errorf("expected auth_token 'updated-token', got '%s'", cfg.Inbound.AuthToken)
 	}
-	if len(cfg.Delivery.SourceIPs) != 3 {
-		t.Errorf("expected 3 source IPs, got %d", len(cfg.Delivery.SourceIPs))
+	if len(cfg.Outbound.SourceIPs) != 3 {
+		t.Errorf("expected 3 source IPs, got %d", len(cfg.Outbound.SourceIPs))
 	}
-	if cfg.Delivery.SourceIPSelection != "random" {
-		t.Errorf("expected source_ip_selection 'random', got '%s'", cfg.Delivery.SourceIPSelection)
+	if cfg.Outbound.SourceIPSelection != "random" {
+		t.Errorf("expected source_ip_selection 'random', got '%s'", cfg.Outbound.SourceIPSelection)
 	}
-	if cfg.Delivery.CircuitBreakerFailureThreshold != 10 {
-		t.Errorf("expected threshold 10, got %d", cfg.Delivery.CircuitBreakerFailureThreshold)
+	if cfg.Outbound.CircuitBreakerFailureThreshold != 10 {
+		t.Errorf("expected threshold 10, got %d", cfg.Outbound.CircuitBreakerFailureThreshold)
 	}
-	if cfg.HTTP.MaxBodySizeBytes != 20971520 {
-		t.Errorf("expected max_body_size 20971520, got %d", cfg.HTTP.MaxBodySizeBytes)
+	if cfg.Inbound.MaxBodySizeBytes != 20971520 {
+		t.Errorf("expected max_body_size 20971520, got %d", cfg.Inbound.MaxBodySizeBytes)
 	}
 }
 
@@ -126,11 +126,11 @@ func TestReloadableConfig_ReloadValidation(t *testing.T) {
 			initialConfig: `
 [server]
 database_path = "./queue.db"
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
@@ -138,11 +138,11 @@ webhook_url = "https://example.com/webhook"
 			updatedConfig: `
 [server]
 database_path = "./queue-new.db"
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
@@ -153,23 +153,23 @@ webhook_url = "https://example.com/webhook"
 		{
 			name: "listen address changed (should fail)",
 			initialConfig: `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
 `,
 			updatedConfig: `
-[http]
+[inbound]
 listen = ":9090"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
@@ -180,23 +180,23 @@ webhook_url = "https://example.com/webhook"
 		{
 			name: "worker_count changed (should fail)",
 			initialConfig: `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
 `,
 			updatedConfig: `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 20
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
@@ -207,23 +207,23 @@ webhook_url = "https://example.com/webhook"
 		{
 			name: "webhook_url changed (should fail)",
 			initialConfig: `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
 `,
 			updatedConfig: `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://different.com/webhook"
@@ -279,12 +279,12 @@ func TestReloadableConfig_ReloadCallback(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.toml")
 
 	initialConfig := `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = ["192.168.1.100"]
 [callbacks]
 webhook_url = "https://example.com/webhook"
@@ -309,12 +309,12 @@ webhook_url = "https://example.com/webhook"
 
 	// Update config
 	updatedConfig := `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = ["192.168.1.100", "192.168.1.101"]
 [callbacks]
 webhook_url = "https://example.com/webhook"
@@ -336,8 +336,8 @@ webhook_url = "https://example.com/webhook"
 	// Verify callback received new config
 	if callbackConfig == nil {
 		t.Error("callback config is nil")
-	} else if len(callbackConfig.Delivery.SourceIPs) != 2 {
-		t.Errorf("expected 2 source IPs in callback, got %d", len(callbackConfig.Delivery.SourceIPs))
+	} else if len(callbackConfig.Outbound.SourceIPs) != 2 {
+		t.Errorf("expected 2 source IPs in callback, got %d", len(callbackConfig.Outbound.SourceIPs))
 	}
 }
 
@@ -348,12 +348,12 @@ func TestReloadableConfig_InvalidSyntax(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.toml")
 
 	validConfig := `
-[http]
+[inbound]
 listen = ":8080"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
-[delivery]
+[outbound]
 source_ips = []
 [callbacks]
 webhook_url = "https://example.com/webhook"
@@ -369,7 +369,7 @@ webhook_url = "https://example.com/webhook"
 
 	// Write invalid config (syntax error)
 	invalidConfig := `
-[http]
+[inbound]
 listen = ":8080"
 invalid syntax here!
 [queue]
@@ -386,7 +386,7 @@ invalid syntax here!
 
 	// Old config should still be in use
 	cfg := rc.Get()
-	if cfg.HTTP.Listen != ":8080" {
+	if cfg.Inbound.Listen != ":8080" {
 		t.Errorf("config was changed despite reload failure")
 	}
 }
@@ -398,14 +398,14 @@ func TestReloadableConfig_GetMethods(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.toml")
 
 	configContent := `
-[http]
+[inbound]
 listen = ":8080"
 auth_token = "test-token"
 [queue]
 database_path = "./queue.db"
 worker_count = 10
 batch_size = 5
-[delivery]
+[outbound]
 source_ips = ["192.168.1.100"]
 source_ip_selection = "round-robin"
 [callbacks]
@@ -422,14 +422,14 @@ timeout_seconds = 10
 	}
 
 	// Test individual getter methods
-	httpCfg := rc.GetHTTP()
-	if httpCfg.Listen != ":8080" {
-		t.Errorf("GetHTTP: expected listen ':8080', got '%s'", httpCfg.Listen)
+	inboundCfg := rc.GetInbound()
+	if inboundCfg.Listen != ":8080" {
+		t.Errorf("GetInbound: expected listen ':8080', got '%s'", inboundCfg.Listen)
 	}
 
-	deliveryCfg := rc.GetDelivery()
-	if deliveryCfg.SourceIPSelection != "round-robin" {
-		t.Errorf("GetDelivery: expected source_ip_selection 'round-robin', got '%s'", deliveryCfg.SourceIPSelection)
+	outboundCfg := rc.GetOutbound()
+	if outboundCfg.SourceIPSelection != "round-robin" {
+		t.Errorf("GetOutbound: expected source_ip_selection 'round-robin', got '%s'", outboundCfg.SourceIPSelection)
 	}
 
 	queueCfg := rc.GetQueue()

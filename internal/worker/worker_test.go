@@ -18,7 +18,7 @@ func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 	logger, _ := zap.NewDevelopment()
 	q, queueCleanup := queue.SetupTestQueue(t)
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                 []string{"127.0.0.1"},
 		SourceIPSelection:         "round-robin",
 		MXCacheTTLSeconds:         3600,

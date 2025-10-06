@@ -162,10 +162,10 @@ func main() {
 	logger.Info("configuration loaded",
 		zap.String("database", cfg.Server.DatabasePath),
 		zap.Int("workers", cfg.Queue.WorkerCount),
-		zap.Int("source_ips", len(cfg.Delivery.SourceIPs)),
-		zap.String("source_ip_selection", cfg.Delivery.SourceIPSelection),
+		zap.Int("source_ips", len(cfg.Outbound.SourceIPs)),
+		zap.String("source_ip_selection", cfg.Outbound.SourceIPSelection),
 		zap.String("callback_url", cfg.Callbacks.WebhookURL),
-		zap.Int("max_message_age_hours", cfg.Delivery.MaxMessageAgeHours))
+		zap.Int("max_message_age_hours", cfg.Outbound.MaxMessageAgeHours))
 
 	// Initialize metrics (if enabled)
 	var m *metrics.Metrics
@@ -184,7 +184,7 @@ func main() {
 		Peers:          cfg.Cluster.Peers,
 		NodeID:         cfg.Cluster.NodeID,
 		SecretKey:      cfg.Cluster.SecretKey,
-		IdempotencyTTL: time.Duration(cfg.HTTP.IdempotencyTTLHours) * time.Hour,
+		IdempotencyTTL: time.Duration(cfg.Inbound.IdempotencyTTLHours) * time.Hour,
 	}
 
 	g, err := gossip.NewGossip(gossipCfg, logger)
@@ -226,10 +226,10 @@ func main() {
 	logger.Info("queue initialized", zap.String("database", cfg.Server.DatabasePath))
 
 	// Initialize MX lookup with DNS resolver configuration
-	mxLookup := delivery.NewMXLookup(q, &cfg.DNS, &cfg.Delivery, logger)
+	mxLookup := delivery.NewMXLookup(q, &cfg.DNS, &cfg.Outbound, logger)
 
 	// Initialize deliverer
-	deliverer := delivery.NewDeliverer(&cfg.Delivery, mxLookup, logger, &cfg.Reputation)
+	deliverer := delivery.NewDeliverer(&cfg.Outbound, mxLookup, logger, &cfg.Reputation)
 
 	// Wire metrics to deliverer
 	if m != nil {
@@ -247,7 +247,7 @@ func main() {
 	}
 
 	// Initialize retry scheduler
-	retryScheduler := delivery.NewRetryScheduler(&cfg.Delivery)
+	retryScheduler := delivery.NewRetryScheduler(&cfg.Outbound)
 
 	// Initialize callback handler
 	callbackHandler := callback.NewCallbackHandler(q, &cfg.Callbacks, logger)
@@ -263,7 +263,7 @@ func main() {
 	logger.Info("callback handler started")
 
 	// Initialize worker with MXLookup for batch DNS prefetching
-	w := worker.NewWorker(q, deliverer, retryScheduler, mxLookup, callbackHandler, &cfg.Delivery, &cfg.Queue, logger)
+	w := worker.NewWorker(q, deliverer, retryScheduler, mxLookup, callbackHandler, &cfg.Outbound, &cfg.Queue, logger)
 	w.Start(cfg.Queue.WorkerCount)
 	defer w.Stop()
 
@@ -290,18 +290,18 @@ func main() {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			deleted, err := q.CleanupTerminalMessages(cfg.HTTP.IdempotencyTTLHours)
+			deleted, err := q.CleanupTerminalMessages(cfg.Inbound.IdempotencyTTLHours)
 			if err != nil {
 				logger.Error("failed to cleanup terminal messages", zap.Error(err))
 			} else if deleted > 0 {
 				logger.Info("cleaned up terminal messages",
 					zap.Int64("deleted_count", deleted),
-					zap.Int("idempotency_ttl_hours", cfg.HTTP.IdempotencyTTLHours))
+					zap.Int("idempotency_ttl_hours", cfg.Inbound.IdempotencyTTLHours))
 			}
 		}
 	})
 	logger.Info("terminal message cleanup job started",
-		zap.Int("idempotency_ttl_hours", cfg.HTTP.IdempotencyTTLHours))
+		zap.Int("idempotency_ttl_hours", cfg.Inbound.IdempotencyTTLHours))
 
 	// Start degraded IP cleanup job
 	recovery.SafeGo(logger, "degraded IP cleanup", func() {
@@ -317,7 +317,7 @@ func main() {
 	logger.Info("degraded IP cleanup job started")
 
 	// Initialize HTTP handler with circuit breaker reference
-	httpHandler := handler.NewQueueMessageHandler(q, &cfg.Delivery, &cfg.HTTP, deliverer.GetCircuitBreaker(), logger)
+	httpHandler := handler.NewQueueMessageHandler(q, &cfg.Outbound, &cfg.Inbound, deliverer.GetCircuitBreaker(), logger)
 
 	// Wire gossip service to HTTP handler
 	if g != nil {
@@ -434,11 +434,11 @@ func main() {
 
 	// Setup HTTP server with TLS certificate hot reload support
 	server := &http.Server{
-		Addr:         cfg.HTTP.Listen,
+		Addr:         cfg.Inbound.Listen,
 		Handler:      mux,
-		ReadTimeout:  time.Duration(cfg.HTTP.ReadTimeoutSecs) * time.Second,
-		WriteTimeout: time.Duration(cfg.HTTP.WriteTimeoutSecs) * time.Second,
-		IdleTimeout:  time.Duration(cfg.HTTP.IdleTimeoutSecs) * time.Second,
+		ReadTimeout:  time.Duration(cfg.Inbound.ReadTimeoutSecs) * time.Second,
+		WriteTimeout: time.Duration(cfg.Inbound.WriteTimeoutSecs) * time.Second,
+		IdleTimeout:  time.Duration(cfg.Inbound.IdleTimeoutSecs) * time.Second,
 	}
 
 	// HTTP challenge server (for Let's Encrypt ACME HTTP-01)
@@ -530,14 +530,14 @@ func main() {
 	// Start HTTP server in goroutine
 	recovery.SafeGo(logger, "HTTP server", func() {
 		// Log server configuration
-		if cfg.HTTP.AuthToken != "" {
+		if cfg.Inbound.AuthToken != "" {
 			logger.Info("starting HTTP server",
-				zap.String("listen", cfg.HTTP.Listen),
+				zap.String("listen", cfg.Inbound.Listen),
 				zap.Bool("auth_enabled", true),
 				zap.Bool("tls_enabled", cfg.TLS.Enabled))
 		} else {
 			logger.Warn("starting HTTP server WITHOUT authentication",
-				zap.String("listen", cfg.HTTP.Listen),
+				zap.String("listen", cfg.Inbound.Listen),
 				zap.Bool("auth_enabled", false),
 				zap.Bool("tls_enabled", cfg.TLS.Enabled))
 		}
@@ -560,12 +560,12 @@ func main() {
 	// Register reload callbacks
 	reloadableCfg.RegisterReloadCallback(func(newCfg *config.Config) error {
 		// Reload delivery configuration
-		if err := deliverer.ReloadConfig(&newCfg.Delivery); err != nil {
+		if err := deliverer.ReloadConfig(&newCfg.Outbound); err != nil {
 			return err
 		}
 
 		// Reload MX lookup DNS configuration
-		if err := mxLookup.ReloadConfig(&newCfg.DNS, &newCfg.Delivery); err != nil {
+		if err := mxLookup.ReloadConfig(&newCfg.DNS, &newCfg.Outbound); err != nil {
 			return err
 		}
 

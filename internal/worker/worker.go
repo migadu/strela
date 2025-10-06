@@ -21,7 +21,7 @@ type Worker struct {
 	deliverer       *delivery.Deliverer
 	retryScheduler  *delivery.RetryScheduler
 	mxLookup        *delivery.MXLookup
-	deliveryConfig  *config.DeliveryConfig
+	deliveryConfig  *config.OutboundConfig
 	queueConfig     *config.QueueConfig
 	logger          *zap.Logger
 	callbackHandler *callback.CallbackHandler
@@ -37,7 +37,7 @@ func NewWorker(
 	retryScheduler *delivery.RetryScheduler,
 	mxLookup *delivery.MXLookup,
 	callbackHandler *callback.CallbackHandler,
-	deliveryCfg *config.DeliveryConfig,
+	deliveryCfg *config.OutboundConfig,
 	queueCfg *config.QueueConfig,
 	logger *zap.Logger,
 ) *Worker {

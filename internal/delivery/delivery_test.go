@@ -170,7 +170,7 @@ func TestDeliverer_DeliverMessage_NoMXRecords(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"127.0.0.1"},
 		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
@@ -214,7 +214,7 @@ func TestDeliverer_SelectSourceIP(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.1", "192.168.1.2"},
 		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
@@ -346,7 +346,7 @@ func TestDeliverer_LoggingOnFailure(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{},
 		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
@@ -387,7 +387,7 @@ func TestDeliverer_EmptySourceIPs(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{}, // No source IPs
 		SourceIPSelection:        "round-robin",
 		MXCacheTTLSeconds:        3600,
@@ -456,7 +456,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Initial config
-	initialCfg := &config.DeliveryConfig{
+	initialCfg := &config.OutboundConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
 		SourceIPSelection:              "round-robin",
 		PerDomainIntervalSeconds:       2,
@@ -479,7 +479,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 	}
 
 	// New config with different settings
-	newCfg := &config.DeliveryConfig{
+	newCfg := &config.OutboundConfig{
 		SourceIPs:                      []string{"192.168.1.100", "192.168.1.101", "192.168.1.102"},
 		SourceIPSelection:              "random",
 		PerDomainIntervalSeconds:       5,
@@ -520,7 +520,7 @@ func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Initial config with circuit breaker enabled
-	initialCfg := &config.DeliveryConfig{
+	initialCfg := &config.OutboundConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
 		SourceIPSelection:              "round-robin",
 		CircuitBreakerEnabled:          true,
@@ -538,7 +538,7 @@ func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
 	}
 
 	// New config with circuit breaker disabled
-	newCfg := &config.DeliveryConfig{
+	newCfg := &config.OutboundConfig{
 		SourceIPs:             []string{"192.168.1.100"},
 		SourceIPSelection:     "round-robin",
 		CircuitBreakerEnabled: false,
@@ -559,7 +559,7 @@ func TestDeliverer_ReloadConfig_EnableCircuitBreaker(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Initial config with circuit breaker disabled
-	initialCfg := &config.DeliveryConfig{
+	initialCfg := &config.OutboundConfig{
 		SourceIPs:             []string{"192.168.1.100"},
 		SourceIPSelection:     "round-robin",
 		CircuitBreakerEnabled: false,
@@ -574,7 +574,7 @@ func TestDeliverer_ReloadConfig_EnableCircuitBreaker(t *testing.T) {
 	}
 
 	// New config with circuit breaker enabled
-	newCfg := &config.DeliveryConfig{
+	newCfg := &config.OutboundConfig{
 		SourceIPs:                      []string{"192.168.1.100"},
 		SourceIPSelection:              "round-robin",
 		CircuitBreakerEnabled:          true,

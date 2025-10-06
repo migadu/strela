@@ -781,7 +781,7 @@ func TestDelivery_Integration_ReputationTracking(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 1,
@@ -872,7 +872,7 @@ func TestDelivery_Integration_ReputationTracking(t *testing.T) {
 func TestDelivery_Integration_AllIPsDegraded(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 1,
@@ -929,7 +929,7 @@ func TestDelivery_Integration_AllIPsDegraded(t *testing.T) {
 func TestDelivery_Integration_NonReputationError(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100"},
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 1,
@@ -984,7 +984,7 @@ func TestDelivery_Integration_NonReputationError(t *testing.T) {
 func TestDelivery_Integration_ReputationTrackingDisabled(t *testing.T) {
 	logger := zap.NewNop()
 
-	cfg := &config.DeliveryConfig{
+	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 1,

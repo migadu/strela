@@ -22,7 +22,7 @@ func TestMXLookup_LookupDNS(t *testing.T) {
 		CacheTTLSeconds:         3600,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -68,7 +68,7 @@ func TestMXLookup_LookupDNS_NoMXRecords(t *testing.T) {
 		CacheTTLSeconds:         3600,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -92,7 +92,7 @@ func TestMXLookup_LookupDNS_InvalidDomain(t *testing.T) {
 		CacheTTLSeconds:         3600,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -116,7 +116,7 @@ func TestMXLookup_Cache(t *testing.T) {
 		CacheTTLSeconds:         3600,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -161,7 +161,7 @@ func TestMXLookup_CacheExpiration(t *testing.T) {
 		CacheTTLSeconds:         1,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 1,
 	}
 	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
@@ -195,7 +195,7 @@ func TestMXLookup_StoreAndRetrieveCache(t *testing.T) {
 		CacheTTLSeconds:         3600,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -243,7 +243,7 @@ func TestMXLookup_InvalidateCache(t *testing.T) {
 		CacheTTLSeconds:         3600,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 
@@ -284,7 +284,7 @@ func TestMXLookup_CleanupExpiredCache(t *testing.T) {
 		CacheTTLSeconds:         1,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 1,
 	}
 	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
@@ -332,7 +332,7 @@ func TestMXLookup_SortByPriority(t *testing.T) {
 		CacheTTLSeconds:         3600,
 		CacheNegativeTTLSeconds: 60,
 	}
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MXCacheTTLSeconds: 3600,
 	}
 

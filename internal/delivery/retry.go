@@ -10,11 +10,11 @@ import (
 
 // RetryScheduler calculates retry delays with exponential backoff
 type RetryScheduler struct {
-	config *config.DeliveryConfig
+	config *config.OutboundConfig
 }
 
 // NewRetryScheduler creates a new retry scheduler
-func NewRetryScheduler(cfg *config.DeliveryConfig) *RetryScheduler {
+func NewRetryScheduler(cfg *config.OutboundConfig) *RetryScheduler {
 	return &RetryScheduler{config: cfg}
 }
 

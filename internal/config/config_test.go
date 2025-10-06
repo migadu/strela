@@ -11,14 +11,14 @@ func TestLoadConfig(t *testing.T) {
 [server]
 database_path = "./test.db"
 
-[http]
+[inbound]
 listen = ":8080"
 auth_token = "test-token"
 
 [queue]
 worker_count = 5
 
-[delivery]
+[outbound]
 source_ips = ["192.168.1.100", "192.168.1.101"]
 ip_selection = "round-robin"
 
@@ -45,12 +45,12 @@ auth_token = "webhook-token"
 	}
 
 	// Verify values
-	if config.HTTP.Listen != ":8080" {
-		t.Errorf("Expected listen :8080, got %s", config.HTTP.Listen)
+	if config.Inbound.Listen != ":8080" {
+		t.Errorf("Expected listen :8080, got %s", config.Inbound.Listen)
 	}
 
-	if config.HTTP.AuthToken != "test-token" {
-		t.Errorf("Expected auth_token test-token, got %s", config.HTTP.AuthToken)
+	if config.Inbound.AuthToken != "test-token" {
+		t.Errorf("Expected auth_token test-token, got %s", config.Inbound.AuthToken)
 	}
 
 	if config.Server.DatabasePath != "./test.db" {
@@ -61,8 +61,8 @@ auth_token = "webhook-token"
 		t.Errorf("Expected worker_count 5, got %d", config.Queue.WorkerCount)
 	}
 
-	if len(config.Delivery.SourceIPs) != 2 {
-		t.Errorf("Expected 2 source IPs, got %d", len(config.Delivery.SourceIPs))
+	if len(config.Outbound.SourceIPs) != 2 {
+		t.Errorf("Expected 2 source IPs, got %d", len(config.Outbound.SourceIPs))
 	}
 
 	if config.Callbacks.WebhookURL != "https://example.com/webhook" {
@@ -87,36 +87,36 @@ func TestSetDefaults(t *testing.T) {
 		t.Errorf("Expected default cleanup_interval_seconds 60, got %d", config.Queue.CleanupIntervalSeconds)
 	}
 
-	if config.Delivery.MXCacheTTLSeconds != 3600 {
-		t.Errorf("Expected default mx_cache_ttl_seconds 3600, got %d", config.Delivery.MXCacheTTLSeconds)
+	if config.Outbound.MXCacheTTLSeconds != 3600 {
+		t.Errorf("Expected default mx_cache_ttl_seconds 3600, got %d", config.Outbound.MXCacheTTLSeconds)
 	}
 
-	if config.Delivery.ConnectionTimeoutSeconds != 30 {
-		t.Errorf("Expected default connection_timeout_seconds 30, got %d", config.Delivery.ConnectionTimeoutSeconds)
+	if config.Outbound.ConnectionTimeoutSeconds != 30 {
+		t.Errorf("Expected default connection_timeout_seconds 30, got %d", config.Outbound.ConnectionTimeoutSeconds)
 	}
 
-	if config.Delivery.MaxMessageAgeHours != 48 {
-		t.Errorf("Expected default max_message_age_hours 48, got %d", config.Delivery.MaxMessageAgeHours)
+	if config.Outbound.MaxMessageAgeHours != 48 {
+		t.Errorf("Expected default max_message_age_hours 48, got %d", config.Outbound.MaxMessageAgeHours)
 	}
 
-	if config.Delivery.InitialRetryDelaySeconds != 300 {
-		t.Errorf("Expected default initial_retry_delay_seconds 300, got %d", config.Delivery.InitialRetryDelaySeconds)
+	if config.Outbound.InitialRetryDelaySeconds != 300 {
+		t.Errorf("Expected default initial_retry_delay_seconds 300, got %d", config.Outbound.InitialRetryDelaySeconds)
 	}
 
-	if config.Delivery.MaxRetryDelaySeconds != 43200 {
-		t.Errorf("Expected default max_retry_delay_seconds 43200, got %d", config.Delivery.MaxRetryDelaySeconds)
+	if config.Outbound.MaxRetryDelaySeconds != 43200 {
+		t.Errorf("Expected default max_retry_delay_seconds 43200, got %d", config.Outbound.MaxRetryDelaySeconds)
 	}
 
-	if config.Delivery.BackoffMultiplier != 2.0 {
-		t.Errorf("Expected default backoff_multiplier 2.0, got %f", config.Delivery.BackoffMultiplier)
+	if config.Outbound.BackoffMultiplier != 2.0 {
+		t.Errorf("Expected default backoff_multiplier 2.0, got %f", config.Outbound.BackoffMultiplier)
 	}
 
-	if config.Delivery.GreylistRetryDelaySeconds != 120 {
-		t.Errorf("Expected default greylist_retry_delay_seconds 120, got %d", config.Delivery.GreylistRetryDelaySeconds)
+	if config.Outbound.GreylistRetryDelaySeconds != 120 {
+		t.Errorf("Expected default greylist_retry_delay_seconds 120, got %d", config.Outbound.GreylistRetryDelaySeconds)
 	}
 
-	if config.Delivery.SourceIPSelection != "round-robin" {
-		t.Errorf("Expected default source_ip_selection round-robin, got %s", config.Delivery.SourceIPSelection)
+	if config.Outbound.SourceIPSelection != "round-robin" {
+		t.Errorf("Expected default source_ip_selection round-robin, got %s", config.Outbound.SourceIPSelection)
 	}
 
 	if config.Callbacks.TimeoutSeconds != 10 {
@@ -144,33 +144,33 @@ func TestSetDefaults(t *testing.T) {
 	}
 
 	// Check HTTP timeout defaults
-	if config.HTTP.ReadTimeoutSecs != 30 {
-		t.Errorf("Expected default read_timeout_seconds 30, got %d", config.HTTP.ReadTimeoutSecs)
+	if config.Inbound.ReadTimeoutSecs != 30 {
+		t.Errorf("Expected default read_timeout_seconds 30, got %d", config.Inbound.ReadTimeoutSecs)
 	}
 
-	if config.HTTP.WriteTimeoutSecs != 30 {
-		t.Errorf("Expected default write_timeout_seconds 30, got %d", config.HTTP.WriteTimeoutSecs)
+	if config.Inbound.WriteTimeoutSecs != 30 {
+		t.Errorf("Expected default write_timeout_seconds 30, got %d", config.Inbound.WriteTimeoutSecs)
 	}
 
-	if config.HTTP.IdleTimeoutSecs != 120 {
-		t.Errorf("Expected default idle_timeout_seconds 120, got %d", config.HTTP.IdleTimeoutSecs)
+	if config.Inbound.IdleTimeoutSecs != 120 {
+		t.Errorf("Expected default idle_timeout_seconds 120, got %d", config.Inbound.IdleTimeoutSecs)
 	}
 
-	if config.HTTP.MaxBodySizeBytes != 35*1024*1024 {
-		t.Errorf("Expected default max_body_size_bytes 35MB, got %d", config.HTTP.MaxBodySizeBytes)
+	if config.Inbound.MaxBodySizeBytes != 35*1024*1024 {
+		t.Errorf("Expected default max_body_size_bytes 35MB, got %d", config.Inbound.MaxBodySizeBytes)
 	}
 }
 
 func TestLoadConfigWithDefaults(t *testing.T) {
 	// Create minimal config file
 	configContent := `
-[http]
+[inbound]
 listen = ":8080"
 
 [queue]
 database_path = "./test.db"
 
-[delivery]
+[outbound]
 source_ips = ["192.168.1.100"]
 
 [callbacks]
@@ -199,8 +199,8 @@ webhook_url = "https://example.com/webhook"
 		t.Errorf("Expected default worker_count 10, got %d", config.Queue.WorkerCount)
 	}
 
-	if config.Delivery.MaxMessageAgeHours != 48 {
-		t.Errorf("Expected default max_message_age_hours 48, got %d", config.Delivery.MaxMessageAgeHours)
+	if config.Outbound.MaxMessageAgeHours != 48 {
+		t.Errorf("Expected default max_message_age_hours 48, got %d", config.Outbound.MaxMessageAgeHours)
 	}
 }
 

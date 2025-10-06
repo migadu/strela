@@ -13,12 +13,12 @@ import (
 	"go.uber.org/zap"
 )
 
-func getDefaultHTTPConfig() *config.HTTPConfig {
-	cfg := &config.HTTPConfig{}
+func getDefaultInboundConfig() *config.InboundConfig {
+	cfg := &config.InboundConfig{}
 	// Apply defaults
-	c := &config.Config{HTTP: *cfg}
+	c := &config.Config{Inbound: *cfg}
 	c.SetDefaults()
-	return &c.HTTP
+	return &c.Inbound
 }
 
 func TestQueueMessageHandler_Authentication(t *testing.T) {
@@ -26,11 +26,11 @@ func TestQueueMessageHandler_Authentication(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := getDefaultHTTPConfig()
+	httpCfg := getDefaultInboundConfig()
 	httpCfg.AuthToken = "test-secret-token-123"
 
 	handler := NewQueueMessageHandler(q, deliveryCfg, httpCfg, nil, logger)
@@ -99,11 +99,11 @@ func TestQueueMessageHandler_NoAuth(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := getDefaultHTTPConfig()
+	httpCfg := getDefaultInboundConfig()
 	httpCfg.AuthToken = "" // No auth
 
 	handler := NewQueueMessageHandler(q, deliveryCfg, httpCfg, nil, logger)
@@ -134,11 +134,11 @@ func TestQueueMessageHandler_ValidRequest(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
-	httpCfg := getDefaultHTTPConfig()
+	httpCfg := getDefaultInboundConfig()
 	httpCfg.AuthToken = "test-token"
 
 	handler := NewQueueMessageHandler(q, deliveryCfg, httpCfg, nil, logger)
@@ -192,12 +192,12 @@ func TestQueueMessageHandler_BodySizeLimit(t *testing.T) {
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours: 48,
 	}
 
 	// Set a small limit for testing
-	httpCfg := getDefaultHTTPConfig()
+	httpCfg := getDefaultInboundConfig()
 	httpCfg.AuthToken = "test-token"
 	httpCfg.MaxBodySizeBytes = 100 // 100 bytes limit
 

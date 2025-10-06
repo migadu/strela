@@ -85,7 +85,7 @@ type DeliveryMetrics interface {
 // Deliverer handles direct SMTP delivery to recipient MX servers
 type Deliverer struct {
 	mu                sync.RWMutex
-	config            *config.DeliveryConfig
+	config            *config.OutboundConfig
 	mxLookup          *MXLookup
 	logger            *zap.Logger
 	ipRotator         *IPRotator
@@ -107,7 +107,7 @@ type DeliveryResult struct {
 }
 
 // NewDeliverer creates a new delivery engine
-func NewDeliverer(config *config.DeliveryConfig, mxLookup *MXLookup, logger *zap.Logger, reputationConfig *config.ReputationConfig) *Deliverer {
+func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *zap.Logger, reputationConfig *config.ReputationConfig) *Deliverer {
 	// Create circuit breaker with configured values
 	var circuitBreaker *CircuitBreaker
 	if !config.CircuitBreakerEnabled {
@@ -706,7 +706,7 @@ func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
 }
 
 // ReloadConfig updates the delivery configuration (hot reload)
-func (d *Deliverer) ReloadConfig(newConfig *config.DeliveryConfig) error {
+func (d *Deliverer) ReloadConfig(newConfig *config.OutboundConfig) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

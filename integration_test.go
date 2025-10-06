@@ -49,7 +49,7 @@ func TestFullMessageFlow(t *testing.T) {
 	defer q.Close()
 
 	// Create test config
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
 		SourceIPSelection:         "round-robin",
@@ -65,7 +65,7 @@ func TestFullMessageFlow(t *testing.T) {
 	// Use default HTTP config with test auth token
 	cfg := &config.Config{}
 	cfg.SetDefaults()
-	httpCfg := &cfg.HTTP
+	httpCfg := &cfg.Inbound
 	httpCfg.AuthToken = "test-token"
 
 	// Initialize HTTP handler (without circuit breaker for test)
@@ -431,7 +431,7 @@ func TestWorkerLifecycle(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
 		SourceIPSelection:         "round-robin",
@@ -642,7 +642,7 @@ func TestDeliveryRetry(t *testing.T) {
 	}
 	defer q.Close()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours:        1, // Short expiry for testing
 		InitialRetryDelaySeconds:  1,
 		MaxRetryDelaySeconds:      10,
@@ -710,7 +710,7 @@ func TestDestinationThrottling(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	defer logger.Sync()
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		PerDomainIntervalSeconds: 2, // 2 second throttle
 		MaxIPsPerMX:              5,
 		MXCacheTTLSeconds:        3600,
@@ -799,7 +799,7 @@ func TestConcurrentWorkers(t *testing.T) {
 	t.Logf("✓ Enqueued %d messages", numMessages)
 
 	// Create worker pool
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
 		SourceIPSelection:         "round-robin",
@@ -915,7 +915,7 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 		t.Fatalf("Failed to generate 1024-bit key: %v", err)
 	}
 
-	deliveryCfg := &config.DeliveryConfig{
+	deliveryCfg := &config.OutboundConfig{
 		MaxMessageAgeHours:        48,
 		SourceIPs:                 []string{},
 		SourceIPSelection:         "round-robin",
@@ -930,7 +930,7 @@ func TestDKIMSigningEndToEnd(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.SetDefaults()
-	httpCfg := &cfg.HTTP
+	httpCfg := &cfg.Inbound
 	httpCfg.AuthToken = "test-token"
 
 	httpHandler := handler.NewQueueMessageHandler(q, deliveryCfg, httpCfg, nil, logger)

@@ -41,18 +41,18 @@ func (rc *ReloadableConfig) Get() Config {
 	return *rc.config
 }
 
-// GetHTTP returns a copy of HTTP config
-func (rc *ReloadableConfig) GetHTTP() HTTPConfig {
+// GetInbound returns a copy of Inbound config
+func (rc *ReloadableConfig) GetInbound() InboundConfig {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
-	return rc.config.HTTP
+	return rc.config.Inbound
 }
 
-// GetDelivery returns a copy of Delivery config
-func (rc *ReloadableConfig) GetDelivery() DeliveryConfig {
+// GetOutbound returns a copy of Outbound config
+func (rc *ReloadableConfig) GetOutbound() OutboundConfig {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
-	return rc.config.Delivery
+	return rc.config.Outbound
 }
 
 // GetQueue returns a copy of Queue config
@@ -112,10 +112,10 @@ func (rc *ReloadableConfig) Reload() error {
 	rc.mu.Unlock()
 
 	rc.logger.Info("configuration reloaded successfully",
-		zap.Int("source_ips", len(newConfig.Delivery.SourceIPs)),
+		zap.Int("source_ips", len(newConfig.Outbound.SourceIPs)),
 		zap.Bool("tls_enabled", newConfig.TLS.Enabled),
 		zap.Bool("metrics_enabled", newConfig.Metrics.Enabled),
-		zap.Bool("circuit_breaker_enabled", newConfig.Delivery.CircuitBreakerEnabled))
+		zap.Bool("circuit_breaker_enabled", newConfig.Outbound.CircuitBreakerEnabled))
 
 	return nil
 }
@@ -129,9 +129,9 @@ func (rc *ReloadableConfig) validateReload(oldCfg, newCfg *Config) error {
 	}
 
 	// HTTP listen address cannot change (would require server restart)
-	if oldCfg.HTTP.Listen != newCfg.HTTP.Listen {
+	if oldCfg.Inbound.Listen != newCfg.Inbound.Listen {
 		return fmt.Errorf("http.listen cannot be changed during reload (old: %s, new: %s)",
-			oldCfg.HTTP.Listen, newCfg.HTTP.Listen)
+			oldCfg.Inbound.Listen, newCfg.Inbound.Listen)
 	}
 
 	// Worker count cannot change (would require worker pool restart)

@@ -10,13 +10,13 @@ import (
 type Config struct {
 	Server     ServerConfig     `toml:"server"`
 	Logging    LoggingConfig    `toml:"logging"`
-	HTTP       HTTPConfig       `toml:"http"`
+	Inbound    InboundConfig    `toml:"inbound"`
 	TLS        TLSConfig        `toml:"tls"`
 	DNS        DNSConfig        `toml:"dns"`
 	Metrics    MetricsConfig    `toml:"metrics"`
 	Health     HealthConfig     `toml:"health"`
 	Queue      QueueConfig      `toml:"queue"`
-	Delivery   DeliveryConfig   `toml:"delivery"`
+	Outbound   OutboundConfig   `toml:"outbound"`
 	Callbacks  CallbacksConfig  `toml:"callbacks"`
 	Reputation ReputationConfig `toml:"reputation"`
 	Cluster    ClusterConfig    `toml:"cluster"`
@@ -32,7 +32,7 @@ type LoggingConfig struct {
 	Format string `toml:"format"` // Log format: console, json (default: console)
 }
 
-type HTTPConfig struct {
+type InboundConfig struct {
 	Listen           string `toml:"listen"`
 	AuthToken        string `toml:"auth_token"`
 	MaxBodySizeBytes int64  `toml:"max_body_size_bytes"`   // Maximum request body size
@@ -96,7 +96,7 @@ type DNSConfig struct {
 	CacheNegativeTTLSeconds int      `toml:"cache_negative_ttl_seconds"` // Cache failed lookups (NXDOMAIN)
 }
 
-type DeliveryConfig struct {
+type OutboundConfig struct {
 	SourceIPs                 []string `toml:"source_ips"`
 	SourceIPSelection         string   `toml:"source_ip_selection"` // "round-robin", "random", "hash-domain"
 	MXCacheTTLSeconds         int      `toml:"mx_cache_ttl_seconds"`
@@ -166,23 +166,23 @@ func (c *Config) SetDefaults() {
 	if c.Logging.Format == "" {
 		c.Logging.Format = "console"
 	}
-	if c.HTTP.MaxBodySizeBytes == 0 {
-		c.HTTP.MaxBodySizeBytes = 35 * 1024 * 1024
+	if c.Inbound.MaxBodySizeBytes == 0 {
+		c.Inbound.MaxBodySizeBytes = 35 * 1024 * 1024
 	}
-	if c.HTTP.ReadTimeoutSecs == 0 {
-		c.HTTP.ReadTimeoutSecs = 30
+	if c.Inbound.ReadTimeoutSecs == 0 {
+		c.Inbound.ReadTimeoutSecs = 30
 	}
-	if c.HTTP.WriteTimeoutSecs == 0 {
-		c.HTTP.WriteTimeoutSecs = 30
+	if c.Inbound.WriteTimeoutSecs == 0 {
+		c.Inbound.WriteTimeoutSecs = 30
 	}
-	if c.HTTP.IdleTimeoutSecs == 0 {
-		c.HTTP.IdleTimeoutSecs = 120
+	if c.Inbound.IdleTimeoutSecs == 0 {
+		c.Inbound.IdleTimeoutSecs = 120
 	}
-	if c.HTTP.IdempotencyHeader == "" {
-		c.HTTP.IdempotencyHeader = "X-Idempotency-Key"
+	if c.Inbound.IdempotencyHeader == "" {
+		c.Inbound.IdempotencyHeader = "X-Idempotency-Key"
 	}
-	if c.HTTP.IdempotencyTTLHours == 0 {
-		c.HTTP.IdempotencyTTLHours = 24
+	if c.Inbound.IdempotencyTTLHours == 0 {
+		c.Inbound.IdempotencyTTLHours = 24
 	}
 
 	// Metrics defaults
@@ -213,54 +213,54 @@ func (c *Config) SetDefaults() {
 	if c.Queue.PollIntervalSeconds == 0 {
 		c.Queue.PollIntervalSeconds = 30
 	}
-	if c.Delivery.MXCacheTTLSeconds == 0 {
-		c.Delivery.MXCacheTTLSeconds = 3600
+	if c.Outbound.MXCacheTTLSeconds == 0 {
+		c.Outbound.MXCacheTTLSeconds = 3600
 	}
-	if c.Delivery.ConnectionTimeoutSeconds == 0 {
-		c.Delivery.ConnectionTimeoutSeconds = 30
+	if c.Outbound.ConnectionTimeoutSeconds == 0 {
+		c.Outbound.ConnectionTimeoutSeconds = 30
 	}
-	if c.Delivery.SMTPTimeoutSeconds == 0 {
-		c.Delivery.SMTPTimeoutSeconds = 60
+	if c.Outbound.SMTPTimeoutSeconds == 0 {
+		c.Outbound.SMTPTimeoutSeconds = 60
 	}
-	if c.Delivery.MaxMessageAgeHours == 0 {
-		c.Delivery.MaxMessageAgeHours = 48
+	if c.Outbound.MaxMessageAgeHours == 0 {
+		c.Outbound.MaxMessageAgeHours = 48
 	}
-	if c.Delivery.InitialRetryDelaySeconds == 0 {
-		c.Delivery.InitialRetryDelaySeconds = 300
+	if c.Outbound.InitialRetryDelaySeconds == 0 {
+		c.Outbound.InitialRetryDelaySeconds = 300
 	}
-	if c.Delivery.MaxRetryDelaySeconds == 0 {
-		c.Delivery.MaxRetryDelaySeconds = 43200
+	if c.Outbound.MaxRetryDelaySeconds == 0 {
+		c.Outbound.MaxRetryDelaySeconds = 43200
 	}
-	if c.Delivery.BackoffMultiplier == 0 {
-		c.Delivery.BackoffMultiplier = 2.0
+	if c.Outbound.BackoffMultiplier == 0 {
+		c.Outbound.BackoffMultiplier = 2.0
 	}
-	if c.Delivery.GreylistRetryDelaySeconds == 0 {
-		c.Delivery.GreylistRetryDelaySeconds = 120
+	if c.Outbound.GreylistRetryDelaySeconds == 0 {
+		c.Outbound.GreylistRetryDelaySeconds = 120
 	}
-	if c.Delivery.SourceIPSelection == "" {
-		c.Delivery.SourceIPSelection = "round-robin"
+	if c.Outbound.SourceIPSelection == "" {
+		c.Outbound.SourceIPSelection = "round-robin"
 	}
-	if c.Delivery.MaxIPsPerMX == 0 {
-		c.Delivery.MaxIPsPerMX = 5
+	if c.Outbound.MaxIPsPerMX == 0 {
+		c.Outbound.MaxIPsPerMX = 5
 	}
-	if c.Delivery.PerDomainIntervalSeconds == 0 {
-		c.Delivery.PerDomainIntervalSeconds = 2
+	if c.Outbound.PerDomainIntervalSeconds == 0 {
+		c.Outbound.PerDomainIntervalSeconds = 2
 	}
-	if c.Delivery.PerDomainRetrySeconds == 0 {
-		c.Delivery.PerDomainRetrySeconds = 5
+	if c.Outbound.PerDomainRetrySeconds == 0 {
+		c.Outbound.PerDomainRetrySeconds = 5
 	}
 	// Circuit breaker enabled by default for production safety
 	// Note: Boolean fields default to false in Go, so we check if explicitly disabled
 	// If not explicitly set in config, enable by default
-	c.Delivery.CircuitBreakerEnabled = true
-	if c.Delivery.CircuitBreakerFailureThreshold == 0 {
-		c.Delivery.CircuitBreakerFailureThreshold = 5
+	c.Outbound.CircuitBreakerEnabled = true
+	if c.Outbound.CircuitBreakerFailureThreshold == 0 {
+		c.Outbound.CircuitBreakerFailureThreshold = 5
 	}
-	if c.Delivery.CircuitBreakerSuccessThreshold == 0 {
-		c.Delivery.CircuitBreakerSuccessThreshold = 2
+	if c.Outbound.CircuitBreakerSuccessThreshold == 0 {
+		c.Outbound.CircuitBreakerSuccessThreshold = 2
 	}
-	if c.Delivery.CircuitBreakerOpenTimeoutSecs == 0 {
-		c.Delivery.CircuitBreakerOpenTimeoutSecs = 60
+	if c.Outbound.CircuitBreakerOpenTimeoutSecs == 0 {
+		c.Outbound.CircuitBreakerOpenTimeoutSecs = 60
 	}
 	// DNS defaults
 	if c.DNS.TimeoutSeconds == 0 {
