@@ -1,3 +1,45 @@
+// Package admin provides read-only database access for the fune-admin CLI tool.
+// It queries the SQLite database in read-only mode to retrieve queue statistics,
+// delivery throughput, failure analysis, and IP reputation status.
+//
+// Key Features:
+//   - Read-only database access (safe for production use)
+//   - Queue statistics by message status
+//   - Per-domain and per-sender message breakdowns
+//   - Delivery throughput analysis (last 1h, 6h, 24h, 7d)
+//   - Recent failure inspection with SMTP error details
+//   - IP reputation status tracking
+//   - Callback queue statistics
+//   - Database health metrics (size, connections, fragmentation)
+//
+// Architecture:
+//
+// The admin package opens a separate read-only SQLite connection to avoid
+// interfering with the main server's write operations. All queries use
+// aggregation and filtering to provide actionable insights for operators.
+//
+// Example Usage:
+//
+//	db, err := admin.NewAdminDB("/var/lib/fune/queue.db")
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	defer db.Close()
+//
+//	stats, err := db.GetQueueStats()
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+//	fmt.Printf("Total messages: %d\n", stats.Total)
+//	fmt.Printf("Queued: %d, Delivered: %d\n", stats.Queued, stats.Delivered)
+//
+//	// Get top domains by volume
+//	domains, err := db.GetDomainStats(10)
+//	for _, d := range domains {
+//		fmt.Printf("%s: %d messages (%d queued, %d failed)\n",
+//			d.Domain, d.Count, d.Queued, d.Failed)
+//	}
 package admin
 
 import (
@@ -10,7 +52,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// QueueStats represents queue statistics
+// QueueStats represents aggregate queue statistics across all message statuses.
 type QueueStats struct {
 	Total        int64
 	Queued       int64
@@ -22,7 +64,8 @@ type QueueStats struct {
 	OldestQueued *time.Time
 }
 
-// DomainStats represents per-domain statistics
+// DomainStats represents message statistics grouped by recipient domain.
+// Useful for identifying high-volume domains and delivery issues.
 type DomainStats struct {
 	Domain  string
 	Count   int64
@@ -31,7 +74,8 @@ type DomainStats struct {
 	Failed  int64 // Hard bounces + expired
 }
 
-// SenderStats represents per-sender statistics
+// SenderStats represents message statistics grouped by sender email address.
+// Useful for identifying high-volume senders and per-sender delivery issues.
 type SenderStats struct {
 	FromAddr string
 	Count    int64
@@ -40,7 +84,8 @@ type SenderStats struct {
 	Failed   int64
 }
 
-// ThroughputStats represents delivery throughput statistics
+// ThroughputStats represents delivery throughput over various time windows.
+// Includes success rate for assessing overall delivery health.
 type ThroughputStats struct {
 	Last1Hour     int64
 	Last6Hours    int64
@@ -50,7 +95,8 @@ type ThroughputStats struct {
 	TotalAttempts int64
 }
 
-// CircuitBreakerInfo represents circuit breaker state from database
+// CircuitBreakerInfo represents circuit breaker state from the database.
+// Not currently used but reserved for future circuit breaker persistence.
 type CircuitBreakerInfo struct {
 	Domain              string
 	State               string
@@ -59,12 +105,15 @@ type CircuitBreakerInfo struct {
 	LastStateChange     *time.Time
 }
 
-// AdminDB provides database query functions for admin CLI
+// AdminDB provides read-only database query functions for the admin CLI.
+// Opens the database in read-only mode to prevent accidental writes.
 type AdminDB struct {
 	db *sql.DB
 }
 
-// NewAdminDB creates a new admin database connection
+// NewAdminDB creates a new admin database connection in read-only mode.
+// The database is opened with "mode=ro" to ensure safe concurrent access
+// with the running server. Returns an error if the database file doesn't exist.
 func NewAdminDB(dbPath string) (*AdminDB, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?mode=ro") // Read-only mode
 	if err != nil {
@@ -74,12 +123,15 @@ func NewAdminDB(dbPath string) (*AdminDB, error) {
 	return &AdminDB{db: db}, nil
 }
 
-// Close closes the database connection
+// Close closes the database connection. Should be called when the AdminDB
+// is no longer needed to release resources.
 func (a *AdminDB) Close() error {
 	return a.db.Close()
 }
 
-// GetQueueStats retrieves overall queue statistics
+// GetQueueStats retrieves overall queue statistics including message counts
+// by status and the timestamp of the oldest queued message. Useful for
+// monitoring queue depth and identifying stale messages.
 func (a *AdminDB) GetQueueStats() (*QueueStats, error) {
 	stats := &QueueStats{}
 
@@ -125,7 +177,9 @@ func (a *AdminDB) GetQueueStats() (*QueueStats, error) {
 	return stats, nil
 }
 
-// GetDomainStats retrieves per-domain statistics
+// GetDomainStats retrieves per-domain statistics for active messages
+// (queued, sending, or failed), ordered by total message count descending.
+// Limit specifies the maximum number of domains to return.
 func (a *AdminDB) GetDomainStats(limit int) ([]DomainStats, error) {
 	query := `
 		SELECT
@@ -160,7 +214,9 @@ func (a *AdminDB) GetDomainStats(limit int) ([]DomainStats, error) {
 	return stats, nil
 }
 
-// GetSenderStats retrieves per-sender statistics
+// GetSenderStats retrieves per-sender statistics for active messages
+// (queued, sending, or failed), ordered by total message count descending.
+// Limit specifies the maximum number of senders to return.
 func (a *AdminDB) GetSenderStats(limit int) ([]SenderStats, error) {
 	query := `
 		SELECT
@@ -195,7 +251,9 @@ func (a *AdminDB) GetSenderStats(limit int) ([]SenderStats, error) {
 	return stats, nil
 }
 
-// GetThroughputStats retrieves delivery throughput statistics
+// GetThroughputStats retrieves delivery throughput statistics across
+// multiple time windows (1h, 6h, 24h, 7d) and calculates overall success rate.
+// Based on delivery_attempts table, not final message status.
 func (a *AdminDB) GetThroughputStats() (*ThroughputStats, error) {
 	stats := &ThroughputStats{}
 
@@ -240,7 +298,9 @@ func (a *AdminDB) GetThroughputStats() (*ThroughputStats, error) {
 	return stats, nil
 }
 
-// GetRecentFailures retrieves recent delivery failures
+// GetRecentFailures retrieves recent delivery failures with SMTP error details,
+// ordered by attempt timestamp descending. Useful for debugging delivery issues
+// and identifying problematic recipient domains. Limit specifies max results.
 func (a *AdminDB) GetRecentFailures(limit int) ([]FailureInfo, error) {
 	query := `
 		SELECT
@@ -306,7 +366,8 @@ func (a *AdminDB) GetRecentFailures(limit int) ([]FailureInfo, error) {
 	return failures, nil
 }
 
-// FailureInfo represents a delivery failure record
+// FailureInfo represents a delivery failure record with SMTP error details.
+// Used for failure analysis and debugging delivery issues.
 type FailureInfo struct {
 	MessageID     string
 	AttemptedAt   time.Time
@@ -317,7 +378,8 @@ type FailureInfo struct {
 	ErrorCategory string
 }
 
-// GetCallbackStats retrieves callback queue statistics
+// GetCallbackStats retrieves callback queue statistics including total callbacks,
+// pending (not yet completed), and completed counts.
 func (a *AdminDB) GetCallbackStats() (*CallbackStats, error) {
 	stats := &CallbackStats{}
 
@@ -337,14 +399,16 @@ func (a *AdminDB) GetCallbackStats() (*CallbackStats, error) {
 	return stats, nil
 }
 
-// CallbackStats represents callback queue statistics
+// CallbackStats represents callback queue statistics. Useful for monitoring
+// webhook delivery backlog and identifying webhook endpoint issues.
 type CallbackStats struct {
 	Total     int64
 	Pending   int64
 	Completed int64
 }
 
-// IPReputationInfo represents IP reputation status
+// IPReputationInfo represents IP reputation status for a source IP address.
+// Tracks degraded IPs and their failure reasons for reputation management.
 type IPReputationInfo struct {
 	SourceIP      string
 	Status        string // "degraded" or "healthy"
@@ -355,8 +419,9 @@ type IPReputationInfo struct {
 	SMTPResponse  string
 }
 
-// GetDatabaseStats retrieves comprehensive database statistics
-// This is a convenience wrapper that creates a temporary Queue connection
+// GetDatabaseStats retrieves comprehensive database statistics including file
+// size, WAL size, fragmentation ratio, and connection pool stats. This is a
+// convenience function that opens a temporary read-only connection.
 func GetDatabaseStats(dbPath string) (*queue.DatabaseStats, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?mode=ro&_journal_mode=WAL")
 	if err != nil {
@@ -415,7 +480,9 @@ func GetDatabaseStats(dbPath string) (*queue.DatabaseStats, error) {
 	return stats, nil
 }
 
-// GetIPReputationStats retrieves IP reputation information
+// GetIPReputationStats retrieves IP reputation information for all tracked
+// source IPs, ordered by status (degraded first) and degradation timestamp.
+// Useful for monitoring IP reputation and identifying problematic IPs.
 func (a *AdminDB) GetIPReputationStats() ([]IPReputationInfo, error) {
 	query := `
 		SELECT

@@ -1,3 +1,44 @@
+// Package handler provides HTTP API endpoints for Fune's message submission and management.
+//
+// The handler package implements:
+//   - Message submission API (POST /v1/messages) with JSON and form-encoded support
+//   - Bearer token authentication with constant-time comparison
+//   - Rate limiting per IP address with token bucket algorithm
+//   - Circuit breaker integration to reject requests during delivery failures
+//   - Distributed idempotency via gossip protocol (cluster mode)
+//   - Request validation and MIME message construction
+//   - Security headers middleware (X-Content-Type-Options, X-Frame-Options, etc.)
+//   - Health check endpoints with comprehensive system status
+//   - Admin cluster status endpoints
+//   - Prometheus metrics middleware
+//
+// Request Flow:
+//
+//	Client → Rate Limiter → Auth Check → Circuit Breaker Check
+//	→ Idempotency Check (Gossip + Database) → Request Validation
+//	→ MIME Message Construction → Queue Enqueue → 202 Accepted Response
+//
+// The API is designed to be asynchronous: all requests return 202 Accepted immediately
+// after queueing. Delivery status is communicated via webhook callbacks.
+//
+// Security Features:
+//   - Bearer token authentication (Authorization: Bearer <token>)
+//   - Rate limiting per IP (configurable requests per window)
+//   - Request body size limits (default 10MB)
+//   - Constant-time token comparison to prevent timing attacks
+//   - Security headers middleware (defense in depth)
+//   - X-Forwarded-For and X-Real-IP header support for proxied requests
+//
+// Idempotency:
+//   - Two-level idempotency: gossip protocol (cluster-wide) + database (persistent)
+//   - Custom header support (default: Idempotency-Key)
+//   - Returns 409 Conflict if request is being processed by another node
+//   - Returns 202 Accepted with existing message ID if already completed
+//
+// Circuit Breaker Integration:
+//   - Rejects requests with 503 Service Unavailable when delivery circuit is open
+//   - Prevents accepting messages that cannot be delivered
+//   - Includes retry-after header for client backoff
 package handler
 
 import (
@@ -19,13 +60,55 @@ import (
 	"go.uber.org/zap"
 )
 
-// GossipService interface for gossip protocol integration
+// GossipService defines the interface for distributed idempotency via gossip protocol.
+// Implementations must support broadcasting idempotency keys to cluster nodes and
+// checking if a key has been claimed by another node.
+//
+// This interface is used for best-effort distributed idempotency coordination:
+//   - BroadcastIdempotencyKey announces a key to the cluster after queuing
+//   - CheckIdempotencyKey verifies if a key is claimed by another node before queuing
+//
+// The gossip protocol provides eventual consistency for idempotency across cluster nodes.
+// Database idempotency checks provide authoritative persistent deduplication.
 type GossipService interface {
+	// BroadcastIdempotencyKey broadcasts an idempotency key to all cluster nodes.
+	// This is called after successfully enqueuing a message to prevent duplicates
+	// on other nodes. Returns an error if the broadcast fails (logged but not fatal).
 	BroadcastIdempotencyKey(key string) error
+
+	// CheckIdempotencyKey checks if an idempotency key has been claimed by another node.
+	// Returns the node ID that claimed the key, or empty string if unclaimed.
+	// This provides fast distributed deduplication before database queries.
 	CheckIdempotencyKey(key string) string
 }
 
-// QueueMessageHandler handles HTTP requests and enqueues messages
+// QueueMessageHandler handles HTTP message submission requests and enqueues them for delivery.
+//
+// This is the primary HTTP handler for Fune's API. It implements:
+//   - Request parsing (JSON and form-encoded)
+//   - Authentication via Bearer token
+//   - Rate limiting per client IP
+//   - Circuit breaker checks
+//   - Two-level idempotency (gossip + database)
+//   - MIME message construction
+//   - DKIM signature validation
+//   - Message queueing with immediate 202 Accepted response
+//
+// The handler returns 202 Accepted immediately after queueing, making the API fully asynchronous.
+// Delivery happens in background workers, with results communicated via webhook callbacks.
+//
+// Thread Safety:
+//
+// QueueMessageHandler is safe for concurrent use by multiple goroutines. The underlying
+// queue, rate limiter, and circuit breaker are all thread-safe.
+//
+// Example Usage:
+//
+//	handler := NewQueueMessageHandler(queue, deliveryCfg, httpCfg, circuitBreaker, logger)
+//	if gossip != nil {
+//	    handler.SetGossip(gossip) // Enable distributed idempotency
+//	}
+//	http.Handle("/v1/messages", handler)
 type QueueMessageHandler struct {
 	queue          *queue.Queue
 	deliveryConfig *config.OutboundConfig
@@ -36,7 +119,32 @@ type QueueMessageHandler struct {
 	logger         *zap.Logger
 }
 
-// NewQueueMessageHandler creates a new queue-based message handler
+// NewQueueMessageHandler creates a new HTTP handler for message submission.
+//
+// Parameters:
+//   - q: Queue for message persistence and retrieval
+//   - deliveryCfg: Outbound delivery configuration (used for message expiration calculation)
+//   - httpCfg: Inbound HTTP API configuration (auth token, rate limits, body size, etc.)
+//   - circuitBreaker: Delivery circuit breaker for rejecting requests during delivery failures
+//   - logger: Structured logger for request/error logging
+//
+// The handler automatically initializes rate limiting if enabled in httpCfg.
+// Gossip service must be set separately via SetGossip() after construction.
+//
+// Example:
+//
+//	handler := NewQueueMessageHandler(
+//	    queue,
+//	    &config.OutboundConfig{MaxMessageAgeHours: 48},
+//	    &config.InboundConfig{
+//	        AuthToken:            "secret-token",
+//	        RateLimitEnabled:     true,
+//	        RateLimitRequestsPerIP: 100,
+//	        RateLimitWindowSeconds: 60,
+//	    },
+//	    circuitBreaker,
+//	    logger,
+//	)
 func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.OutboundConfig, httpCfg *config.InboundConfig, circuitBreaker *delivery.CircuitBreaker, logger *zap.Logger) *QueueMessageHandler {
 	var rateLimiter *RateLimiter
 	if httpCfg.RateLimitEnabled {
@@ -57,12 +165,97 @@ func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.OutboundConfig, 
 	}
 }
 
-// SetGossip sets the gossip service for distributed idempotency
+// SetGossip configures the gossip service for distributed idempotency across cluster nodes.
+//
+// This method must be called after handler creation if cluster mode is enabled. The gossip
+// service enables:
+//   - Broadcasting idempotency keys after successful message queueing
+//   - Checking if an idempotency key has been claimed by another node
+//
+// Without gossip, idempotency is still enforced via database checks, but duplicate requests
+// may briefly queue on multiple nodes before database deduplication occurs.
+//
+// Example:
+//
+//	handler := NewQueueMessageHandler(...)
+//	gossip, _ := gossip.NewGossip(...)
+//	handler.SetGossip(gossip) // Enable distributed idempotency
 func (h *QueueMessageHandler) SetGossip(gossip GossipService) {
 	h.gossip = gossip
 }
 
-// ServeHTTP handles incoming message submission requests
+// ServeHTTP handles incoming HTTP message submission requests.
+//
+// This method implements the http.Handler interface and processes POST requests to
+// submit email messages for delivery. The request flow is:
+//
+//  1. Method validation (must be POST)
+//  2. Rate limiting check (per client IP)
+//  3. Circuit breaker check (reject if delivery circuit is open)
+//  4. Request body size limit enforcement (MaxBodySizeBytes)
+//  5. Bearer token authentication (if configured)
+//  6. Content-Type parsing (application/json or application/x-www-form-urlencoded)
+//  7. Request validation (required fields: from, to, subject, text/html)
+//  8. Idempotency check (gossip + database)
+//  9. DKIM key validation (if provided)
+//  10. MIME message construction
+//  11. Message queueing
+//  12. Idempotency key broadcast (if gossip enabled)
+//  13. 202 Accepted response with message ID
+//
+// Supported Content Types:
+//   - application/json: JSON request body with MessageRequest fields
+//   - application/x-www-form-urlencoded: Form-encoded request body
+//
+// Authentication:
+//
+// If httpConfig.AuthToken is set, requests must include:
+//
+//	Authorization: Bearer <token>
+//
+// Token comparison uses constant-time comparison to prevent timing attacks.
+//
+// Rate Limiting:
+//
+// If rate limiting is enabled, requests exceeding the configured limit return:
+//
+//	429 Too Many Requests
+//	{"error": "API Rate Limit Exceeded"}
+//
+// Circuit Breaker:
+//
+// If the delivery circuit breaker is open, requests are rejected with:
+//
+//	503 Service Unavailable
+//	{"error": "Service temporarily unavailable due to delivery failures", "retry_after": "60"}
+//
+// Idempotency:
+//
+// Clients can include an idempotency header (default: Idempotency-Key) to prevent duplicate
+// message submission. Duplicate requests return:
+//   - 409 Conflict if request is being processed by another cluster node
+//   - 202 Accepted with existing message ID if request has completed
+//
+// Response:
+//
+// On success, returns 202 Accepted with JSON response:
+//
+//	{
+//	    "message_id": "unique-message-id",
+//	    "status": "queued",
+//	    "queued_at": "2025-10-07T12:34:56Z"
+//	}
+//
+// Error Responses:
+//   - 400 Bad Request: Missing required fields, invalid email, invalid DKIM key, etc.
+//   - 401 Unauthorized: Missing or invalid authentication token
+//   - 405 Method Not Allowed: Non-POST request
+//   - 409 Conflict: Duplicate request detected (another node processing)
+//   - 413 Request Entity Too Large: Request body exceeds MaxBodySizeBytes
+//   - 415 Unsupported Media Type: Invalid Content-Type
+//   - 429 Too Many Requests: Rate limit exceeded
+//   - 500 Internal Server Error: Failed to build message or enqueue
+//   - 503 Service Unavailable: Circuit breaker open
 func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer recovery.RecoverPanicWithCallback(h.logger, "HTTP handler", func(p interface{}) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -336,7 +529,28 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(response)
 }
 
-// buildRawMessage constructs a MIME message from the request
+// buildRawMessage constructs a RFC 5322 MIME message from a MessageRequest.
+//
+// This method generates a properly formatted MIME email message with:
+//   - Standard email headers (From, To, Subject, Date)
+//   - UTF-8 encoded content
+//   - Multipart/alternative structure (if both text and HTML provided)
+//   - Single text/plain or text/html part (if only one provided)
+//
+// Message Structure:
+//
+// If both text and HTML are provided:
+//
+//	multipart/alternative
+//	├── text/plain (UTF-8)
+//	└── text/html (UTF-8)
+//
+// If only one body type is provided, a single inline part is created.
+//
+// The generated message is stored in the queue and will be DKIM-signed (if configured)
+// before SMTP delivery.
+//
+// Returns the raw MIME message bytes, or an error if message construction fails.
 func (h *QueueMessageHandler) buildRawMessage(req *MessageRequest) ([]byte, error) {
 	var buf bytes.Buffer
 

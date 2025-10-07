@@ -1,63 +1,108 @@
-.PHONY: all clean build fune fune-admin install test 
-
-# Binary names - can be overridden by environment variables
-fune_BINARY ?= fune-server
-fune_ADMIN_BINARY ?= fune-admin
-fune_LINUX_BINARY ?= fune-linux-amd64
-fune_ADMIN_LINUX_BINARY ?= fune-admin-linux-amd64
-fune_FREEBSD_BINARY ?= fune-freebsd-amd64
-fune_ADMIN_FREEBSD_BINARY ?= fune-admin-freebsd-amd64
+.PHONY: all clean build fune-server fune-admin install test coverage linux-musl freebsd help
 
 # ====================================================================================
+# Variables
+# ====================================================================================
+
+# Binary names
+FUNE_SERVER_BIN ?= fune-server
+FUNE_ADMIN_BIN ?= fune-admin
+
+# Target directories
+CMD_DIR ?= ./cmd
+
+# Go source paths
+FUNE_SERVER_SRC = $(CMD_DIR)/fune-server
+FUNE_ADMIN_SRC = $(CMD_DIR)/fune-admin
+
 # Version Information
-# You can override these variables during the build, e.g., make build VERSION=v1.0.0
-# ====================================================================================
+# Override with: make build VERSION=v1.0.0
 VERSION ?= $(shell git describe --tags --always --dirty --match='v*')
 COMMIT ?= $(shell git rev-parse --short HEAD)
 DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Go linker flags to inject version info
+# Go linker flags
 LDFLAGS_VARS = -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.date=${DATE}'
 LDFLAGS = -ldflags="${LDFLAGS_VARS}"
 
-# Default target
+# Cross-compilation binaries
+FUNE_LINUX_BINARY ?= fune-linux-amd64
+FUNE_ADMIN_LINUX_BINARY ?= fune-admin-linux-amd64
+FUNE_FREEBSD_BINARY ?= fune-freebsd-amd64
+FUNE_ADMIN_FREEBSD_BINARY ?= fune-admin-freebsd-amd64
+
+
+# ====================================================================================
+# Default Target
+# ====================================================================================
+
 all: build
 
-# Build both executables
+# ====================================================================================
+# Build Targets
+# ====================================================================================
+
 build: fune-server fune-admin
 
-# Build the main fune server
 fune-server:
-	go build $(LDFLAGS) -o $(fune_BINARY) ./cmd/fune-server
+	go build $(LDFLAGS) -o $(CMD_DIR)/$(FUNE_SERVER_BIN) $(FUNE_SERVER_SRC)
 
-# Build the fune-admin tool
 fune-admin:
-	go build $(LDFLAGS) -o $(fune_ADMIN_BINARY) ./cmd/fune-admin
+	go build $(LDFLAGS) -o $(CMD_DIR)/$(FUNE_ADMIN_BIN) $(FUNE_ADMIN_SRC)
 
-# Install both executables to GOPATH/bin
+# ====================================================================================
+# Installation and Cleanup
+# ====================================================================================
+
 install:
-	go install ./cmd/fune-server
-	go install ./cmd/fune-admin
+	go install $(FUNE_SERVER_SRC)
+	go install $(FUNE_ADMIN_SRC)
 
-# Clean build artifacts
 clean:
-	rm -f $(fune_BINARY) $(fune_ADMIN_BINARY) $(fune_LINUX_BINARY) $(fune_ADMIN_LINUX_BINARY) $(fune_FREEBSD_BINARY) $(fune_ADMIN_FREEBSD_BINARY)
+	rm -f $(CMD_DIR)/$(FUNE_SERVER_BIN) $(CMD_DIR)/$(FUNE_ADMIN_BIN)
+	rm -f $(CMD_DIR)/$(FUNE_LINUX_BINARY) $(CMD_DIR)/$(FUNE_ADMIN_LINUX_BINARY)
+	rm -f $(CMD_DIR)/$(FUNE_FREEBSD_BINARY) $(CMD_DIR)/$(FUNE_ADMIN_FREEBSD_BINARY)
+	rm -f coverage.out
 
-# Run tests
+# ====================================================================================
+# Testing
+# ====================================================================================
+
 test:
 	go test -v ./...
 
-# Run tests with coverage
 coverage:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out
 
-# Cross-compile with musl libc for Linux
-linux-musl:
-	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(fune_LINUX_BINARY) ./cmd/fune-server
-	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(fune_ADMIN_LINUX_BINARY) ./cmd/fune-admin
+# ====================================================================================
+# Cross-compilation
+# ====================================================================================
 
-# Cross-compile for FreeBSD
+linux-musl:
+	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(CMD_DIR)/$(FUNE_LINUX_BINARY) $(FUNE_SERVER_SRC)
+	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(CMD_DIR)/$(FUNE_ADMIN_LINUX_BINARY) $(FUNE_ADMIN_SRC)
+
 freebsd:
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(fune_FREEBSD_BINARY) ./cmd/fune-server
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(fune_ADMIN_FREEBSD_BINARY) ./cmd/fune-admin
+	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(CMD_DIR)/$(FUNE_FREEBSD_BINARY) $(FUNE_SERVER_SRC)
+	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(CMD_DIR)/$(FUNE_ADMIN_FREEBSD_BINARY) $(FUNE_ADMIN_SRC)
+
+# ====================================================================================
+# Help
+# ====================================================================================
+
+help:
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all                Build all binaries (default)"
+	@echo "  build              Build fune-server and fune-admin"
+	@echo "  fune-server        Build the fune-server binary"
+	@echo "  fune-admin         Build the fune-admin binary"
+	@echo "  install            Install binaries to GOPATH/bin"
+	@echo "  clean              Remove build artifacts"
+	@echo "  test               Run tests"
+	@echo "  coverage           Run tests with coverage"
+	@echo "  linux-musl         Cross-compile for Linux with musl"
+	@echo "  freebsd            Cross-compile for FreeBSD"
+	@echo "  help               Show this help message"

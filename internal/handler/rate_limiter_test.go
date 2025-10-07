@@ -157,9 +157,8 @@ func TestExtractIP(t *testing.T) {
 }
 
 func TestRateLimiter_Cleanup(t *testing.T) {
-	// Short cleanup interval for testing
+	// Use 1 second window, cleanup runs every 2 seconds by default
 	rl := NewRateLimiter(10, 1) // 10 requests per 1 second
-	rl.cleanupInterval = 100 * time.Millisecond
 	defer rl.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/messages", nil)
@@ -170,20 +169,24 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 
 	// Verify bucket exists
 	rl.mu.RLock()
-	if len(rl.buckets) != 1 {
-		t.Errorf("expected 1 bucket, got %d", len(rl.buckets))
-	}
+	initialBuckets := len(rl.buckets)
 	rl.mu.RUnlock()
 
-	// Wait for cleanup (2x the cleanup interval to ensure it runs)
-	time.Sleep(250 * time.Millisecond)
+	if initialBuckets != 1 {
+		t.Errorf("expected 1 bucket, got %d", initialBuckets)
+	}
 
-	// Bucket should be cleaned up
+	// Wait for window to expire (1s) + cleanup to run (2s) + margin
+	time.Sleep(3500 * time.Millisecond)
+
+	// Bucket should be cleaned up (expired buckets are removed)
 	rl.mu.RLock()
-	if len(rl.buckets) != 0 {
-		t.Errorf("expected 0 buckets after cleanup, got %d", len(rl.buckets))
-	}
+	finalBuckets := len(rl.buckets)
 	rl.mu.RUnlock()
+
+	if finalBuckets != 0 {
+		t.Errorf("expected 0 buckets after cleanup, got %d", finalBuckets)
+	}
 }
 
 func TestRateLimiter_XForwardedForWithSpaces(t *testing.T) {

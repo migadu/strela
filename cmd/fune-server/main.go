@@ -1,3 +1,51 @@
+// Package main implements the fune-server, a production-ready SMTP delivery service.
+//
+// The server accepts email messages via HTTP API, queues them in SQLite with WAL mode,
+// and delivers them asynchronously to recipient MX servers using a pool of background workers.
+//
+// Architecture:
+//
+//	HTTP API → SQLite Queue → Worker Pool → Direct MX Delivery
+//	              ↓                           ↓
+//	         Callback Queue ← Webhook Notifications
+//
+// Key features:
+//   - Asynchronous delivery: Returns 202 Accepted immediately after queueing
+//   - Persistent queue: SQLite with Write-Ahead Logging for crash recovery
+//   - Intelligent retry: Exponential backoff with greylisting support
+//   - IP reputation: Tracks and rotates degraded source IPs
+//   - Circuit breaker: Prevents accepting messages during delivery failures
+//   - Hot reload: Configuration updates via SIGHUP (preserves connections)
+//   - TLS support: File-based or Let's Encrypt with auto-renewal
+//   - Clustering: Optional gossip protocol for distributed idempotency and leader election
+//   - Observability: Prometheus metrics, structured logging, health endpoints
+//
+// Startup sequence:
+//  1. Load configuration from config.toml
+//  2. Initialize logger (JSON or console format)
+//  3. Write PID file for signal handling
+//  4. Initialize SQLite queue with WAL mode
+//  5. Start worker pool for asynchronous delivery
+//  6. Start callback handler for webhook notifications
+//  7. Setup HTTP servers (API, metrics, health, ACME challenge)
+//  8. Register signal handlers (SIGINT/SIGTERM=shutdown, SIGHUP=reload)
+//  9. Enter main event loop
+//
+// Signals:
+//   - SIGINT/SIGTERM: Graceful shutdown (30s timeout)
+//   - SIGHUP: Hot configuration reload
+//
+// Usage:
+//
+//	fune-server                  # Uses config.toml in current directory
+//	fune-server -version         # Show version information
+//
+// Environment variables:
+//   - AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY: For S3 certificate storage
+//
+// Exit codes:
+//   - 0: Clean shutdown
+//   - 1: Configuration or initialization error
 package main
 
 import (
@@ -29,14 +77,30 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// Version information, injected at build time
+// Version information, injected at build time via ldflags.
+// Set during compilation with:
+//
+//	go build -ldflags "-X main.version=1.0.0 -X main.commit=$(git rev-parse HEAD) -X main.date=$(date -u +%Y-%m-%d)"
 var (
 	version = "dev"
 	commit  = "none"
 	date    = "unknown"
 )
 
-// basicAuthMiddleware wraps an HTTP handler with HTTP Basic Authentication
+// basicAuthMiddleware wraps an HTTP handler with HTTP Basic Authentication.
+//
+// This middleware is used to protect sensitive endpoints (metrics, health) from
+// unauthorized access. It performs constant-time comparison of credentials to
+// prevent timing attacks.
+//
+// Parameters:
+//   - next: The handler to wrap with authentication
+//   - username: Expected username for Basic Auth
+//   - password: Expected password for Basic Auth
+//   - logger: Logger for recording unauthorized access attempts
+//
+// Returns an HTTP handler that enforces authentication before delegating to next.
+// Unauthorized requests receive 401 Unauthorized with WWW-Authenticate header.
 func basicAuthMiddleware(next http.Handler, username, password string, logger *zap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Get credentials from Authorization header
@@ -59,7 +123,25 @@ func basicAuthMiddleware(next http.Handler, username, password string, logger *z
 	})
 }
 
-// initLogger creates a logger that writes to stdout/stderr (systemd-compatible)
+// initLogger creates a zap logger configured for production use.
+//
+// The logger writes to stdout/stderr for systemd compatibility and supports
+// two output formats:
+//   - JSON: Structured logging suitable for log aggregation systems
+//   - Console: Human-readable format with colored log levels
+//
+// Log levels supported: debug, info, warn, error
+//
+// The logger includes:
+//   - Caller information (file:line) for all messages
+//   - Stack traces for error-level logs
+//   - ISO8601 timestamps for JSON format
+//   - Colored output for console format
+//
+// Parameters:
+//   - logCfg: Configuration specifying log level and format
+//
+// Returns a configured zap logger or an error if configuration is invalid.
 func initLogger(logCfg *config.LoggingConfig) (*zap.Logger, error) {
 	// Parse log level
 	var level zapcore.Level
@@ -105,6 +187,24 @@ func initLogger(logCfg *config.LoggingConfig) (*zap.Logger, error) {
 	return logger, nil
 }
 
+// main is the entry point for fune-server.
+//
+// It orchestrates the complete server lifecycle:
+//  1. Configuration loading and validation
+//  2. Component initialization (queue, workers, deliverer, callbacks)
+//  3. HTTP server setup (API, metrics, health, TLS)
+//  4. Background job scheduling (cleanup, monitoring, gossip)
+//  5. Signal handling and graceful shutdown
+//
+// The function blocks until a shutdown signal (SIGINT/SIGTERM) is received,
+// at which point it initiates a graceful shutdown with a 30-second timeout.
+//
+// Configuration hot reload is supported via SIGHUP signal. Reloadable settings
+// include source IPs, rate limits, circuit breaker thresholds, and DNS config.
+// Non-reloadable settings (database path, worker count) require a restart.
+//
+// All background goroutines are protected with panic recovery to prevent
+// process crashes from individual component failures.
 func main() {
 	// Parse command-line flags
 	showVersion := flag.Bool("version", false, "Show version information and exit")

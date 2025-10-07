@@ -11,13 +11,59 @@ import (
 	"go.uber.org/zap"
 )
 
-// ClusterStatusHandler provides cluster-wide status information
+// ClusterStatusHandler provides cluster-wide status information via HTTP API.
+//
+// This handler exposes detailed cluster status when gossip protocol is enabled,
+// including:
+//   - List of all cluster nodes with their IDs
+//   - Per-node queue depth and active worker counts
+//   - Node uptime and last-seen timestamps
+//   - Total node count
+//
+// The handler returns 503 Service Unavailable if gossip protocol is not enabled.
+//
+// Example Response:
+//
+//	{
+//	    "timestamp": "2025-10-07T12:34:56Z",
+//	    "node_count": 3,
+//	    "nodes": {
+//	        "node-1": {
+//	            "node_id": "node-1",
+//	            "queue_depth": 123,
+//	            "active_workers": 5,
+//	            "uptime": "2 days 5 hours",
+//	            "uptime_seconds": 190800,
+//	            "last_seen": "2025-10-07T12:34:55Z"
+//	        },
+//	        "node-2": {...},
+//	        "node-3": {...}
+//	    }
+//	}
+//
+// This endpoint is useful for:
+//   - Cluster health monitoring
+//   - Load balancing decisions
+//   - Capacity planning
+//   - Debugging distributed issues
 type ClusterStatusHandler struct {
 	statusProvider *gossip.Gossip
 	logger         *zap.Logger
 }
 
-// NewClusterStatusHandler creates a new cluster status handler
+// NewClusterStatusHandler creates a new cluster status HTTP handler.
+//
+// Parameters:
+//   - g: Gossip service for cluster status (can be nil if clustering disabled)
+//   - logger: Structured logger for error logging
+//
+// If the gossip service is nil, the handler will respond with 503 Service Unavailable
+// to all requests.
+//
+// Example:
+//
+//	handler := NewClusterStatusHandler(gossip, logger)
+//	http.Handle("/admin/cluster/status", handler)
 func NewClusterStatusHandler(g *gossip.Gossip, logger *zap.Logger) *ClusterStatusHandler {
 	return &ClusterStatusHandler{
 		statusProvider: g,
@@ -25,7 +71,11 @@ func NewClusterStatusHandler(g *gossip.Gossip, logger *zap.Logger) *ClusterStatu
 	}
 }
 
-// ClusterNodeStatus represents the status of a node in the cluster
+// ClusterNodeStatus represents the status of a single node in the cluster.
+//
+// This structure provides detailed per-node metrics for monitoring and operations.
+// The UptimeSeconds field is included for easy programmatic comparisons and alerting,
+// while Uptime provides a human-readable duration string.
 type ClusterNodeStatus struct {
 	NodeID        string `json:"node_id"`
 	QueueDepth    int64  `json:"queue_depth"`
@@ -35,14 +85,36 @@ type ClusterNodeStatus struct {
 	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
-// ClusterStatusResponse represents the cluster status API response
+// ClusterStatusResponse represents the complete cluster status API response.
+//
+// This structure aggregates status information from all nodes in the cluster,
+// providing a comprehensive view of cluster health and capacity.
 type ClusterStatusResponse struct {
 	Timestamp string                       `json:"timestamp"`
 	Nodes     map[string]ClusterNodeStatus `json:"nodes"`
 	NodeCount int                          `json:"node_count"`
 }
 
-// ServeHTTP handles cluster status requests
+// ServeHTTP handles cluster status requests and returns node information.
+//
+// This method implements the http.Handler interface and only accepts GET requests.
+// It queries the gossip protocol for current cluster state and returns detailed
+// per-node status information.
+//
+// HTTP Status Codes:
+//   - 200 OK: Cluster status retrieved successfully
+//   - 405 Method Not Allowed: Non-GET request
+//   - 503 Service Unavailable: Gossip protocol not enabled
+//
+// Example:
+//
+//	GET /admin/cluster/status
+//	→ 200 OK
+//	{
+//	    "timestamp": "2025-10-07T12:34:56Z",
+//	    "node_count": 3,
+//	    "nodes": {...}
+//	}
 func (h *ClusterStatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -85,7 +157,20 @@ func (h *ClusterStatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(response)
 }
 
-// formatDuration formats a duration in a human-readable format
+// formatDuration formats a time.Duration into a human-readable string.
+//
+// The function automatically selects the most appropriate unit:
+//   - Less than 1 minute: "45s"
+//   - Less than 1 hour: "45 minutes"
+//   - Less than 24 hours: "12 hours"
+//   - 24 hours or more: "2 days 5 hours" or "7 days"
+//
+// Examples:
+//   - 45 * time.Second → "45s"
+//   - 90 * time.Minute → "90 minutes"
+//   - 5 * time.Hour → "5 hours"
+//   - 50 * time.Hour → "2 days 2 hours"
+//   - 72 * time.Hour → "3 days"
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return d.Round(time.Second).String()
@@ -106,6 +191,13 @@ func formatDuration(d time.Duration) string {
 	return formatTimeUnit(days, "day")
 }
 
+// formatTimeUnit formats a time value with proper singular/plural unit names.
+//
+// Examples:
+//   - formatTimeUnit(1, "hour") → "1 hour"
+//   - formatTimeUnit(5, "hour") → "5 hours"
+//   - formatTimeUnit(1, "day") → "1 day"
+//   - formatTimeUnit(30, "day") → "30 days"
 func formatTimeUnit(value int, unit string) string {
 	if value == 1 {
 		return "1 " + unit

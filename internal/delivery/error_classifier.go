@@ -5,30 +5,38 @@ import (
 	"strings"
 )
 
-// ErrorCategory represents the type of delivery error
+// ErrorCategory represents the type of delivery error and determines retry behavior.
 type ErrorCategory string
 
 const (
-	// ErrorTemporary - retry with backoff (4xx codes, network issues)
+	// ErrorTemporary indicates a temporary failure that should be retried with exponential backoff.
+	// Includes 4xx SMTP codes and some network issues. Examples: mailbox full, rate limits.
 	ErrorTemporary ErrorCategory = "temporary"
 
-	// ErrorPermanent - hard bounce, deactivate email (5xx codes)
+	// ErrorPermanent indicates a permanent failure that should not be retried.
+	// Includes 5xx SMTP codes. Examples: user not found, invalid mailbox name, spam rejection.
 	ErrorPermanent ErrorCategory = "permanent"
 
-	// ErrorGreylist - aggressive retry for greylisting (421)
+	// ErrorGreylist indicates greylisting (SMTP 421), which requires aggressive fast retry.
+	// Greylisting is a spam prevention technique where the first delivery is temporarily rejected.
 	ErrorGreylist ErrorCategory = "greylist"
 
-	// ErrorNetwork - connection/DNS failures, retry
+	// ErrorNetwork indicates connection or DNS failures that should be retried.
+	// Examples: connection refused, DNS lookup failed, TLS errors, timeouts.
 	ErrorNetwork ErrorCategory = "network"
 
-	// ErrorThrottled - rate limit active for destination domain
+	// ErrorThrottled indicates our per-domain rate limit is active.
+	// The message will be retried after the throttle interval expires.
 	ErrorThrottled ErrorCategory = "throttled"
 
-	// ErrorReputation - IP blacklisted or poor reputation
+	// ErrorReputation indicates the source IP is blacklisted or has poor reputation.
+	// The IP will be marked as degraded and removed from rotation.
 	ErrorReputation ErrorCategory = "reputation"
 )
 
-// DeliveryError represents a classified delivery error
+// DeliveryError represents a classified delivery error with categorization,
+// SMTP codes, and the original error. The category determines retry behavior
+// and whether the IP reputation should be affected.
 type DeliveryError struct {
 	Category     ErrorCategory
 	SMTPCode     int
@@ -45,7 +53,10 @@ func (e *DeliveryError) Error() string {
 	return fmt.Sprintf("%s error: %s", e.Category, e.Message)
 }
 
-// ClassifyError determines the error category from SMTP response or network error
+// ClassifyError determines the error category from SMTP response codes or network errors.
+// It first checks for network-level errors (DNS, connection failures), then examines SMTP
+// response codes and messages to classify the error. Reputation errors are detected by
+// scanning for blacklist-related keywords in the SMTP response.
 func ClassifyError(smtpCode int, smtpResponse string, err error) *DeliveryError {
 	// Network/connection errors
 	if err != nil && smtpCode == 0 {
@@ -256,7 +267,10 @@ func classifyPermanentError(code int, response string) string {
 	}
 }
 
-// ShouldDeactivateEmail determines if an email should be deactivated based on error
+// ShouldDeactivateEmail determines if an email address should be deactivated based on the error.
+// Returns true only for permanent errors indicating the user or mailbox does not exist
+// (SMTP 550 with "user not found"/"mailbox not found" messages, or SMTP 553 invalid mailbox).
+// Does not deactivate for spam rejections, size limits, or relay issues, as these may be temporary.
 func ShouldDeactivateEmail(category ErrorCategory, smtpCode int, response string) bool {
 	if category != ErrorPermanent {
 		return false
@@ -289,7 +303,9 @@ func ShouldDeactivateEmail(category ErrorCategory, smtpCode int, response string
 	return false
 }
 
-// IsRetryable determines if an error should be retried
+// IsRetryable determines if an error category should trigger retry attempts.
+// Returns true for temporary, greylist, network, throttled, and reputation errors.
+// Returns false for permanent errors, which represent hard bounces.
 func IsRetryable(category ErrorCategory) bool {
 	switch category {
 	case ErrorTemporary, ErrorGreylist, ErrorNetwork, ErrorThrottled, ErrorReputation:

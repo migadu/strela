@@ -14,7 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// MXLookup handles MX record lookups with caching
+// MXLookup handles MX record lookups with two-level caching (successful and negative responses).
+// It uses a custom DNS resolver with configurable servers and stores results in SQLite.
+// Successful lookups are cached for a longer TTL (default 1 hour), while failed lookups
+// use a shorter negative TTL (default 1 minute) to allow faster recovery from transient
+// DNS issues.
 type MXLookup struct {
 	queue       *queue.Queue
 	dnsResolver *DNSResolver
@@ -23,13 +27,15 @@ type MXLookup struct {
 	negativeTTL time.Duration // Negative cache TTL (for failures)
 }
 
-// MXRecord represents a single MX record
+// MXRecord represents a single MX record with hostname and priority.
+// Lower priority values indicate higher preference.
 type MXRecord struct {
 	Host     string `json:"host"`
 	Priority uint16 `json:"priority"`
 }
 
-// NewMXLookup creates a new MX lookup service
+// NewMXLookup creates a new MX lookup service with the specified configuration.
+// It initializes a custom DNS resolver and sets cache TTLs from the config.
 func NewMXLookup(q *queue.Queue, dnsCfg *config.DNSConfig, deliveryCfg *config.OutboundConfig, logger *zap.Logger) *MXLookup {
 	return &MXLookup{
 		queue:       q,
@@ -40,7 +46,10 @@ func NewMXLookup(q *queue.Queue, dnsCfg *config.DNSConfig, deliveryCfg *config.O
 	}
 }
 
-// Lookup performs MX lookup for a domain with caching
+// Lookup performs MX record lookup for a domain with SQLite-backed caching.
+// It first checks the cache, and on cache miss performs a DNS lookup via the custom
+// resolver. Results are sorted by priority (lower is higher preference) and stored
+// in the cache. Cached results include both successful lookups and negative responses.
 func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, error) {
 	// Try cache first
 	cached, err := m.getFromCache(domain)
@@ -171,7 +180,9 @@ func (m *MXLookup) storeInCache(domain string, records []*MXRecord) error {
 	return m.queue.StoreMXCache(domain, string(recordsJSON), int(m.cacheTTL.Seconds()))
 }
 
-// InvalidateCache removes a domain from cache
+// InvalidateCache removes a domain's MX records from the cache, forcing a fresh
+// DNS lookup on the next Lookup call. This is useful for testing or when DNS
+// changes are known to have occurred.
 func (m *MXLookup) InvalidateCache(domain string) error {
 	err := m.queue.InvalidateMXCache(domain)
 	if err != nil {
@@ -187,7 +198,9 @@ func (m *MXLookup) InvalidateCache(domain string) error {
 	return nil
 }
 
-// CleanupExpiredCache removes expired entries from cache
+// CleanupExpiredCache removes expired MX cache entries from SQLite.
+// Returns the number of entries removed. This should be called periodically
+// to prevent unbounded cache growth.
 func (m *MXLookup) CleanupExpiredCache() (int, error) {
 	rowsAffected, err := m.queue.CleanupExpiredMXCache()
 	if err != nil {
@@ -202,7 +215,9 @@ func (m *MXLookup) CleanupExpiredCache() (int, error) {
 	return int(rowsAffected), nil
 }
 
-// ReloadConfig updates DNS resolver configuration (hot reload)
+// ReloadConfig updates DNS resolver configuration during a hot reload (triggered by SIGHUP).
+// It updates cache TTLs and recreates the DNS resolver with new settings (custom DNS servers,
+// timeout). This method enables dynamic DNS configuration changes without restart.
 func (m *MXLookup) ReloadConfig(dnsCfg *config.DNSConfig, deliveryCfg *config.OutboundConfig) error {
 	m.logger.Info("reloading DNS resolver configuration")
 
@@ -220,8 +235,10 @@ func (m *MXLookup) ReloadConfig(dnsCfg *config.DNSConfig, deliveryCfg *config.Ou
 	return nil
 }
 
-// BatchPrefetch performs parallel DNS lookups for multiple domains
-// This is useful when processing a batch of messages to the same domains
+// BatchPrefetch performs parallel MX lookups for multiple domains to warm the cache.
+// This is useful when processing a batch of messages to the same domains, as it
+// reduces latency by performing DNS lookups concurrently. Already-cached domains
+// are skipped. Returns a map of domain to error for any failed lookups.
 func (m *MXLookup) BatchPrefetch(ctx context.Context, domains []string) map[string]error {
 	if len(domains) == 0 {
 		return make(map[string]error)

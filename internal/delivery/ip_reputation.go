@@ -14,15 +14,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// IPState represents the health state of a source IP
+// IPState represents the health state of a source IP address.
 type IPState string
 
 const (
-	IPStateHealthy  IPState = "healthy"
+	// IPStateHealthy indicates the IP is in good standing and available for delivery.
+	IPStateHealthy IPState = "healthy"
+	// IPStateDegraded indicates the IP is blacklisted or has poor reputation and should be avoided.
 	IPStateDegraded IPState = "degraded"
 )
 
-// DegradedIPInfo tracks information about a degraded IP
+// DegradedIPInfo tracks detailed information about a degraded IP address,
+// including when it was degraded, when to retry, failure counts, and the
+// SMTP error that triggered the degradation.
 type DegradedIPInfo struct {
 	IP               string
 	DegradedAt       time.Time
@@ -33,7 +37,9 @@ type DegradedIPInfo struct {
 	LastSMTPResponse string
 }
 
-// ReputationAlert is sent to the configured webhook when an IP is degraded
+// ReputationAlert is sent to the configured webhook when an IP is degraded or recovered.
+// It contains full context about the event, including the message that triggered the
+// degradation (for "degraded" events) and the count of currently degraded IPs.
 type ReputationAlert struct {
 	Timestamp        time.Time `json:"timestamp"`
 	SourceIP         string    `json:"source_ip"`
@@ -49,13 +55,18 @@ type ReputationAlert struct {
 	DegradedIPsCount int       `json:"degraded_ips_count,omitempty"`
 }
 
-// ReputationMetrics interface for recording IP reputation metrics
+// ReputationMetrics defines the interface for recording IP reputation metrics
+// to Prometheus or other monitoring systems.
 type ReputationMetrics interface {
 	SetIPReputationDegraded(sourceIP string, degraded bool)
 	RecordIPReputationEvent(eventType, sourceIP string)
 }
 
-// IPReputationTracker manages IP reputation and degraded states
+// IPReputationTracker manages IP reputation and degraded states for all source IPs.
+// When an IP receives reputation errors (blacklist, poor reputation), it's marked as
+// degraded and removed from the rotation pool. After a configured retry period, the
+// IP is allowed to attempt delivery again. If successful, it's marked as recovered.
+// The tracker can be disabled via configuration, in which case all IPs are considered healthy.
 type IPReputationTracker struct {
 	mu          sync.RWMutex
 	degradedIPs map[string]*DegradedIPInfo
@@ -66,7 +77,9 @@ type IPReputationTracker struct {
 	metrics     ReputationMetrics
 }
 
-// NewIPReputationTracker creates a new IP reputation tracker
+// NewIPReputationTracker creates a new IP reputation tracker with the specified configuration.
+// If IP tracking is disabled in the config, all IPs will be considered healthy.
+// The tracker uses an HTTP client with configurable timeout for sending webhook alerts.
 func NewIPReputationTracker(cfg *config.ReputationConfig, logger *zap.Logger) *IPReputationTracker {
 	enabled := cfg.EnableIPTracking
 	if !enabled {
@@ -88,7 +101,9 @@ func NewIPReputationTracker(cfg *config.ReputationConfig, logger *zap.Logger) *I
 	}
 }
 
-// IsIPHealthy checks if an IP is in healthy state (not degraded or past retry time)
+// IsIPHealthy checks if an IP is in healthy state and can be used for delivery.
+// An IP is considered healthy if it's not degraded or if the retry time has elapsed.
+// If reputation tracking is disabled, all IPs are considered healthy.
 func (rt *IPReputationTracker) IsIPHealthy(ip string) bool {
 	if !rt.enabled {
 		return true // If tracking disabled, all IPs are healthy
@@ -113,7 +128,10 @@ func (rt *IPReputationTracker) IsIPHealthy(ip string) bool {
 	return false
 }
 
-// MarkIPDegraded marks an IP as degraded due to reputation failure
+// MarkIPDegraded marks an IP as degraded due to reputation failure (blacklist, poor reputation).
+// The IP will be removed from rotation and retried after the configured period. A webhook
+// alert is sent (if configured) with full context about the degradation. The failure count
+// is incremented if the IP was already degraded.
 func (rt *IPReputationTracker) MarkIPDegraded(ip string, smtpCode int, smtpResponse string, deliveryInfo DeliveryInfo) {
 	if !rt.enabled {
 		return
@@ -177,7 +195,9 @@ func (rt *IPReputationTracker) MarkIPDegraded(ip string, smtpCode int, smtpRespo
 	})
 }
 
-// MarkIPRecovered marks a degraded IP as recovered after successful delivery
+// MarkIPRecovered marks a degraded IP as recovered after successful delivery.
+// The IP is removed from the degraded list and returned to the rotation pool.
+// A webhook alert is sent (if configured) to notify of the recovery.
 func (rt *IPReputationTracker) MarkIPRecovered(ip string) {
 	if !rt.enabled {
 		return
@@ -219,7 +239,10 @@ func (rt *IPReputationTracker) MarkIPRecovered(ip string) {
 	})
 }
 
-// RecordDeliveryAttempt records the result of a delivery attempt for IP tracking
+// RecordDeliveryAttempt records the result of a delivery attempt for IP reputation tracking.
+// If the IP was degraded and the delivery succeeded, it's marked as recovered. If the
+// delivery failed with a reputation error, the IP is marked as degraded. This method
+// should be called after every delivery attempt with a source IP.
 func (rt *IPReputationTracker) RecordDeliveryAttempt(ip string, success bool, err *DeliveryError, deliveryInfo DeliveryInfo) {
 	if !rt.enabled || ip == "" {
 		return
@@ -239,7 +262,8 @@ func (rt *IPReputationTracker) RecordDeliveryAttempt(ip string, success bool, er
 	}
 }
 
-// GetDegradedIPs returns a list of all currently degraded IPs
+// GetDegradedIPs returns a copy of all currently degraded IPs with their information.
+// The returned map is a copy to prevent external modification of the tracker's internal state.
 func (rt *IPReputationTracker) GetDegradedIPs() map[string]*DegradedIPInfo {
 	rt.mu.RLock()
 	defer rt.mu.RUnlock()
@@ -253,7 +277,9 @@ func (rt *IPReputationTracker) GetDegradedIPs() map[string]*DegradedIPInfo {
 	return result
 }
 
-// Cleanup removes old degraded IP entries beyond the cleanup threshold
+// Cleanup removes old degraded IP entries that have been degraded beyond the cleanup
+// threshold and whose retry time has passed. This prevents unbounded memory growth
+// from IPs that are never recovered. Should be called periodically.
 func (rt *IPReputationTracker) Cleanup() {
 	if !rt.enabled {
 		return
@@ -283,7 +309,9 @@ func (rt *IPReputationTracker) Cleanup() {
 	}
 }
 
-// GetHealthyIPs filters a list of IPs to return only healthy ones
+// GetHealthyIPs filters a list of IPs to return only those in healthy state.
+// Degraded IPs are filtered out unless their retry time has elapsed.
+// If reputation tracking is disabled, all IPs are returned as-is.
 func (rt *IPReputationTracker) GetHealthyIPs(ips []string) []string {
 	if !rt.enabled {
 		return ips
@@ -362,7 +390,8 @@ func (rt *IPReputationTracker) sendAlert(alert ReputationAlert) {
 	}()
 }
 
-// DeliveryInfo contains context about a delivery for reputation tracking
+// DeliveryInfo contains contextual information about a delivery attempt,
+// used for reputation tracking and webhook alerts.
 type DeliveryInfo struct {
 	From           string
 	To             string
@@ -371,7 +400,9 @@ type DeliveryInfo struct {
 	MXHost         string
 }
 
-// SetMetrics sets the metrics recorder for reputation tracking
+// SetMetrics sets the metrics recorder for reputation tracking, enabling Prometheus
+// metrics for IP degradation events. It also sets the initial state for all currently
+// degraded IPs.
 func (rt *IPReputationTracker) SetMetrics(metrics ReputationMetrics) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()

@@ -12,7 +12,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// DNSResolver handles DNS queries with custom resolvers and caching
+// DNSResolver handles DNS queries with custom resolvers, round-robin distribution,
+// and UDP-to-TCP fallback. It supports multiple DNS servers for redundancy and
+// automatically falls back to TCP when UDP responses are truncated. The resolver
+// uses an atomic counter for thread-safe round-robin selection across configured
+// DNS servers.
 type DNSResolver struct {
 	resolvers  []string
 	timeout    time.Duration
@@ -20,7 +24,9 @@ type DNSResolver struct {
 	currentIdx atomic.Uint32 // Round-robin counter for resolver selection
 }
 
-// NewDNSResolver creates a new DNS resolver with custom configuration
+// NewDNSResolver creates a new DNS resolver with custom configuration.
+// If no custom resolvers are specified in the config, the system's default resolver
+// will be used. The timeout applies to individual DNS queries.
 func NewDNSResolver(cfg *config.DNSConfig, logger *zap.Logger) *DNSResolver {
 	return &DNSResolver{
 		resolvers: cfg.Resolvers,
@@ -29,7 +35,11 @@ func NewDNSResolver(cfg *config.DNSConfig, logger *zap.Logger) *DNSResolver {
 	}
 }
 
-// LookupMX performs MX record lookup with timeout
+// LookupMX performs MX record lookup with timeout and custom resolver support.
+// It uses a round-robin strategy to distribute queries across configured DNS servers,
+// trying each server with UDP first, then falling back to TCP if needed. If custom
+// resolvers are not configured, it uses the system's default resolver. The method
+// is context-aware and respects the configured timeout.
 func (d *DNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
 	// Create context with timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, d.timeout)
@@ -120,7 +130,10 @@ func (d *DNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, e
 	return mxRecords, nil
 }
 
-// LookupHost performs A/AAAA record lookup with timeout (for future use)
+// LookupHost performs A/AAAA record lookup with timeout and custom resolver support.
+// Similar to LookupMX, it uses round-robin distribution across DNS servers with UDP-to-TCP
+// fallback. Returns a list of IP addresses (both IPv4 and IPv6) for the given hostname.
+// This method is context-aware and respects the configured timeout.
 func (d *DNSResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()

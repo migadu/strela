@@ -1,3 +1,31 @@
+/*
+Package delivery handles direct SMTP delivery to recipient MX servers.
+
+The delivery engine establishes direct connections to recipient mail servers,
+performs SMTP transactions, and applies intelligent retry logic with exponential
+backoff. It supports IPv6-first delivery, source IP rotation, DKIM signing,
+and destination throttling.
+
+Key Components:
+  - Engine: Main delivery orchestration with context-aware SMTP sessions
+  - MXLookup: DNS MX record resolution with caching
+  - DNSResolver: Custom DNS resolver with round-robin and UDP→TCP fallback
+  - IPRotator: Source IP selection (round-robin, random, hash-domain strategies)
+  - IPReputation: Tracks and removes degraded IPs from rotation
+  - RetryScheduler: Exponential backoff with greylist fast-retry
+  - ErrorClassifier: Categorizes SMTP errors (temporary, permanent, greylist, network)
+  - CircuitBreaker: Prevents accepting messages during delivery failures
+  - DestinationThrottle: Per-domain rate limiting to prevent spam-like behavior
+
+Delivery Flow:
+ 1. Resolve MX records (with caching)
+ 2. Select source IP based on configured strategy
+ 3. Attempt IPv6 connection, fallback to IPv4
+ 4. Establish SMTP session with STARTTLS
+ 5. Send message (with optional DKIM signing)
+ 6. Classify result and schedule retry if needed
+ 7. Update IP reputation on permanent failures
+*/
 package delivery
 
 import (
@@ -21,13 +49,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// DestinationThrottle tracks last delivery attempt per domain to prevent spam-like behavior
+// DestinationThrottle tracks last delivery attempt per domain to prevent spam-like behavior.
+// It enforces a minimum interval between consecutive delivery attempts to the same domain,
+// preventing the delivery engine from appearing as a spam source to recipient servers.
 type DestinationThrottle struct {
 	mu           sync.RWMutex
 	lastAttempts map[string]time.Time
 	minInterval  time.Duration
 }
 
+// NewDestinationThrottle creates a new destination throttle with the specified minimum interval.
+// The minIntervalSeconds parameter defines the minimum seconds between delivery attempts
+// to the same recipient domain.
 func NewDestinationThrottle(minIntervalSeconds int) *DestinationThrottle {
 	return &DestinationThrottle{
 		lastAttempts: make(map[string]time.Time),
@@ -75,14 +108,18 @@ func (dt *DestinationThrottle) Cleanup(maxAge time.Duration) {
 	}
 }
 
-// DeliveryMetrics interface for recording delivery metrics
+// DeliveryMetrics defines the interface for recording delivery metrics to Prometheus or other
+// monitoring systems. It tracks delivery outcomes, durations, and circuit breaker state changes.
 type DeliveryMetrics interface {
 	RecordDeliveryAttempt(outcome string, duration float64)
 	SetCircuitBreakerState(state int)
 	RecordCircuitBreakerTransition(fromState, toState string)
 }
 
-// Deliverer handles direct SMTP delivery to recipient MX servers
+// Deliverer is the main delivery engine that handles direct SMTP delivery to recipient MX servers.
+// It coordinates MX lookups, source IP rotation, SMTP session management, delivery attempts,
+// error classification, retry scheduling, and IP reputation tracking. The engine attempts IPv6
+// first before falling back to IPv4, and supports DKIM signing and STARTTLS encryption.
 type Deliverer struct {
 	mu                sync.RWMutex
 	config            *config.OutboundConfig
@@ -95,7 +132,9 @@ type Deliverer struct {
 	reputationTracker *IPReputationTracker
 }
 
-// DeliveryResult contains the result of a delivery attempt
+// DeliveryResult contains the complete result of a delivery attempt, including success status,
+// SMTP response codes, the MX host used, the source IP used, any errors encountered, and
+// the duration of the attempt in milliseconds.
 type DeliveryResult struct {
 	Success      bool
 	SMTPCode     int
@@ -106,7 +145,10 @@ type DeliveryResult struct {
 	DurationMs   int64
 }
 
-// NewDeliverer creates a new delivery engine
+// NewDeliverer creates a new delivery engine with the specified configuration.
+// It initializes the circuit breaker (if enabled), IP reputation tracker, IP rotator,
+// and destination throttle. The circuit breaker can be disabled via configuration,
+// which means the service will continue accepting requests even during delivery failures.
 func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *zap.Logger, reputationConfig *config.ReputationConfig) *Deliverer {
 	// Create circuit breaker with configured values
 	var circuitBreaker *CircuitBreaker
@@ -141,7 +183,12 @@ func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *zap
 	}
 }
 
-// DeliverMessage attempts to deliver a message directly to recipient's MX
+// DeliverMessage attempts to deliver a message directly to the recipient's MX servers.
+// It performs domain throttling, MX lookups, filters out degraded IPs, and tries each MX
+// server in priority order with source IP rotation on local failures. The method returns
+// a DeliveryResult containing the outcome, SMTP codes, and any errors encountered.
+// On success, the circuit breaker is notified. On failure, appropriate retry scheduling
+// and IP reputation updates occur.
 func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage) *DeliveryResult {
 	startTime := time.Now()
 
@@ -626,7 +673,10 @@ func extractSMTPError(err error) (int, string) {
 	return 0, err.Error()
 }
 
-// IPRotator handles source IP selection
+// IPRotator handles source IP selection using configurable strategies.
+// It supports three selection strategies: round-robin (balanced distribution),
+// random (unpredictable selection), and hash-domain (consistent IP per domain).
+// The rotator is thread-safe and uses atomic operations for the round-robin counter.
 type IPRotator struct {
 	ips      []string
 	strategy string
@@ -634,7 +684,9 @@ type IPRotator struct {
 	random   *rand.Rand
 }
 
-// NewIPRotator creates a new IP rotator
+// NewIPRotator creates a new IP rotator with the specified IPs and selection strategy.
+// Valid strategies are "round-robin", "random", and "hash-domain". If an invalid strategy
+// is provided, round-robin is used as the default.
 func NewIPRotator(ips []string, strategy string) *IPRotator {
 	return &IPRotator{
 		ips:      ips,
@@ -644,7 +696,11 @@ func NewIPRotator(ips []string, strategy string) *IPRotator {
 	}
 }
 
-// SelectIP chooses a source IP based on strategy
+// SelectIP chooses a source IP based on the configured strategy.
+// For round-robin, it cycles through IPs in order using an atomic counter.
+// For random, it selects a random IP from the pool.
+// For hash-domain, it uses FNV-1a hashing to consistently map domains to IPs.
+// Returns an empty string if no IPs are configured, indicating no source binding.
 func (r *IPRotator) SelectIP(domain string) string {
 	if len(r.ips) == 0 {
 		return "" // No source IP binding
@@ -679,7 +735,9 @@ func (r *IPRotator) SelectIP(domain string) string {
 	}
 }
 
-// GetAllIPs returns all configured source IPs for failover
+// GetAllIPs returns all configured source IPs for failover scenarios.
+// It returns a copy of the IP list to prevent external modification.
+// Returns nil if no IPs are configured.
 func (r *IPRotator) GetAllIPs() []string {
 	if len(r.ips) == 0 {
 		return nil
@@ -690,22 +748,27 @@ func (r *IPRotator) GetAllIPs() []string {
 	return ips
 }
 
-// GetCircuitBreaker returns the circuit breaker for health checking
+// GetCircuitBreaker returns the circuit breaker instance for health checking and monitoring.
+// Returns nil if the circuit breaker is disabled via configuration.
 func (d *Deliverer) GetCircuitBreaker() *CircuitBreaker {
 	return d.circuitBreaker
 }
 
-// GetReputationTracker returns the IP reputation tracker
+// GetReputationTracker returns the IP reputation tracker instance for monitoring
+// degraded IPs and reputation events.
 func (d *Deliverer) GetReputationTracker() *IPReputationTracker {
 	return d.reputationTracker
 }
 
-// SetMetrics sets the metrics recorder for delivery
+// SetMetrics sets the metrics recorder for delivery, enabling Prometheus metrics
+// for delivery attempts, circuit breaker state, and other delivery statistics.
 func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
 	d.metrics = metrics
 }
 
-// ReloadConfig updates the delivery configuration (hot reload)
+// ReloadConfig updates the delivery configuration during a hot reload (triggered by SIGHUP).
+// It updates source IPs, IP selection strategy, throttle settings, and circuit breaker thresholds.
+// The circuit breaker can be enabled or disabled dynamically. This method is thread-safe.
 func (d *Deliverer) ReloadConfig(newConfig *config.OutboundConfig) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

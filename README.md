@@ -30,7 +30,7 @@ Fune is a modern, reliable, and high-performance email delivery service built in
 - **Prometheus Metrics**: In-depth monitoring of queues, deliveries, and performance.
 - **Hot Reload**: Update configuration without downtime.
 
-For a full list of features and detailed technical information, please see our [**Technical Documentation**](DOCUMENTATION.md).
+For a full list of features and detailed technical information, please see our [**Technical Documentation**](docs/README.md).
 
 ## Quick Start
 
@@ -120,11 +120,23 @@ Content-Type: application/json
 }
 ```
 
-For more details on the API, including DKIM signing and idempotency, see the [**API Usage**](DOCUMENTATION.md#api-usage) section in our documentation.
+For more details on the API, including DKIM signing and idempotency, see the [**Component Details**](docs/components.md) section in our documentation.
 
 ## Documentation
 
-For detailed information about Fune's architecture, features, and deployment, please refer to the [**`DOCUMENTATION.md`**](DOCUMENTATION.md) file.
+Comprehensive documentation is available in the [`docs/`](docs/) directory:
+
+- **[Documentation Index](docs/README.md)** - Start here for an overview
+- **[Architecture Overview](docs/architecture.md)** - System design and philosophy
+- **[Deployment Guide](docs/deployment.md)** - Production deployment instructions
+- **[Monitoring Guide](docs/monitoring.md)** - Metrics, logging, and health checks
+- **[Security Features](docs/security.md)** - Authentication, TLS, and security best practices
+- **[Error Handling](docs/error-handling.md)** - Retry logic and error classification
+- **[Circuit Breaker](docs/circuit-breaker.md)** - Failover and circuit breaker pattern
+- **[IP Reputation](docs/ip-reputation.md)** - IP reputation tracking and management
+- **[Backup & Restore](docs/backups.md)** - Backup strategies and procedures
+- **[Disaster Recovery](docs/disaster-recovery.md)** - Emergency runbooks and incident response
+- **[Testing Guide](docs/testing.md)** - How to run and write tests
 
 ## Contributing
 

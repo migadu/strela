@@ -18,12 +18,28 @@ import (
 	"go.uber.org/zap"
 )
 
-// CallbackMetrics interface for recording callback metrics
+// CallbackMetrics defines the interface for recording callback processing metrics.
+//
+// Implementations should track success rates, failure rates, and latency for different
+// event types to enable monitoring and alerting on webhook delivery issues.
 type CallbackMetrics interface {
+	// RecordCallbackAttempt records the outcome of a callback attempt.
+	//
+	// Parameters:
+	//   - outcome: "success" or "failure"
+	//   - eventType: the delivery event type ("delivered", "hard_bounce", etc.)
+	//   - duration: HTTP request duration in seconds
 	RecordCallbackAttempt(outcome, eventType string, duration float64)
 }
 
-// CallbackHandler manages webhook callbacks to CloudFlare Worker
+// CallbackHandler manages webhook callbacks for delivery events.
+//
+// CallbackHandler processes callbacks asynchronously using a dedicated worker that
+// retrieves pending callbacks from the queue, sends HTTP POST requests to the
+// configured webhook URL, and handles failures with exponential backoff retry logic.
+//
+// The handler integrates with a circuit breaker to prevent cascading failures when
+// the webhook endpoint becomes unreachable.
 type CallbackHandler struct {
 	queue          *queue.Queue
 	config         *config.CallbacksConfig
@@ -36,7 +52,18 @@ type CallbackHandler struct {
 	circuitBreaker *CallbackCircuitBreaker
 }
 
-// NewCallbackHandler creates a new callback handler
+// NewCallbackHandler creates a new callback handler instance.
+//
+// The handler is initialized with a dedicated HTTP client (with configured timeout),
+// and optionally a circuit breaker if enabled in the configuration.
+//
+// Parameters:
+//   - q: Message queue containing the callback queue
+//   - cfg: Callback configuration (webhook URL, timeouts, circuit breaker settings)
+//   - logger: Structured logger for observability
+//
+// The returned handler is ready to start but not yet running. Call Start() to begin
+// processing callbacks, and SetMetrics() to enable metrics recording.
 func NewCallbackHandler(q *queue.Queue, cfg *config.CallbacksConfig, logger *zap.Logger) *CallbackHandler {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -67,7 +94,13 @@ func NewCallbackHandler(q *queue.Queue, cfg *config.CallbacksConfig, logger *zap
 	}
 }
 
-// Start begins processing callbacks
+// Start begins processing the callback queue.
+//
+// This method spawns a single callback processor goroutine that continuously
+// retrieves and sends pending callbacks. The processor uses a hybrid notification
+// and polling approach similar to the message delivery workers.
+//
+// The method returns immediately after spawning the processor goroutine.
 func (c *CallbackHandler) Start() {
 	c.logger.Info("starting callback processor")
 
@@ -75,7 +108,13 @@ func (c *CallbackHandler) Start() {
 	go c.processCallbacks()
 }
 
-// Stop gracefully shuts down callback processor
+// Stop gracefully shuts down the callback processor.
+//
+// This method signals the processor to stop via context cancellation and waits
+// for it to finish processing the current callback. In-flight HTTP requests are
+// allowed to complete before the processor exits.
+//
+// Stop is blocking and will not return until the processor has fully stopped.
 func (c *CallbackHandler) Stop() {
 	c.logger.Info("stopping callback processor...")
 	c.cancel()
@@ -83,12 +122,26 @@ func (c *CallbackHandler) Stop() {
 	c.logger.Info("callback processor stopped")
 }
 
-// SetMetrics sets the metrics recorder for callbacks
+// SetMetrics configures the metrics recorder for callback operations.
+//
+// This method should be called before Start() to enable metrics recording.
+// If not called, callback operations will proceed without metrics.
 func (c *CallbackHandler) SetMetrics(metrics CallbackMetrics) {
 	c.metrics = metrics
 }
 
-// EnqueueDeliveredCallback queues a successful delivery callback
+// EnqueueDeliveredCallback queues a webhook notification for successful delivery.
+//
+// This method is called by delivery workers after a message is successfully delivered
+// to the recipient MX server (SMTP 2xx response). The callback includes delivery details
+// such as MX host, source IP, SMTP response, and delivery duration.
+//
+// Parameters:
+//   - msg: The queued message that was delivered
+//   - result: Delivery result containing MX host, source IP, and SMTP response
+//
+// If enqueueing fails (database error), the error is logged but does not affect
+// the delivery status. The callback can be manually retried via admin tools.
 func (c *CallbackHandler) EnqueueDeliveredCallback(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	payload := DeliveryEventCallback{
 		MessageID:    msg.MessageID,
@@ -111,7 +164,20 @@ func (c *CallbackHandler) EnqueueDeliveredCallback(msg *queue.QueuedMessage, res
 	}
 }
 
-// EnqueueHardBounceCallback queues a hard bounce callback
+// EnqueueHardBounceCallback queues a webhook notification for permanent delivery failure.
+//
+// This method is called by delivery workers when a message receives a permanent failure
+// response (5xx SMTP code) from the recipient MX server. Common causes include:
+//   - 550: Mailbox unavailable or rejected
+//   - 551: User not local
+//   - 552: Mailbox full
+//   - 554: Transaction failed
+//
+// The callback includes the SMTP error code, response message, and failure reason.
+//
+// Parameters:
+//   - msg: The queued message that failed permanently
+//   - result: Delivery result containing SMTP error details
 func (c *CallbackHandler) EnqueueHardBounceCallback(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	reason := "permanent_bounce"
 	if result.Error != nil {
@@ -140,7 +206,21 @@ func (c *CallbackHandler) EnqueueHardBounceCallback(msg *queue.QueuedMessage, re
 	}
 }
 
-// EnqueueTempExpiredCallback queues a temp failure exhausted callback
+// EnqueueTempExpiredCallback queues a webhook notification for temporary failure exhaustion.
+//
+// This method is called when a message exhausts its retry attempts after temporary
+// failures (4xx SMTP codes, network errors, DNS failures) and reaches the maximum
+// message age without successful delivery. Common scenarios:
+//   - Recipient server repeatedly unavailable
+//   - Persistent greylisting beyond retry window
+//   - DNS resolution consistently failing
+//
+// Unlike permanent failures, temporary failures were retried multiple times with
+// exponential backoff before being abandoned.
+//
+// Parameters:
+//   - msg: The queued message that expired after temporary failures
+//   - result: Delivery result from the last attempt (may be nil for cleanup worker calls)
 func (c *CallbackHandler) EnqueueTempExpiredCallback(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	reason := "temporary_failure_exhausted"
 	var smtpCode int
@@ -174,7 +254,19 @@ func (c *CallbackHandler) EnqueueTempExpiredCallback(msg *queue.QueuedMessage, r
 	}
 }
 
-// EnqueueExpiredCallback queues an expired message callback
+// EnqueueExpiredCallback queues a webhook notification for message expiration.
+//
+// This method is called when a message exceeds its maximum age (default 48 hours)
+// without successful delivery and without being classified as a hard bounce or
+// temporary failure exhaustion. This typically occurs when:
+//   - Messages remain stuck in "queued" status past expiration (detected by cleanup worker)
+//   - System backlogs prevent timely processing
+//
+// The callback includes the total number of attempts made before expiration.
+//
+// Parameters:
+//   - msg: The queued message that expired
+//   - result: Delivery result from the last attempt (may be nil for cleanup worker calls)
 func (c *CallbackHandler) EnqueueExpiredCallback(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	payload := DeliveryEventCallback{
 		MessageID:   msg.MessageID,
@@ -194,7 +286,15 @@ func (c *CallbackHandler) EnqueueExpiredCallback(msg *queue.QueuedMessage, resul
 	}
 }
 
-// processCallbacks is the main callback processing loop
+// processCallbacks is the main callback processing loop.
+//
+// This goroutine continuously retrieves and processes pending callbacks using a
+// hybrid notification and polling approach:
+//   - Instant processing when notified via channel
+//   - Periodic polling every 30 seconds as fallback
+//   - Graceful shutdown on context cancellation
+//
+// The loop runs until Stop() is called.
 func (c *CallbackHandler) processCallbacks() {
 	defer c.wg.Done()
 	defer recovery.RecoverPanic(c.logger, "callback processor")
@@ -224,7 +324,11 @@ func (c *CallbackHandler) processCallbacks() {
 	}
 }
 
-// processBatch processes a batch of pending callbacks
+// processBatch retrieves and processes a batch of pending callbacks.
+//
+// The method retrieves up to BatchSize callbacks from the queue and sends them
+// sequentially. If the context is canceled during processing, remaining callbacks
+// are left in the queue and will be processed on restart.
 func (c *CallbackHandler) processBatch() {
 	callbacks, err := c.queue.GetPendingCallbacks(c.config.BatchSize)
 	if err != nil {
@@ -252,7 +356,19 @@ func (c *CallbackHandler) processBatch() {
 	}
 }
 
-// sendCallback attempts to send a single callback
+// sendCallback attempts to send a single callback via HTTP POST.
+//
+// The method:
+//  1. Checks circuit breaker state (skips if open, reschedules after timeout)
+//  2. Parses the callback payload from JSON
+//  3. Sends HTTP POST request to webhook URL with bearer token auth
+//  4. Records success/failure with circuit breaker
+//  5. On success: marks callback as complete
+//  6. On failure: schedules retry with exponential backoff or abandons if expired
+//
+// Failed callbacks are retried with exponential backoff up to the maximum callback
+// age (default 24 hours). Callbacks exceeding max age are marked complete to prevent
+// indefinite retries.
 func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 	startTime := time.Now()
 
@@ -367,7 +483,21 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 	}
 }
 
-// calculateRetryDelay calculates exponential backoff delay for callback retries
+// calculateRetryDelay calculates exponential backoff delay for callback retries.
+//
+// The delay grows exponentially with each attempt:
+//   - Attempt 1: initial_retry_delay_seconds (default 30s)
+//   - Attempt 2: 30s * backoff_multiplier (default 60s)
+//   - Attempt 3: 60s * backoff_multiplier (default 120s)
+//   - ...
+//   - Maximum: max_retry_delay_seconds (default 3600s / 1 hour)
+//
+// Parameters:
+//   - attemptNumber: The attempt number (1-based)
+//
+// Returns:
+//
+//	The calculated delay duration, capped at max_retry_delay_seconds.
 func (c *CallbackHandler) calculateRetryDelay(attemptNumber int) time.Duration {
 	// Start with initial delay
 	delay := float64(c.config.InitialRetryDelaySeconds)
@@ -386,7 +516,22 @@ func (c *CallbackHandler) calculateRetryDelay(attemptNumber int) time.Duration {
 	return time.Duration(delay) * time.Second
 }
 
-// sendHTTPCallback sends the actual HTTP POST request
+// sendHTTPCallback sends the HTTP POST request to the webhook endpoint.
+//
+// The method:
+//  1. Marshals the payload to JSON
+//  2. Creates HTTP POST request with context (for cancellation)
+//  3. Sets Content-Type and Authorization headers
+//  4. Sends request (respects context cancellation and client timeout)
+//  5. Validates HTTP status code (success: 2xx)
+//
+// Parameters:
+//   - ctx: Context for request cancellation (inherited from handler context)
+//   - payload: Delivery event callback data to send
+//
+// Returns:
+//   - nil on success (2xx response)
+//   - error describing the failure (network error, timeout, non-2xx status)
 func (c *CallbackHandler) sendHTTPCallback(ctx context.Context, payload DeliveryEventCallback) error {
 	// Marshal payload
 	jsonData, err := json.Marshal(payload)
@@ -423,7 +568,19 @@ func (c *CallbackHandler) sendHTTPCallback(ctx context.Context, payload Delivery
 }
 
 // isCallbackNetworkError determines if an error is a network/timeout error
-// that should trigger the circuit breaker
+// that should trigger the circuit breaker.
+//
+// The circuit breaker should open on infrastructure failures (network issues,
+// DNS failures, timeouts) but NOT on application errors (HTTP 5xx from webhook).
+// This distinction ensures that temporary application issues don't trigger the
+// circuit breaker, while actual infrastructure problems do.
+//
+// Parameters:
+//   - err: The error to classify
+//
+// Returns:
+//   - true if the error indicates infrastructure failure (should trigger circuit breaker)
+//   - false if the error is nil or indicates application failure
 func isCallbackNetworkError(err error) bool {
 	if err == nil {
 		return false

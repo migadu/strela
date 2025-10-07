@@ -1,3 +1,6 @@
+// Package config provides hot-reloadable configuration management.
+//
+// See config.go for the main package documentation.
 package config
 
 import (
@@ -8,7 +11,55 @@ import (
 	"go.uber.org/zap"
 )
 
-// ReloadableConfig wraps Config with thread-safe reload capability
+// ReloadableConfig wraps Config with thread-safe hot reload capability.
+//
+// This type enables runtime configuration updates without service restart.
+// Configuration changes are triggered by sending a SIGHUP signal to the process
+// (typically via `kill -HUP <pid>` or `pkill -HUP fune-server`).
+//
+// The reload process:
+//  1. Load new config from disk
+//  2. Validate that non-reloadable fields haven't changed
+//  3. Call all registered reload callbacks to prepare components
+//  4. Atomically swap the old config with the new config
+//  5. Log the successful reload with key changed values
+//
+// Thread Safety:
+//
+// ReloadableConfig uses sync.RWMutex for safe concurrent access:
+//   - Get methods acquire read locks (multiple readers allowed)
+//   - Reload method acquires write lock (exclusive access)
+//   - All config access is lock-protected to prevent data races
+//
+// Reload Callbacks:
+//
+// Components that need to react to config changes can register callbacks
+// via RegisterReloadCallback. Callbacks are invoked before the config swap,
+// allowing components to validate changes or prepare for updates.
+//
+// If any callback returns an error, the entire reload is aborted and the
+// old configuration remains active.
+//
+// Example Usage:
+//
+//	reloadable, err := NewReloadableConfig("config.toml", logger)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Register callback for delivery engine
+//	reloadable.RegisterReloadCallback(func(cfg *Config) error {
+//	    return deliveryEngine.UpdateSourceIPs(cfg.Outbound.SourceIPs)
+//	})
+//
+//	// Get current config (thread-safe)
+//	cfg := reloadable.Get()
+//	fmt.Printf("Current source IPs: %v\n", cfg.Outbound.SourceIPs)
+//
+//	// Trigger reload (typically called in SIGHUP handler)
+//	if err := reloadable.Reload(); err != nil {
+//	    logger.Error("Config reload failed", zap.Error(err))
+//	}
 type ReloadableConfig struct {
 	mu         sync.RWMutex
 	config     *Config
@@ -19,7 +70,16 @@ type ReloadableConfig struct {
 	onReload []func(*Config) error
 }
 
-// NewReloadableConfig creates a new reloadable config
+// NewReloadableConfig creates a new ReloadableConfig with initial configuration.
+//
+// Loads the configuration file from the given path and initializes the
+// reloadable wrapper. The returned ReloadableConfig is ready for use and
+// can be safely accessed from multiple goroutines.
+//
+// This constructor should be called once at service startup. The returned
+// instance should be passed to all components that need configuration access.
+//
+// Returns an error if the initial config file cannot be loaded or parsed.
 func NewReloadableConfig(configPath string, logger *zap.Logger) (*ReloadableConfig, error) {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -34,49 +94,132 @@ func NewReloadableConfig(configPath string, logger *zap.Logger) (*ReloadableConf
 	}, nil
 }
 
-// Get returns a copy of the current config (thread-safe read)
+// Get returns a copy of the current configuration.
+//
+// Thread-safe for concurrent reads. Multiple goroutines can call Get
+// simultaneously without blocking each other.
+//
+// Returns a value copy, not a pointer, to prevent accidental mutation
+// of the internal config state.
 func (rc *ReloadableConfig) Get() Config {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return *rc.config
 }
 
-// GetInbound returns a copy of Inbound config
+// GetInbound returns a copy of the Inbound configuration section.
+//
+// Convenience method for accessing HTTP API settings without retrieving
+// the entire configuration. Thread-safe for concurrent access.
 func (rc *ReloadableConfig) GetInbound() InboundConfig {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return rc.config.Inbound
 }
 
-// GetOutbound returns a copy of Outbound config
+// GetOutbound returns a copy of the Outbound configuration section.
+//
+// Convenience method for accessing SMTP delivery settings without retrieving
+// the entire configuration. Thread-safe for concurrent access.
 func (rc *ReloadableConfig) GetOutbound() OutboundConfig {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return rc.config.Outbound
 }
 
-// GetQueue returns a copy of Queue config
+// GetQueue returns a copy of the Queue configuration section.
+//
+// Convenience method for accessing queue and worker pool settings without
+// retrieving the entire configuration. Thread-safe for concurrent access.
 func (rc *ReloadableConfig) GetQueue() QueueConfig {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return rc.config.Queue
 }
 
-// GetCallbacks returns a copy of Callbacks config
+// GetCallbacks returns a copy of the Callbacks configuration section.
+//
+// Convenience method for accessing webhook settings without retrieving
+// the entire configuration. Thread-safe for concurrent access.
 func (rc *ReloadableConfig) GetCallbacks() CallbacksConfig {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return rc.config.Callbacks
 }
 
-// RegisterReloadCallback registers a callback to be called when config is reloaded
+// RegisterReloadCallback registers a callback function to be invoked during reload.
+//
+// Callbacks are called before the configuration is swapped, allowing components
+// to validate changes or prepare for updates. If any callback returns an error,
+// the entire reload operation is aborted.
+//
+// Common use cases:
+//   - Updating component state based on new config values
+//   - Validating that new settings are compatible with current state
+//   - Pre-loading resources needed for the new configuration
+//
+// Example:
+//
+//	reloadable.RegisterReloadCallback(func(newCfg *Config) error {
+//	    if len(newCfg.Outbound.SourceIPs) == 0 {
+//	        return fmt.Errorf("at least one source IP required")
+//	    }
+//	    return deliveryEngine.UpdateIPs(newCfg.Outbound.SourceIPs)
+//	})
+//
+// Thread-safe but typically called only during initialization before
+// concurrent access begins.
 func (rc *ReloadableConfig) RegisterReloadCallback(callback func(*Config) error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.onReload = append(rc.onReload, callback)
 }
 
-// Reload reloads the configuration from disk
+// Reload reloads the configuration from disk and applies changes.
+//
+// This method is typically called in response to a SIGHUP signal but can
+// be invoked manually when needed. It performs a complete reload cycle:
+//
+//  1. Load new configuration from the same path used during initialization
+//  2. Validate that non-reloadable fields haven't changed
+//  3. Invoke all registered callbacks with the new configuration
+//  4. Atomically replace the old configuration with the new one
+//  5. Log success with key configuration values
+//
+// If any step fails, the reload is aborted and the old configuration
+// remains active. This ensures the service never enters an invalid state
+// due to a bad configuration file.
+//
+// Non-Reloadable Fields:
+//
+// The following fields cannot be changed during hot reload and will cause
+// validation errors if modified:
+//   - database_path: Would require data migration
+//   - Inbound.Listen: Would require HTTP server restart
+//   - Queue.WorkerCount: Would require worker pool restart
+//   - Callbacks.WebhookURL: Would require callback handler restart
+//
+// Error Handling:
+//
+// Returns an error if:
+//   - Config file cannot be read or parsed
+//   - Non-reloadable fields have been changed
+//   - Any registered callback returns an error
+//
+// The service continues running with the old configuration if reload fails.
+// Operators should monitor logs and fix configuration issues before retrying.
+//
+// Example SIGHUP Handler:
+//
+//	sigChan := make(chan os.Signal, 1)
+//	signal.Notify(sigChan, syscall.SIGHUP)
+//	go func() {
+//	    for range sigChan {
+//	        if err := reloadable.Reload(); err != nil {
+//	            logger.Error("Config reload failed", zap.Error(err))
+//	        }
+//	    }
+//	}()
 func (rc *ReloadableConfig) Reload() error {
 	rc.logger.Info("reloading configuration", zap.String("path", rc.configPath))
 
@@ -120,7 +263,22 @@ func (rc *ReloadableConfig) Reload() error {
 	return nil
 }
 
-// validateReload ensures critical fields haven't changed
+// validateReload ensures critical non-reloadable fields haven't changed.
+//
+// This method is called during the Reload process to prevent configuration
+// changes that would require service restart or could cause data loss.
+//
+// Validated fields:
+//   - database_path: Changing would abandon the current database file
+//   - Inbound.Listen: Changing requires stopping and restarting HTTP server
+//   - Queue.WorkerCount: Changing requires stopping and restarting worker pool
+//   - Callbacks.WebhookURL: Changing would lose in-flight callbacks
+//
+// If validation fails, the reload is aborted and a descriptive error is returned
+// indicating which field changed and what the old/new values were.
+//
+// This validation ensures the service maintains consistency and prevents
+// configuration mistakes from causing production issues.
 func (rc *ReloadableConfig) validateReload(oldCfg, newCfg *Config) error {
 	// Database path cannot change (would require migration)
 	if oldCfg.Server.DatabasePath != newCfg.Server.DatabasePath {
@@ -149,7 +307,30 @@ func (rc *ReloadableConfig) validateReload(oldCfg, newCfg *Config) error {
 	return nil
 }
 
-// LoadTLSConfig loads TLS configuration and returns tls.Config
+// LoadTLSConfig loads TLS configuration and returns a tls.Config.
+//
+// This method is used to load TLS certificates for HTTPS connections.
+// It only supports file-based certificates (not Let's Encrypt) and is
+// intended for hot reload scenarios where certificates are updated on disk.
+//
+// The returned tls.Config is configured with:
+//   - Certificates loaded from CertFile and KeyFile
+//   - Minimum TLS version 1.2 for security
+//
+// Returns an error if:
+//   - TLS is not enabled in the configuration
+//   - Provider is not "file" (Let's Encrypt requires different handling)
+//   - Certificate or key files cannot be read
+//   - Certificate and key don't form a valid pair
+//
+// Example:
+//
+//	tlsConfig, err := reloadable.LoadTLSConfig()
+//	if err != nil {
+//	    logger.Error("Failed to load TLS config", zap.Error(err))
+//	    return
+//	}
+//	server.TLSConfig = tlsConfig
 func (rc *ReloadableConfig) LoadTLSConfig() (*tls.Config, error) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()

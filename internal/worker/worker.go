@@ -1,3 +1,51 @@
+// Package worker implements the asynchronous message delivery worker pool.
+//
+// The worker package provides a multi-worker architecture for processing queued messages
+// and attempting SMTP delivery. Workers poll the message queue (with instant channel-based
+// notifications), retrieve batches of messages ready for delivery, and coordinate with the
+// delivery engine to send messages to their destination MX servers.
+//
+// # Architecture
+//
+// The worker pool consists of:
+//   - N delivery workers that process messages from the queue
+//   - 1 cleanup worker that handles expired messages
+//   - Channel-based notification system for instant message processing
+//   - Fallback polling mechanism (default 30s) to ensure no messages are missed
+//
+// # Worker Lifecycle
+//
+// Each worker follows this pattern:
+//  1. Wait for notification (via channel) or poll interval
+//  2. Dequeue a batch of messages ready for delivery
+//  3. Prefetch DNS MX records for all domains in parallel
+//  4. Deliver each message using the delivery engine
+//  5. Record delivery attempt with result details
+//  6. Update message status based on delivery outcome:
+//     - Success: Mark as delivered, enqueue success callback
+//     - Permanent failure (5xx): Mark as hard bounce, enqueue bounce callback
+//     - Temporary failure (4xx): Schedule retry with exponential backoff
+//     - Throttled: Schedule quick retry (default 5s)
+//     - Expired: Mark as expired, enqueue expired callback
+//
+// # Error Handling
+//
+// Workers handle different delivery outcomes:
+//   - Permanent errors: Immediate hard bounce, no retry
+//   - Temporary errors: Exponential backoff retry (5min → 10min → 20min → ... → 12hr)
+//   - Greylisting (421): Fast retry (2 minutes)
+//   - Throttling: Per-domain rate limit retry (configurable, default 5s)
+//   - Expired messages: Messages exceeding max age (default 48h)
+//
+// # Graceful Shutdown
+//
+// Workers support graceful shutdown via context cancellation. In-flight message
+// processing completes before the worker exits, ensuring no message loss.
+//
+// # Concurrency
+//
+// Multiple workers can run concurrently. The queue's Dequeue operation is
+// atomic, ensuring each message is processed by exactly one worker.
 package worker
 
 import (
@@ -15,7 +63,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// Worker processes messages from the queue
+// Worker processes messages from the queue and attempts SMTP delivery.
+//
+// Worker manages a pool of goroutines that continuously poll the message queue,
+// retrieve messages ready for delivery, and coordinate with the delivery engine
+// to send emails to their destination MX servers. It handles delivery results,
+// schedules retries for temporary failures, and enqueues webhook callbacks for
+// delivery events.
+//
+// Workers use a hybrid polling approach: instant channel-based notifications when
+// messages are enqueued (for low-latency processing) combined with periodic polling
+// as a fallback mechanism to ensure reliability.
 type Worker struct {
 	queue           *queue.Queue
 	deliverer       *delivery.Deliverer
@@ -30,7 +88,20 @@ type Worker struct {
 	wg              sync.WaitGroup
 }
 
-// NewWorker creates a new queue worker
+// NewWorker creates a new queue worker instance.
+//
+// The worker is initialized with all necessary dependencies for message processing:
+//   - queue: Message queue for retrieving and updating messages
+//   - deliverer: Delivery engine for sending messages via SMTP
+//   - retryScheduler: Calculates exponential backoff retry times
+//   - mxLookup: DNS MX record resolver with caching
+//   - callbackHandler: Webhook callback dispatcher for delivery events
+//   - deliveryCfg: Outbound SMTP configuration (timeouts, source IPs, etc.)
+//   - queueCfg: Queue configuration (batch size, poll interval, etc.)
+//   - logger: Structured logger for observability
+//
+// The returned worker is ready to start but not yet running. Call Start() to
+// begin processing messages.
 func NewWorker(
 	q *queue.Queue,
 	deliverer *delivery.Deliverer,
@@ -57,7 +128,24 @@ func NewWorker(
 	}
 }
 
-// Start begins processing the queue
+// Start begins processing the message queue with the specified number of workers.
+//
+// This method spawns workerCount delivery workers that process messages from the
+// queue concurrently, plus one additional cleanup worker that handles expired messages.
+// Each worker runs in its own goroutine and continues processing until Stop() is called.
+//
+// Parameters:
+//   - workerCount: Number of concurrent delivery workers (typical: 5-20)
+//
+// The method returns immediately after spawning all worker goroutines. Workers will
+// continue running in the background until Stop() is called.
+//
+// Example:
+//
+//	worker := NewWorker(queue, deliverer, ...)
+//	worker.Start(10) // Start 10 delivery workers + 1 cleanup worker
+//	// ... application runs ...
+//	worker.Stop() // Graceful shutdown
 func (w *Worker) Start(workerCount int) {
 	w.logger.Info("starting workers",
 		zap.Int("worker_count", workerCount))
@@ -75,7 +163,14 @@ func (w *Worker) Start(workerCount int) {
 	w.logger.Info("all workers started")
 }
 
-// Stop gracefully shuts down workers
+// Stop gracefully shuts down all workers.
+//
+// This method signals all workers to stop processing via context cancellation and
+// waits for them to finish their current work. In-flight message deliveries are
+// allowed to complete before the workers exit.
+//
+// Stop is blocking and will not return until all workers have fully stopped.
+// It is safe to call Stop multiple times.
 func (w *Worker) Stop() {
 	w.logger.Info("stopping workers...")
 	w.cancel()
@@ -83,7 +178,16 @@ func (w *Worker) Stop() {
 	w.logger.Info("all workers stopped")
 }
 
-// processQueue is the main worker loop
+// processQueue is the main worker loop that continuously processes messages.
+//
+// Each worker runs this method in a separate goroutine. The loop waits for either:
+//   - A notification on the queue's notification channel (instant processing)
+//   - A tick from the fallback poll timer (default 30s)
+//   - Context cancellation (graceful shutdown)
+//
+// When triggered, the worker calls processBatch to retrieve and deliver messages.
+// This hybrid approach ensures low-latency processing (via notifications) while
+// maintaining reliability (via periodic polling).
 func (w *Worker) processQueue(workerID int) {
 	defer w.wg.Done()
 	defer recovery.RecoverPanic(w.logger, fmt.Sprintf("queue worker %d", workerID))
@@ -116,7 +220,15 @@ func (w *Worker) processQueue(workerID int) {
 	}
 }
 
-// processBatch processes a batch of messages
+// processBatch retrieves and processes a batch of messages ready for delivery.
+//
+// This method:
+//  1. Retrieves up to BatchSize messages from the queue
+//  2. Extracts unique domains and prefetches their MX records in parallel
+//  3. Processes each message sequentially (delivery is already parallelized via worker pool)
+//
+// The DNS prefetch optimization significantly improves batch processing performance
+// by populating the MX cache before individual deliveries begin.
 func (w *Worker) processBatch(workerID int) {
 	batchSize := w.queueConfig.BatchSize
 	messages, err := w.queue.GetNextMessages(batchSize)
@@ -154,7 +266,16 @@ func (w *Worker) processBatch(workerID int) {
 	}
 }
 
-// processMessage handles a single message
+// processMessage handles the complete lifecycle of delivering a single message.
+//
+// The method:
+//  1. Marks the message as "sending" in the queue
+//  2. Attempts delivery via the delivery engine
+//  3. Records the delivery attempt with all result details
+//  4. Updates message status and schedules callbacks based on the outcome
+//
+// All delivery attempts are recorded in the database for auditing, regardless
+// of success or failure.
 func (w *Worker) processMessage(msg *queue.QueuedMessage) {
 	w.logger.Info("processing message",
 		zap.String("message_id", msg.MessageID),
@@ -199,7 +320,16 @@ func (w *Worker) processMessage(msg *queue.QueuedMessage) {
 	}
 }
 
-// handleSuccess processes successful delivery
+// handleSuccess processes a successful message delivery.
+//
+// On success:
+//   - Updates message status to "delivered"
+//   - Records final delivery details (MX host, source IP, SMTP response)
+//   - Enqueues a "delivered" webhook callback
+//   - Preserves the message for idempotency until cleanup job removes it
+//
+// Messages are not immediately deleted to maintain idempotency protection during
+// the configured idempotency TTL window.
 func (w *Worker) handleSuccess(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	w.logger.Info("message delivered successfully",
 		zap.String("message_id", msg.MessageID),
@@ -222,7 +352,17 @@ func (w *Worker) handleSuccess(msg *queue.QueuedMessage, result *delivery.Delive
 	// This preserves idempotency_key for deduplication during retry window
 }
 
-// handleFailure processes failed delivery
+// handleFailure processes a failed delivery attempt.
+//
+// The method inspects the error category and routes to the appropriate handler:
+//   - ErrorPermanent: Hard bounce (5xx SMTP codes) - no retry
+//   - ErrorThrottled: Per-domain rate limit hit - quick retry (default 5s)
+//   - ErrorTemporary: Temporary failure (4xx) - exponential backoff retry
+//   - ErrorGreylist: Greylisting detected (421) - fast retry (2 minutes)
+//   - ErrorNetwork: Network/DNS issues - exponential backoff retry
+//
+// If the message has exceeded its maximum age, it is marked as expired instead
+// of being retried.
 func (w *Worker) handleFailure(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	if result.Error == nil {
 		w.logger.Error("delivery failed but no error provided",
@@ -260,7 +400,17 @@ func (w *Worker) handleFailure(msg *queue.QueuedMessage, result *delivery.Delive
 	}
 }
 
-// handlePermanentFailure processes 5xx permanent errors
+// handlePermanentFailure processes permanent SMTP delivery failures.
+//
+// Permanent failures (5xx SMTP response codes) indicate the message cannot be
+// delivered and should not be retried. Common examples:
+//   - 550: Mailbox unavailable or rejected
+//   - 551: User not local
+//   - 552: Mailbox full
+//   - 554: Transaction failed
+//
+// The message is marked as "hard_bounce" and a hard bounce callback is enqueued.
+// No retry is scheduled.
 func (w *Worker) handlePermanentFailure(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	w.logger.Info("permanent failure - hard bounce",
 		zap.String("message_id", msg.MessageID),
@@ -281,7 +431,15 @@ func (w *Worker) handlePermanentFailure(msg *queue.QueuedMessage, result *delive
 	// This preserves idempotency_key for deduplication during retry window
 }
 
-// handleThrottledDelivery schedules quick retry for rate-limited deliveries
+// handleThrottledDelivery schedules a quick retry for rate-limited deliveries.
+//
+// When a per-domain rate limit is hit (internal throttling mechanism), the message
+// is rescheduled for retry after a short delay (default 5 seconds, configured via
+// per_domain_retry_seconds). The attempt counter is NOT incremented for throttled
+// deliveries, as they haven't actually attempted SMTP delivery.
+//
+// This differs from greylist handling, which uses a longer retry delay and is
+// triggered by remote SMTP server responses.
 func (w *Worker) handleThrottledDelivery(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	// Use configured throttle retry delay (default 5 seconds)
 	nextRetry := time.Now().Add(time.Duration(w.deliveryConfig.PerDomainRetrySeconds) * time.Second)
@@ -308,7 +466,25 @@ func (w *Worker) handleThrottledDelivery(msg *queue.QueuedMessage, result *deliv
 	}
 }
 
-// handleTemporaryFailure schedules retry for temporary errors
+// handleTemporaryFailure schedules a retry with exponential backoff.
+//
+// Temporary failures include:
+//   - 4xx SMTP response codes (temporary errors)
+//   - Network errors (connection failures, timeouts)
+//   - DNS resolution failures
+//   - Greylisting (421 response)
+//
+// The retry scheduler calculates the next retry time using exponential backoff:
+//   - Attempt 1: 5 minutes
+//   - Attempt 2: 10 minutes
+//   - Attempt 3: 20 minutes
+//   - ...
+//   - Maximum: 12 hours
+//
+// Greylisting errors use a shorter retry delay (default 2 minutes).
+//
+// If the message would expire before the next retry, it is marked as "temp_expired"
+// instead of being rescheduled.
 func (w *Worker) handleTemporaryFailure(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	newAttempts := msg.Attempts + 1
 
@@ -356,7 +532,14 @@ func (w *Worker) handleTemporaryFailure(msg *queue.QueuedMessage, result *delive
 	}
 }
 
-// handleExpired processes messages that have exceeded their lifetime
+// handleExpired processes messages that have exceeded their maximum age.
+//
+// Messages are considered expired when:
+//   - They have been in the queue longer than max_message_age_hours (default 48h)
+//   - The next retry would occur after the expiration time
+//
+// Expired messages are marked with status "expired" and an expired callback is
+// enqueued. No further delivery attempts are made.
 func (w *Worker) handleExpired(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	w.logger.Info("message expired",
 		zap.String("message_id", msg.MessageID),
@@ -374,7 +557,16 @@ func (w *Worker) handleExpired(msg *queue.QueuedMessage, result *delivery.Delive
 	// This preserves idempotency_key for deduplication during retry window
 }
 
-// cleanupExpired periodically cleans up expired messages
+// cleanupExpired periodically scans for and processes expired messages.
+//
+// This goroutine runs independently from delivery workers and wakes up at regular
+// intervals (default 60 seconds, configured via cleanup_interval_seconds) to find
+// messages that have exceeded their maximum age but haven't been marked as expired
+// yet (e.g., messages still in "queued" state past their expiration time).
+//
+// The cleanup worker ensures that all expired messages eventually receive proper
+// status updates and callbacks, even if they were never attempted due to system
+// issues or queue backlogs.
 func (w *Worker) cleanupExpired() {
 	defer w.wg.Done()
 	defer recovery.RecoverPanic(w.logger, "cleanup worker")
@@ -396,7 +588,14 @@ func (w *Worker) cleanupExpired() {
 	}
 }
 
-// performCleanup finds and processes expired messages
+// performCleanup executes a single cleanup cycle.
+//
+// This method queries the database for messages that have exceeded their expiration
+// time but are still in "queued" or "sending" status. Each expired message is marked
+// as "expired" and an expired callback is enqueued.
+//
+// The cleanup process does not delete messages immediately; they are preserved for
+// idempotency until the message retention period expires.
 func (w *Worker) performCleanup() {
 	expired, err := w.queue.FindExpiredMessages()
 	if err != nil {

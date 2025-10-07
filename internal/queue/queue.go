@@ -1,3 +1,26 @@
+/*
+Package queue provides a SQLite-backed message queue with WAL mode for concurrent access.
+
+The queue manages the lifecycle of email messages from submission to delivery,
+including retry scheduling, callback management, and delivery attempt auditing.
+
+Message Lifecycle:
+  - queued: Initial state after submission
+  - sending: Message is being delivered
+  - delivered: Successfully delivered to recipient MX
+  - hard_bounce: Permanent failure (5xx SMTP codes)
+  - temp_expired: Temporary failures exceeded max age
+  - expired: Message exceeded max age without delivery
+
+Features:
+  - Channel-based worker notifications (30s fallback polling)
+  - SQLite WAL mode for concurrent reads during writes
+  - Idempotency key support to prevent duplicate submissions
+  - Delivery attempt audit trail with SMTP response codes
+  - Callback queue for webhook notifications
+  - MX record caching with configurable TTL
+  - IP reputation tracking
+*/
 package queue
 
 import (
@@ -12,12 +35,20 @@ import (
 	"go.uber.org/zap"
 )
 
-// MetricsRecorder interface for recording queue metrics
+// MetricsRecorder is an interface for recording queue-related metrics.
+// Implementations typically export data to monitoring systems like Prometheus.
 type MetricsRecorder interface {
+	// RecordQueueDepth records the number of messages in a specific status.
 	RecordQueueDepth(status string, count int64)
 }
 
-// Queue manages the message queue in SQLite
+// Queue manages the persistent message queue using SQLite with WAL mode.
+//
+// It provides thread-safe operations for enqueueing, dequeueing, and updating
+// message status. Worker notification is event-driven via channels, with
+// periodic polling as a fallback.
+//
+// All write operations are serialized via writeMu to ensure SQLite consistency.
 type Queue struct {
 	db               *sql.DB
 	logger           *zap.Logger
@@ -27,7 +58,10 @@ type Queue struct {
 	metrics          MetricsRecorder // Optional metrics recorder
 }
 
-// QueuedMessage represents a message in the queue
+// QueuedMessage represents a single email message in the queue.
+//
+// It includes the message content, DKIM signing parameters, delivery state,
+// retry scheduling information, and the results of previous delivery attempts.
 type QueuedMessage struct {
 	ID        int64
 	MessageID string
@@ -65,7 +99,10 @@ type QueuedMessage struct {
 	SourceIP         string
 }
 
-// MessageStatus represents the state of a message
+// MessageStatus represents the current state of a message in the queue.
+//
+// Messages progress through states from queued → sending → delivered/bounce/expired.
+// Terminal states are: delivered, hard_bounce, temp_expired, expired.
 type MessageStatus string
 
 const (
@@ -77,7 +114,10 @@ const (
 	StatusExpired     MessageStatus = "expired"
 )
 
-// DeliveryAttempt records a single delivery attempt
+// DeliveryAttempt records details of a single delivery attempt for auditing.
+//
+// This provides a complete audit trail including SMTP response codes,
+// error messages, timing information, and error classification.
 type DeliveryAttempt struct {
 	ID            int64
 	MessageID     string
@@ -95,7 +135,14 @@ type DeliveryAttempt struct {
 	ErrorCategory string
 }
 
-// NewQueue creates a new queue instance
+// NewQueue creates a new Queue instance with SQLite WAL mode enabled.
+//
+// The database connection is configured with:
+//   - WAL (Write-Ahead Logging) journal mode for concurrent access
+//   - 5 second busy timeout to handle write contention
+//   - Automatic schema initialization and migrations
+//
+// Returns an error if the database cannot be opened or schema initialization fails.
 func NewQueue(dbPath string, logger *zap.Logger) (*Queue, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000")
 	if err != nil {
@@ -225,7 +272,14 @@ func (q *Queue) initSchema() error {
 	return err
 }
 
-// Enqueue adds a new message to the queue
+// Enqueue adds a new message to the queue with immediate retry scheduling.
+//
+// The message is inserted with status 'queued' and next_retry_at set to now,
+// making it immediately available for worker processing. Workers are notified
+// via the notifyCh channel for instant pickup.
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if the database insert fails (e.g., duplicate message_id).
 func (q *Queue) Enqueue(msg *QueuedMessage) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()
@@ -284,7 +338,13 @@ func (q *Queue) Enqueue(msg *QueuedMessage) error {
 	return nil
 }
 
-// GetNextMessages retrieves messages ready for processing
+// GetNextMessages retrieves a batch of messages ready for processing.
+//
+// Returns messages with status 'queued' and next_retry_at <= now, ordered by
+// next_retry_at (oldest first). The limit parameter controls batch size.
+//
+// This method is called periodically by workers to fetch messages for delivery.
+// It does NOT change message status - workers must call UpdateStatus separately.
 func (q *Queue) GetNextMessages(limit int) ([]*QueuedMessage, error) {
 	query := `
 		SELECT
@@ -365,7 +425,14 @@ func (q *Queue) GetNextMessages(limit int) ([]*QueuedMessage, error) {
 	return messages, nil
 }
 
-// UpdateStatus updates the message status
+// UpdateStatus updates the status of a message identified by messageID.
+//
+// This method changes the message status (e.g., from 'queued' to 'sending',
+// or to a terminal state like 'delivered' or 'hard_bounce') and updates the
+// updated_at timestamp.
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if the database update fails.
 func (q *Queue) UpdateStatus(messageID string, status MessageStatus) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()
@@ -388,7 +455,22 @@ func (q *Queue) UpdateStatus(messageID string, status MessageStatus) error {
 	return nil
 }
 
-// ScheduleRetry updates message for retry
+// ScheduleRetry updates a message for retry after a temporary delivery failure.
+//
+// This method resets the message status back to 'queued', increments the attempt
+// counter, sets the next retry time, and records the error details from the failed
+// delivery attempt. The message will be picked up by workers when nextRetry is reached.
+//
+// Parameters:
+//   - messageID: The unique identifier of the message to retry
+//   - nextRetry: The time when the message should be retried (based on exponential backoff)
+//   - attempts: The total number of delivery attempts made so far
+//   - lastError: The error message from the most recent failed attempt
+//   - smtpCode: The SMTP response code (e.g., 421 for greylisting, 450 for temporary failure)
+//   - smtpResponse: The full SMTP server response message
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if the database update fails.
 func (q *Queue) ScheduleRetry(messageID string, nextRetry time.Time, attempts int, lastError string, smtpCode int, smtpResponse string) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()
@@ -422,7 +504,22 @@ func (q *Queue) ScheduleRetry(messageID string, nextRetry time.Time, attempts in
 	return nil
 }
 
-// RecordAttempt logs a delivery attempt
+// RecordAttempt logs a delivery attempt to the audit trail.
+//
+// This method creates a permanent record of each delivery attempt, including
+// timing information, SMTP response codes, error messages, and error classification.
+// The audit trail is stored in the delivery_attempts table and is used for:
+//   - Debugging delivery issues
+//   - Analyzing delivery patterns
+//   - Generating delivery reports
+//   - Tracking which MX hosts and source IPs were used
+//
+// The attempt parameter should include all relevant delivery details including
+// whether the attempt succeeded, the SMTP code/response, duration, and error category
+// (temporary, permanent, greylist, network).
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if the database insert fails.
 func (q *Queue) RecordAttempt(attempt *DeliveryAttempt) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()
@@ -466,7 +563,18 @@ func (q *Queue) RecordAttempt(attempt *DeliveryAttempt) error {
 	return nil
 }
 
-// UpdateDeliveryResult updates final delivery details
+// UpdateDeliveryResult updates the final delivery details for a message.
+//
+// This method records which MX host successfully accepted the message, which
+// source IP was used, and the final SMTP response code and message. This information
+// is stored in the main messages table for quick access and reporting.
+//
+// Typically called after a successful delivery or when a message reaches a terminal
+// state (delivered, hard_bounce). The data provides valuable context for callbacks
+// and delivery analytics.
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if the database update fails.
 func (q *Queue) UpdateDeliveryResult(messageID string, mxHost string, sourceIP string, smtpCode int, smtpResponse string) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()
@@ -504,7 +612,19 @@ func (q *Queue) DeleteMessage(messageID string) error {
 	return nil
 }
 
-// FindExpiredMessages finds messages past their expiration time
+// FindExpiredMessages finds all messages that have exceeded their max age.
+//
+// Returns messages in 'queued' or 'sending' status where expires_at <= now.
+// These messages should be marked as 'temp_expired' (if they had temporary failures)
+// or 'expired' (if they never had a successful delivery attempt).
+//
+// The expiration time is set when the message is enqueued and is typically
+// calculated as created_at + max_message_age_hours (default: 48 hours).
+//
+// This method is called periodically by workers to identify messages that have
+// been in the queue too long and should no longer be retried.
+//
+// Returns an error if the database query fails.
 func (q *Queue) FindExpiredMessages() ([]*QueuedMessage, error) {
 	query := `
 		SELECT
@@ -543,7 +663,23 @@ func (q *Queue) FindExpiredMessages() ([]*QueuedMessage, error) {
 	return messages, nil
 }
 
-// EnqueueCallback adds a callback to the callback queue
+// EnqueueCallback adds a webhook callback to the callback queue.
+//
+// This method creates a new callback notification that will be sent to the configured
+// webhook URL. Callbacks are queued separately from messages and have their own retry
+// logic and circuit breaker to prevent webhook failures from affecting message delivery.
+//
+// Parameters:
+//   - messageID: The unique identifier of the message that triggered the callback
+//   - eventType: The type of event (delivered, hard_bounce, temp_expired, expired)
+//   - payload: The callback payload (will be JSON-marshaled), typically includes
+//     message details, delivery results, SMTP codes, and timestamps
+//
+// The callback is immediately available for processing (next_retry_at = now).
+// The callback processor is notified via callbackNotifyCh for instant pickup.
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if JSON marshaling or database insert fails.
 func (q *Queue) EnqueueCallback(messageID string, eventType string, payload interface{}) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()
@@ -582,7 +718,16 @@ func (q *Queue) EnqueueCallback(messageID string, eventType string, payload inte
 	return nil
 }
 
-// GetPendingCallbacks retrieves callbacks ready to send
+// GetPendingCallbacks retrieves callbacks that are ready to be sent.
+//
+// Returns callbacks where completed_at is NULL and next_retry_at <= now,
+// ordered by next_retry_at (oldest first). The limit parameter controls batch size.
+//
+// The callback processor calls this method periodically to fetch pending webhooks.
+// Unlike message delivery, callbacks that fail after max retries are eventually
+// dropped (not kept forever) to prevent the callback queue from growing unbounded.
+//
+// Returns an error if the database query fails.
 func (q *Queue) GetPendingCallbacks(limit int) ([]PendingCallback, error) {
 	query := `
 		SELECT id, message_id, event_type, payload, attempts, created_at
@@ -625,7 +770,14 @@ type PendingCallback struct {
 	CreatedAt time.Time
 }
 
-// MarkCallbackComplete marks a callback as successfully sent
+// MarkCallbackComplete marks a callback as successfully delivered.
+//
+// This method sets the completed_at timestamp, which excludes the callback from
+// future GetPendingCallbacks queries. Completed callbacks remain in the database
+// for audit purposes until cleaned up by the periodic cleanup job.
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if the database update fails.
 func (q *Queue) MarkCallbackComplete(callbackID int64) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()
@@ -643,7 +795,17 @@ func (q *Queue) ScheduleCallbackRetry(callbackID int64, nextRetry time.Time) err
 	return err
 }
 
-// GetMessageByIdempotencyKey retrieves a message by idempotency key
+// GetMessageByIdempotencyKey retrieves a message using its idempotency key.
+//
+// Idempotency keys are optional client-provided strings (typically UUIDs) that
+// prevent duplicate message submissions. When a client retries a request with
+// the same idempotency key, the API returns the original message status instead
+// of creating a duplicate.
+//
+// Returns nil if no message exists with the given idempotency key (allowing the
+// submission to proceed). Returns an error only if the database query fails.
+//
+// The idempotency_key index ensures fast lookups even with large message tables.
 func (q *Queue) GetMessageByIdempotencyKey(idempotencyKey string) (*QueuedMessage, error) {
 	query := `
 		SELECT
@@ -755,7 +917,19 @@ func ExtractDomain(email string) string {
 	return strings.ToLower(parts[1])
 }
 
-// GetMXCache retrieves MX cache data
+// GetMXCache retrieves cached MX records for a domain.
+//
+// Returns the JSON-encoded MX records, the cache timestamp, and the TTL in seconds.
+// The caller should check if the cache entry has expired by comparing:
+//
+//	cached_at + ttl_seconds vs current time
+//
+// MX record caching reduces DNS queries and improves delivery performance. The cache
+// stores both successful lookups (with normal TTL) and failed lookups (with negative TTL)
+// to prevent repeated queries for non-existent domains.
+//
+// Returns sql.ErrNoRows if no cache entry exists for the domain. Returns other errors
+// if the database query fails.
 func (q *Queue) GetMXCache(domain string) (recordsJSON, cachedAt string, ttlSeconds int, err error) {
 	query := `
 		SELECT mx_records, cached_at, ttl_seconds
@@ -766,7 +940,19 @@ func (q *Queue) GetMXCache(domain string) (recordsJSON, cachedAt string, ttlSeco
 	return
 }
 
-// StoreMXCache stores MX records in cache
+// StoreMXCache stores MX records in the cache with a specified TTL.
+//
+// The recordsJSON parameter should contain a JSON-encoded array of MX records
+// sorted by priority. The ttlSeconds parameter determines how long the cache
+// entry remains valid:
+//   - Successful lookups: Use dns.cache_ttl_seconds (default: 3600 = 1 hour)
+//   - Failed lookups: Use dns.cache_negative_ttl_seconds (default: 60 = 1 minute)
+//
+// Uses INSERT OR REPLACE to update existing entries or create new ones. The
+// cached_at timestamp is automatically set to CURRENT_TIMESTAMP.
+//
+// Write operations are serialized via writeMu to ensure SQLite consistency.
+// Returns an error if the database operation fails.
 func (q *Queue) StoreMXCache(domain string, recordsJSON string, ttlSeconds int) error {
 	q.writeMu.Lock()
 	defer q.writeMu.Unlock()

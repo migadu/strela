@@ -1,3 +1,56 @@
+// Package gossip provides distributed cluster coordination using HashiCorp's memberlist
+// gossip protocol. It enables multi-node deployments with automatic peer discovery,
+// distributed idempotency tracking, cluster-wide status monitoring, and leader election.
+//
+// Key Features:
+//   - Automatic peer discovery and failure detection
+//   - Distributed idempotency key tracking across cluster nodes
+//   - Leader election for coordinating singleton operations (e.g., Let's Encrypt)
+//   - Cluster-wide node status monitoring (queue depth, active workers, uptime)
+//   - Optional AES-256 encryption for secure cluster communication
+//   - Automatic cleanup of stale data and expired keys
+//
+// Architecture:
+//
+// The gossip service uses memberlist's SWIM protocol for efficient cluster membership
+// management. Each node maintains a local view of the cluster and propagates changes
+// through gossip messages. Leader election uses lexicographic ordering of node IDs,
+// ensuring deterministic and consistent leader selection across all nodes.
+//
+// Idempotency tracking prevents duplicate message submissions across cluster nodes
+// by broadcasting key claims with TTL-based expiration. Node status updates enable
+// monitoring of cluster health and load distribution.
+//
+// Example Usage:
+//
+//	cfg := &gossip.Config{
+//		Enabled:        true,
+//		BindAddr:       "0.0.0.0",
+//		BindPort:       7946,
+//		Peers:          []string{"node1:7946", "node2:7946"},
+//		NodeID:         "node-1",
+//		SecretKey:      "base64-encoded-32-byte-key",
+//		IdempotencyTTL: 15 * time.Minute,
+//	}
+//
+//	g, err := gossip.NewGossip(cfg, logger)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	defer g.Shutdown()
+//
+//	// Check if this node is the leader
+//	if g.IsLeader() {
+//		// Perform leader-only operations
+//	}
+//
+//	// Broadcast idempotency key claim
+//	g.BroadcastIdempotencyKey("request-123")
+//
+//	// Check if key is claimed by another node
+//	if nodeID := g.CheckIdempotencyKey("request-123"); nodeID != "" {
+//		fmt.Printf("Key claimed by node: %s\n", nodeID)
+//	}
 package gossip
 
 import (
@@ -13,22 +66,29 @@ import (
 	"go.uber.org/zap"
 )
 
-// MessageType represents the type of gossip message
+// MessageType represents the type of gossip message exchanged between cluster nodes.
+// Message types determine how incoming gossip data is decoded and processed.
 type MessageType byte
 
 const (
+	// MessageTypeIdempotency indicates an idempotency key claim broadcast.
 	MessageTypeIdempotency MessageType = iota
+	// MessageTypeNodeStatus indicates a node status update broadcast.
 	MessageTypeNodeStatus
 )
 
-// IdempotencyMessage broadcasts idempotency key claims
+// IdempotencyMessage broadcasts idempotency key claims to prevent duplicate
+// message submissions across cluster nodes. Each claim includes the claiming
+// node's ID and timestamp for TTL-based expiration.
 type IdempotencyMessage struct {
 	IdempotencyKey string
 	NodeID         string
 	Timestamp      time.Time
 }
 
-// NodeStatus represents the current state of a node
+// NodeStatus represents the current operational state of a cluster node,
+// including queue depth, worker activity, and uptime. This information
+// is used for cluster monitoring and load distribution insights.
 type NodeStatus struct {
 	NodeID        string
 	QueueDepth    int64
@@ -38,12 +98,15 @@ type NodeStatus struct {
 }
 
 // idempotencyCacheEntry holds an idempotency key with its timestamp
+// for TTL-based expiration tracking.
 type idempotencyCacheEntry struct {
 	NodeID    string
 	Timestamp time.Time
 }
 
-// Gossip manages the gossip protocol and cluster communication
+// Gossip manages the gossip protocol and cluster communication. It provides
+// distributed coordination primitives including idempotency tracking, leader
+// election, and cluster-wide status monitoring. Safe for concurrent use.
 type Gossip struct {
 	nodeID     string
 	memberlist *memberlist.Memberlist
@@ -67,18 +130,32 @@ type Gossip struct {
 	onNodeLeave func(node string)
 }
 
-// Config holds cluster configuration for gossip protocol
+// Config holds cluster configuration for the gossip protocol.
 type Config struct {
-	Enabled        bool
-	BindAddr       string // IP address to bind to (default: 0.0.0.0)
-	BindPort       int
-	Peers          []string // All other cluster nodes to connect to
-	NodeID         string
-	SecretKey      string // 32-byte base64 encoded encryption key
+	// Enabled determines whether the gossip protocol is active.
+	Enabled bool
+	// BindAddr is the IP address to bind to (default: 0.0.0.0).
+	BindAddr string
+	// BindPort is the UDP/TCP port for gossip communication (default: 7946).
+	BindPort int
+	// Peers is the list of other cluster nodes to connect to (host:port format).
+	Peers []string
+	// NodeID is a unique identifier for this node (defaults to hostname).
+	NodeID string
+	// SecretKey is a 32-byte base64-encoded AES-256 encryption key for secure
+	// cluster communication. If empty, communication is unencrypted (insecure).
+	SecretKey string
+	// IdempotencyTTL is the duration for which idempotency keys remain valid.
 	IdempotencyTTL time.Duration
 }
 
-// NewGossip creates a new gossip service
+// NewGossip creates a new gossip service and joins the specified cluster peers.
+// Returns nil if gossip is disabled in the configuration. If SecretKey is provided,
+// it must be exactly 32 bytes when base64-decoded for AES-256 encryption.
+//
+// The gossip service starts background goroutines for cache cleanup and will
+// attempt to join the specified peers. Join failures are logged but not fatal,
+// allowing the node to operate standalone or join later through peer discovery.
 func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
 	if !cfg.Enabled {
 		logger.Info("gossip protocol disabled")
@@ -172,7 +249,12 @@ func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
 	return g, nil
 }
 
-// BroadcastIdempotencyKey broadcasts an idempotency key claim to the cluster
+// BroadcastIdempotencyKey broadcasts an idempotency key claim to the cluster,
+// marking it as owned by this node. The key is stored in the local cache with
+// the current timestamp for TTL-based expiration. Other nodes will receive this
+// broadcast and prevent duplicate submissions with the same key.
+//
+// Returns nil if gossip is disabled. Safe for concurrent use.
 func (g *Gossip) BroadcastIdempotencyKey(idempotencyKey string) error {
 	if g == nil || g.memberlist == nil {
 		return nil // Gossip disabled
@@ -207,8 +289,12 @@ func (g *Gossip) BroadcastIdempotencyKey(idempotencyKey string) error {
 	return nil
 }
 
-// CheckIdempotencyKey checks if an idempotency key is claimed by another node
-// Returns the node ID if claimed, empty string if available
+// CheckIdempotencyKey checks if an idempotency key is claimed by any node in
+// the cluster, including this node. Returns the claiming node's ID if the key
+// is claimed and not expired, or an empty string if the key is available.
+//
+// Expired keys (older than IdempotencyTTL) are automatically removed from the
+// cache. Returns empty string if gossip is disabled. Safe for concurrent use.
 func (g *Gossip) CheckIdempotencyKey(idempotencyKey string) string {
 	if g == nil {
 		return "" // Gossip disabled
@@ -230,7 +316,12 @@ func (g *Gossip) CheckIdempotencyKey(idempotencyKey string) string {
 	return ""
 }
 
-// BroadcastNodeStatus broadcasts the current node's status to the cluster
+// BroadcastNodeStatus broadcasts the current node's operational status to the
+// cluster, including queue depth, active worker count, and uptime. This enables
+// cluster-wide monitoring and load distribution insights. Status updates are
+// stored locally and transmitted reliably to all cluster members.
+//
+// Returns nil if gossip is disabled. Safe for concurrent use.
 func (g *Gossip) BroadcastNodeStatus(queueDepth int64, activeWorkers int, uptime time.Duration) error {
 	if g == nil || g.memberlist == nil {
 		return nil // Gossip disabled
@@ -263,7 +354,11 @@ func (g *Gossip) BroadcastNodeStatus(queueDepth int64, activeWorkers int, uptime
 	return nil
 }
 
-// GetClusterStatus returns the status of all nodes in the cluster
+// GetClusterStatus returns the status of all nodes in the cluster as a map
+// keyed by node ID. Stale entries (nodes not seen for >5 minutes) are
+// automatically removed by the background cleanup goroutine.
+//
+// Returns an empty map if gossip is disabled. Safe for concurrent use.
 func (g *Gossip) GetClusterStatus() map[string]NodeStatus {
 	if g == nil {
 		return make(map[string]NodeStatus)
@@ -281,7 +376,11 @@ func (g *Gossip) GetClusterStatus() map[string]NodeStatus {
 	return result
 }
 
-// GetMembers returns the list of cluster members
+// GetMembers returns the list of all active cluster member node IDs.
+// This includes the local node and all peers that are currently alive
+// according to memberlist's failure detection.
+//
+// Returns an empty slice if gossip is disabled. Safe for concurrent use.
 func (g *Gossip) GetMembers() []string {
 	if g == nil || g.memberlist == nil {
 		return []string{}
@@ -297,7 +396,11 @@ func (g *Gossip) GetMembers() []string {
 	return result
 }
 
-// Shutdown gracefully shuts down the gossip service
+// Shutdown gracefully shuts down the gossip service by leaving the cluster
+// and stopping all background goroutines. Blocks for up to 5 seconds to
+// allow graceful departure messages to propagate to peers.
+//
+// Returns nil if gossip is disabled. Safe to call multiple times.
 func (g *Gossip) Shutdown() error {
 	if g == nil || g.memberlist == nil {
 		return nil
@@ -445,21 +548,34 @@ func (g *Gossip) cleanupExpiredKeys() {
 	}
 }
 
-// SetNodeJoinCallback sets a callback for when nodes join
+// SetNodeJoinCallback sets a callback function that is invoked when a node
+// joins the cluster. The callback receives the joining node's ID. Useful for
+// triggering cluster-wide coordination tasks or logging join events.
+//
+// Safe to call before or after gossip initialization. Does nothing if gossip is disabled.
 func (g *Gossip) SetNodeJoinCallback(fn func(node string)) {
 	if g != nil {
 		g.onNodeJoin = fn
 	}
 }
 
-// SetNodeLeaveCallback sets a callback for when nodes leave
+// SetNodeLeaveCallback sets a callback function that is invoked when a node
+// leaves the cluster (graceful departure or failure detection). The callback
+// receives the departing node's ID. Useful for cleaning up node-specific state.
+//
+// Safe to call before or after gossip initialization. Does nothing if gossip is disabled.
 func (g *Gossip) SetNodeLeaveCallback(fn func(node string)) {
 	if g != nil {
 		g.onNodeLeave = fn
 	}
 }
 
-// IsLeader returns true if this node is the cluster leader
+// IsLeader returns true if this node is the current cluster leader. Leadership
+// is determined by lexicographic ordering of node IDs (smallest wins). Leader
+// election is used to coordinate singleton operations like Let's Encrypt
+// certificate issuance across multi-node clusters.
+//
+// Returns false if gossip is disabled. Safe for concurrent use.
 func (g *Gossip) IsLeader() bool {
 	if g == nil {
 		return false
@@ -469,7 +585,10 @@ func (g *Gossip) IsLeader() bool {
 	return g.leader == g.nodeID
 }
 
-// GetLeader returns the current cluster leader node ID
+// GetLeader returns the node ID of the current cluster leader. Leader
+// is determined by lexicographic ordering of active member node IDs.
+//
+// Returns empty string if gossip is disabled. Safe for concurrent use.
 func (g *Gossip) GetLeader() string {
 	if g == nil {
 		return ""

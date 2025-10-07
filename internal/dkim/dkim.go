@@ -1,3 +1,35 @@
+// Package dkim provides DKIM (DomainKeys Identified Mail) email signing capabilities.
+// DKIM adds cryptographic signatures to email messages, allowing recipients to verify
+// that messages were authorized by the domain owner and not modified in transit.
+//
+// Key Features:
+//   - RSA-based DKIM signing with SHA-256 hashing
+//   - Support for 1024-bit and 2048-bit RSA keys
+//   - PKCS#1 and PKCS#8 private key formats
+//   - Configurable signature expiration (default: 7 days)
+//   - Standard header field signing (From, To, Subject, Date, etc.)
+//
+// DKIM Implementation:
+//
+// The package uses the emersion/go-msgauth library for DKIM signature generation.
+// Signatures are prepended to the original message as a DKIM-Signature header.
+// Recipients can verify signatures using the public key published in the domain's
+// DNS TXT records (typically at selector._domainkey.example.com).
+//
+// Example Usage:
+//
+//	privateKeyPEM := `-----BEGIN RSA PRIVATE KEY-----
+//	MIIEpAIBAAKCAQEA...
+//	-----END RSA PRIVATE KEY-----`
+//
+//	signedMsg, err := dkim.SignMessage(rawMessage, privateKeyPEM, "default", "example.com")
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+// DNS Record Example:
+//
+//	default._domainkey.example.com. IN TXT "v=DKIM1; k=rsa; p=MIIBIjANBgkq..."
 package dkim
 
 import (
@@ -13,8 +45,18 @@ import (
 	"github.com/emersion/go-msgauth/dkim"
 )
 
-// SignMessage signs an email message with DKIM
-// Supports both 1024-bit and 2048-bit RSA keys
+// SignMessage signs an email message with DKIM using RSA-SHA256. The signature
+// is prepended to the raw message as a DKIM-Signature header field. Supports
+// both 1024-bit and 2048-bit RSA private keys in PKCS#1 or PKCS#8 PEM format.
+//
+// Parameters:
+//   - rawMessage: Complete RFC 5322 email message (headers + body)
+//   - privateKeyPEM: PEM-encoded RSA private key (1024 or 2048 bits)
+//   - selector: DKIM selector (corresponds to DNS TXT record at selector._domainkey.domain)
+//   - domain: Signing domain (must match From header domain)
+//
+// Returns the signed message with DKIM-Signature header prepended, or an error
+// if signing fails. The signature expires after 7 days by default.
 func SignMessage(rawMessage []byte, privateKeyPEM, selector, domain string) ([]byte, error) {
 	// Parse private key
 	privateKey, err := parsePrivateKey(privateKeyPEM)
@@ -87,8 +129,13 @@ func parsePrivateKey(pemData string) (*rsa.PrivateKey, error) {
 	return nil, fmt.Errorf("unsupported PEM block type: %s (expected 'RSA PRIVATE KEY' or 'PRIVATE KEY')", block.Type)
 }
 
-// ValidatePrivateKey validates a DKIM private key without signing
-// Returns the key size in bits or an error
+// ValidatePrivateKey validates a DKIM private key without performing any
+// signing operation. This is useful for configuration validation at startup
+// to catch key format issues early.
+//
+// Returns the key size in bits (1024 or 2048) if valid, or an error if the
+// key cannot be parsed or has an unsupported size. Both PKCS#1 and PKCS#8
+// formats are supported.
 func ValidatePrivateKey(privateKeyPEM string) (int, error) {
 	privateKey, err := parsePrivateKey(privateKeyPEM)
 	if err != nil {
@@ -104,6 +151,10 @@ func ValidatePrivateKey(privateKeyPEM string) (int, error) {
 }
 
 // ExtractDomainFromEmail extracts the domain part from an email address
+// (the part after the @ symbol). Returns empty string if the email address
+// is malformed or does not contain exactly one @ symbol.
+//
+// Example: ExtractDomainFromEmail("user@example.com") returns "example.com"
 func ExtractDomainFromEmail(email string) string {
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {

@@ -1,3 +1,46 @@
+// Package main implements fune-admin, the administration CLI for fune SMTP delivery service.
+//
+// fune-admin provides command-line access to operational data and management functions
+// for fune-server. It directly queries the SQLite database for most operations and
+// communicates with the server's HTTP API for runtime operations.
+//
+// Available commands:
+//   - queue: Display queue statistics (total, queued, sending, delivered, bounces)
+//   - queue-domains: Show top 20 domains by message count with status breakdown
+//   - queue-senders: Show top 20 senders by message count with status breakdown
+//   - throughput: Display delivery throughput over various time windows
+//   - failures: Show last 20 delivery failures with SMTP codes and error messages
+//   - callbacks: Display callback queue statistics
+//   - reputation: Show IP reputation status for all tracked source IPs
+//   - database: Show database health metrics (size, fragmentation, cache hit rate)
+//   - health: Query server's comprehensive health endpoint (requires running server)
+//   - config: Display current configuration from config.toml
+//   - reload: Send SIGHUP signal to server for configuration hot reload
+//   - version: Show version information
+//
+// Command-line flags:
+//   - -config: Path to configuration file (default: config.toml)
+//   - -json: Output results in JSON format for programmatic consumption
+//   - -server: Server address for health command (default: http://localhost:8080)
+//
+// Database access:
+// Most commands open the SQLite database in read-only mode for safety.
+// The admin tool uses the same database as the server and is safe to run
+// while the server is running due to SQLite's WAL mode concurrent read support.
+//
+// Usage examples:
+//
+//	fune-admin queue                          # Show queue statistics
+//	fune-admin throughput -json               # Get throughput in JSON format
+//	fune-admin queue-domains                  # View messages grouped by domain
+//	fune-admin reputation                     # Check IP reputation status
+//	fune-admin config -config /etc/fune/config.toml  # View production config
+//	fune-admin reload -config /etc/fune/config.toml  # Reload server config
+//	fune-admin health -server https://fune.example.com  # Remote health check
+//
+// Exit codes:
+//   - 0: Success
+//   - 1: Error (configuration, database, or command execution failure)
 package main
 
 import (
@@ -17,47 +60,68 @@ import (
 	"fune/internal/config"
 )
 
-// Version information, injected at build time
+// Version information, injected at build time via ldflags.
+// Set during compilation with:
+//
+//	go build -ldflags "-X main.version=1.0.0 -X main.commit=$(git rev-parse HEAD) -X main.date=$(date -u +%Y-%m-%d)"
 var (
 	version = "dev"
 	commit  = "none"
 	date    = "unknown"
 )
 
+// usage provides comprehensive help text for the fune-admin CLI tool.
 const usage = `fune-admin - Administration tool for fune SMTP delivery service
 
 Usage:
   fune-admin [command] [flags]
 
 Commands:
-  queue           Show queue statistics
-  queue-domains   Show queue grouped by domain (top 20)
-  queue-senders   Show queue grouped by sender (top 20)
-  throughput      Show delivery throughput statistics
-  failures        Show recent delivery failures (last 20)
-  callbacks       Show callback queue statistics
-  reputation      Show IP reputation status
-  database        Show database statistics and health
+  queue           Show queue statistics (total, queued, sending, delivered, bounces, age)
+  queue-domains   Show queue grouped by domain (top 20 with status breakdown)
+  queue-senders   Show queue grouped by sender (top 20 with status breakdown)
+  throughput      Show delivery throughput statistics (1h, 6h, 24h, 7d windows)
+  failures        Show recent delivery failures (last 20 with SMTP codes and errors)
+  callbacks       Show callback queue statistics (pending, completed)
+  reputation      Show IP reputation status (degraded IPs, failure counts, recovery times)
+  database        Show database statistics and health (size, fragmentation, cache hit rate)
   health          Show comprehensive health status (cluster, queue, circuit breaker, system)
-  config          Show current configuration
-  reload          Reload fune-server configuration (sends SIGHUP)
-  version         Show version information
+  config          Show current configuration (all sections with values)
+  reload          Reload fune-server configuration (sends SIGHUP signal)
+  version         Show version information (version, commit, build date)
   help            Show this help message
 
 Flags:
   -config string   Path to config file (default: config.toml)
-  -json            Output in JSON format
-  -server string   Server address for health (default: http://localhost:8080)
+  -json            Output in JSON format for programmatic consumption
+  -server string   Server address for health command (default: http://localhost:8080)
 
 Examples:
-  fune-admin queue
-  fune-admin throughput -json
-  fune-admin queue-domains
-  fune-admin reputation
-  fune-admin config -config /etc/fune/config.toml
-  fune-admin reload -config /etc/fune/config.toml
+  fune-admin queue                                    # Display current queue status
+  fune-admin throughput -json                         # Get throughput metrics in JSON
+  fune-admin queue-domains                            # View messages grouped by domain
+  fune-admin reputation                               # Check IP reputation tracking
+  fune-admin database                                 # Analyze database health
+  fune-admin config -config /etc/fune/config.toml     # View production configuration
+  fune-admin reload -config /etc/fune/config.toml     # Hot reload server config
+  fune-admin health -server https://fune.example.com  # Remote health check with TLS
 `
 
+// main is the entry point for fune-admin CLI tool.
+//
+// It parses command-line arguments, loads configuration if needed, and dispatches
+// to the appropriate command handler. Most commands query the SQLite database
+// directly, while the health command communicates with the running server via HTTP.
+//
+// Command execution flow:
+//  1. Parse command from os.Args[1]
+//  2. Setup flag set for command-specific options
+//  3. Load configuration (for database path)
+//  4. Execute command handler
+//  5. Exit with appropriate status code
+//
+// The function supports JSON output mode via -json flag for all commands,
+// enabling integration with monitoring and automation tools.
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Print(usage)
@@ -182,6 +246,18 @@ func main() {
 	}
 }
 
+// showQueueStats displays current queue statistics including message counts by status.
+//
+// Queries the SQLite database for aggregate queue data:
+//   - Total messages across all states
+//   - Breakdown by status (queued, sending, delivered, bounces, expired)
+//   - Age of oldest queued message (for detecting stalled deliveries)
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of formatted text
+//
+// Returns an error if database access fails or query execution fails.
 func showQueueStats(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -216,6 +292,17 @@ func showQueueStats(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showDomainStats displays queue statistics grouped by recipient domain.
+//
+// Shows the top 20 domains by message count with breakdown of queued, sending,
+// and failed messages per domain. This helps identify which domains have
+// large message volumes or delivery issues.
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of tabular format
+//
+// Returns an error if database access fails or query execution fails.
 func showDomainStats(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -248,6 +335,17 @@ func showDomainStats(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showSenderStats displays queue statistics grouped by sender email address.
+//
+// Shows the top 20 senders by message count with breakdown of queued, sending,
+// and failed messages per sender. This helps identify which senders generate
+// the most traffic or have problematic sending patterns.
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of tabular format
+//
+// Returns an error if database access fails or query execution fails.
 func showSenderStats(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -280,6 +378,21 @@ func showSenderStats(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showThroughput displays delivery throughput statistics over multiple time windows.
+//
+// Queries the delivery_attempts table to show:
+//   - Last 1 hour: Recent delivery activity
+//   - Last 6 hours: Short-term trends
+//   - Last 24 hours: Daily delivery volume
+//   - Last 7 days: Weekly delivery patterns
+//   - Total attempts: Historical cumulative count
+//   - Success rate: Percentage of successful deliveries
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of formatted text
+//
+// Returns an error if database access fails or query execution fails.
 func showThroughput(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -308,6 +421,25 @@ func showThroughput(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showFailures displays the most recent delivery failures with error details.
+//
+// Shows the last 20 failed delivery attempts from the delivery_attempts table,
+// including:
+//   - Timestamp of failure
+//   - Message ID
+//   - MX hostname
+//   - SMTP response code
+//   - Error category (temporary, permanent, network, etc.)
+//   - Error message (truncated for display)
+//
+// This is useful for diagnosing delivery issues and identifying problematic
+// recipient domains or network problems.
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of tabular format
+//
+// Returns an error if database access fails or query execution fails.
 func showFailures(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -348,6 +480,21 @@ func showFailures(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showCallbacks displays webhook callback queue statistics.
+//
+// Shows the status of the callback queue including:
+//   - Total callbacks generated
+//   - Pending callbacks (not yet delivered)
+//   - Completed callbacks (successfully delivered)
+//
+// Callbacks are webhook notifications sent to configured endpoints when
+// delivery events occur (success, failure, etc.).
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of formatted text
+//
+// Returns an error if database access fails or query execution fails.
 func showCallbacks(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -373,6 +520,36 @@ func showCallbacks(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showDatabase displays comprehensive database health metrics.
+//
+// Analyzes the SQLite database to show:
+//
+// Storage metrics:
+//   - Database file size in MB
+//   - WAL (Write-Ahead Log) size in MB
+//   - Page size and count
+//
+// Performance metrics:
+//   - Active database connections
+//   - Cache hit ratio (should be >80%)
+//   - Fragmentation ratio (warns if >30%)
+//   - WAL checkpoint count
+//
+// Queue depth:
+//   - Current queued messages
+//   - Current sending messages
+//   - Total active workload
+//
+// Health recommendations:
+//   - Suggests VACUUM if fragmentation is high
+//   - Warns about low cache hit rates
+//   - Alerts on large database sizes
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of formatted text
+//
+// Returns an error if database access fails or stat queries fail.
 func showDatabase(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -447,6 +624,25 @@ func showDatabase(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showReputation displays IP reputation tracking status for all source IPs.
+//
+// Shows reputation information from the degraded_ips table including:
+//   - Source IP address
+//   - Status (healthy or degraded)
+//   - Failure count
+//   - Time since degradation (if applicable)
+//   - Last delivery attempt time
+//   - SMTP code and response that triggered degradation
+//
+// Degraded IPs are automatically removed from the rotation pool and retried
+// after the configured delay (default: 48 hours). This helps maintain sender
+// reputation by avoiding IPs that have been flagged by recipient servers.
+//
+// Parameters:
+//   - dbPath: Path to SQLite database file
+//   - jsonOutput: If true, output JSON instead of tabular format
+//
+// Returns an error if database access fails or query execution fails.
 func showReputation(dbPath string, jsonOutput bool) error {
 	db, err := admin.NewAdminDB(dbPath)
 	if err != nil {
@@ -529,6 +725,26 @@ func showReputation(dbPath string, jsonOutput bool) error {
 	return nil
 }
 
+// showConfig displays the current server configuration from config.toml.
+//
+// Loads and pretty-prints the configuration file showing all sections:
+//   - [HTTP] - Inbound HTTP API settings
+//   - [TLS] - TLS configuration (file-based or Let's Encrypt)
+//   - [Server] - Server runtime settings (database, PID file)
+//   - [Queue] - Queue and worker pool settings
+//   - [Delivery] - SMTP delivery configuration
+//   - [Circuit Breaker] - Circuit breaker thresholds
+//   - [Callbacks] - Webhook notification settings
+//   - [IP Reputation] - IP tracking and rotation settings
+//
+// This is useful for verifying configuration values in production and
+// troubleshooting configuration-related issues.
+//
+// Parameters:
+//   - configPath: Path to configuration file
+//   - jsonOutput: If true, output raw config as JSON
+//
+// Returns an error if config file cannot be loaded or parsed.
 func showConfig(configPath string, jsonOutput bool) error {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -617,6 +833,33 @@ func showConfig(configPath string, jsonOutput bool) error {
 	return nil
 }
 
+// reloadServer triggers a configuration hot reload on the running fune-server.
+//
+// This function sends a SIGHUP signal to the server process, which triggers
+// configuration reload without restarting the process or dropping connections.
+//
+// Hot reloadable settings include:
+//   - Source IPs for delivery
+//   - IP selection strategy
+//   - Rate limit intervals
+//   - Circuit breaker thresholds
+//   - DNS resolver configuration
+//   - TLS certificates (file-based only)
+//
+// Non-reloadable settings (require restart):
+//   - Database path
+//   - Listen address
+//   - Worker count
+//
+// Process:
+//  1. Load config to get PID file path
+//  2. Read PID from PID file
+//  3. Send SIGHUP signal to process
+//
+// Parameters:
+//   - configPath: Path to configuration file (for locating PID file)
+//
+// Returns an error if PID file cannot be read, process not found, or signal fails.
 func reloadServer(configPath string) error {
 	// Load config to get PID file path
 	cfg, err := config.LoadConfig(configPath)
@@ -654,12 +897,36 @@ func reloadServer(configPath string) error {
 
 // Helper functions
 
+// outputJSON encodes data as pretty-printed JSON to stdout.
+//
+// Used by all commands when -json flag is provided. The JSON is indented
+// with 2 spaces for readability and ends with a newline.
+//
+// Parameters:
+//   - data: Any JSON-serializable data structure
+//
+// Returns an error if JSON encoding fails.
 func outputJSON(data interface{}) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(data)
 }
 
+// formatDuration converts a time.Duration to a human-readable string.
+//
+// Formats durations intelligently based on magnitude:
+//   - < 1 minute: "45s"
+//   - < 1 hour: "15m"
+//   - < 24 hours: "2h 30m"
+//   - >= 24 hours: "5d 12h"
+//
+// This is used for displaying age of messages, uptime, and time-since values
+// in a compact, easy-to-read format.
+//
+// Parameters:
+//   - d: Duration to format
+//
+// Returns a formatted string representation.
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
@@ -675,6 +942,16 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd %dh", days, hours)
 }
 
+// truncate shortens a string to maxLen characters, appending "..." if truncated.
+//
+// Used in tabular output to prevent long strings (error messages, message IDs)
+// from breaking table formatting. The "..." suffix indicates truncation.
+//
+// Parameters:
+//   - s: String to potentially truncate
+//   - maxLen: Maximum length before truncation
+//
+// Returns the original string if len(s) <= maxLen, otherwise a truncated version.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -682,6 +959,16 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// firstLine extracts the first line from a multi-line string.
+//
+// SMTP error messages and responses often contain multiple lines, but only
+// the first line is typically needed for display in tabular output. This
+// function splits on CR or LF and returns the first segment.
+//
+// Parameters:
+//   - s: Multi-line string
+//
+// Returns the first line, or the entire string if no line breaks are found.
 func firstLine(s string) string {
 	idx := strings.IndexAny(s, "\r\n")
 	if idx > 0 {
@@ -690,7 +977,10 @@ func firstLine(s string) string {
 	return s
 }
 
-// ClusterNodeStatus represents the status of a cluster node
+// ClusterNodeStatus represents the operational status of a cluster node.
+//
+// This structure is populated from the gossip protocol's node metadata
+// and is used by the health command to display cluster-wide status.
 type ClusterNodeStatus struct {
 	NodeID        string `json:"node_id"`
 	QueueDepth    int64  `json:"queue_depth"`
@@ -700,7 +990,10 @@ type ClusterNodeStatus struct {
 	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
-// HealthResponse structures for health endpoint
+// HealthResponse represents the complete health status from the server's /health endpoint.
+//
+// This structure matches the JSON response from fune-server's health handler
+// and includes comprehensive system, queue, cluster, and circuit breaker status.
 type HealthResponse struct {
 	Status    string                `json:"status"`
 	Timestamp string                `json:"timestamp"`
@@ -712,6 +1005,7 @@ type HealthResponse struct {
 	System    HealthSystem          `json:"system"`
 }
 
+// HealthQueue represents queue status within the health response.
 type HealthQueue struct {
 	Pending   int64 `json:"pending"`
 	Active    int64 `json:"active"`
@@ -720,6 +1014,10 @@ type HealthQueue struct {
 	Total     int64 `json:"total"`
 }
 
+// HealthCluster represents cluster status within the health response.
+//
+// Includes gossip protocol information such as node count, leader identity,
+// and per-node operational metrics.
 type HealthCluster struct {
 	Enabled   bool                         `json:"enabled"`
 	NodeCount int                          `json:"node_count"`
@@ -727,6 +1025,9 @@ type HealthCluster struct {
 	Nodes     map[string]ClusterNodeStatus `json:"nodes,omitempty"`
 }
 
+// HealthCircuitBreaker represents circuit breaker status within the health response.
+//
+// Circuit breaker states: closed (normal), open (failing), half-open (recovering).
 type HealthCircuitBreaker struct {
 	State         string `json:"state"`
 	Failures      uint32 `json:"failures"`
@@ -734,6 +1035,7 @@ type HealthCircuitBreaker struct {
 	LastStateTime string `json:"last_state_time"`
 }
 
+// HealthDatabase represents database health metrics within the health response.
 type HealthDatabase struct {
 	SizeMB          float64 `json:"size_mb"`
 	WALSizeMB       float64 `json:"wal_size_mb"`
@@ -744,6 +1046,7 @@ type HealthDatabase struct {
 	SendingMessages int64   `json:"sending_messages"`
 }
 
+// HealthSystem represents system resource metrics within the health response.
 type HealthSystem struct {
 	GoVersion     string `json:"go_version"`
 	Goroutines    int    `json:"goroutines"`
@@ -751,6 +1054,28 @@ type HealthSystem struct {
 	MemoryAllocMB uint64 `json:"memory_alloc_mb"`
 }
 
+// showHealth queries the server's /health endpoint and displays comprehensive status.
+//
+// Unlike other commands that query the database directly, this command makes
+// an HTTP GET request to the running server's health endpoint. This requires
+// the server to be running and accessible.
+//
+// The health endpoint provides:
+//   - Overall service status (healthy or degraded)
+//   - Queue depth and message counts
+//   - Database health metrics (size, fragmentation, cache hit rate)
+//   - Cluster information (if gossip is enabled)
+//   - Circuit breaker state
+//   - System resources (memory, goroutines)
+//
+// This is the preferred command for monitoring and alerting integrations
+// as it provides a single comprehensive view of server health.
+//
+// Parameters:
+//   - serverAddr: Base URL of the fune-server (e.g., http://localhost:8080)
+//   - jsonOutput: If true, output JSON instead of formatted text
+//
+// Returns an error if HTTP request fails or response cannot be parsed.
 func showHealth(serverAddr string, jsonOutput bool) error {
 	url := fmt.Sprintf("%s/health", serverAddr)
 
