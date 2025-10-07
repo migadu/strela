@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"fune/internal/queue"
+
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -85,12 +87,12 @@ func (a *AdminDB) GetQueueStats() (*QueueStats, error) {
 	query := `
 		SELECT
 			COUNT(*) as total,
-			SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) as queued,
-			SUM(CASE WHEN status = 'sending' THEN 1 ELSE 0 END) as sending,
-			SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) as delivered,
-			SUM(CASE WHEN status = 'hard_bounce' THEN 1 ELSE 0 END) as hard_bounce,
-			SUM(CASE WHEN status = 'temp_expired' THEN 1 ELSE 0 END) as temp_expired,
-			SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) as expired
+			COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0) as queued,
+			COALESCE(SUM(CASE WHEN status = 'sending' THEN 1 ELSE 0 END), 0) as sending,
+			COALESCE(SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END), 0) as delivered,
+			COALESCE(SUM(CASE WHEN status = 'hard_bounce' THEN 1 ELSE 0 END), 0) as hard_bounce,
+			COALESCE(SUM(CASE WHEN status = 'temp_expired' THEN 1 ELSE 0 END), 0) as temp_expired,
+			COALESCE(SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END), 0) as expired
 		FROM messages
 	`
 
@@ -351,6 +353,66 @@ type IPReputationInfo struct {
 	LastAttemptAt *time.Time
 	SMTPCode      int
 	SMTPResponse  string
+}
+
+// GetDatabaseStats retrieves comprehensive database statistics
+// This is a convenience wrapper that creates a temporary Queue connection
+func GetDatabaseStats(dbPath string) (*queue.DatabaseStats, error) {
+	db, err := sql.Open("sqlite3", dbPath+"?mode=ro&_journal_mode=WAL")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	stats := &queue.DatabaseStats{}
+
+	// Get page count and size
+	err = db.QueryRow("PRAGMA page_count").Scan(&stats.PageCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page count: %w", err)
+	}
+
+	err = db.QueryRow("PRAGMA page_size").Scan(&stats.PageSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page size: %w", err)
+	}
+
+	stats.SizeBytes = stats.PageCount * stats.PageSize
+
+	// Get freelist count (for fragmentation)
+	var freelistCount int64
+	err = db.QueryRow("PRAGMA freelist_count").Scan(&freelistCount)
+	if err == nil && stats.PageCount > 0 {
+		stats.FragmentRatio = float64(freelistCount) / float64(stats.PageCount)
+	}
+
+	// Get WAL file size (if exists)
+	var walPages int64
+	err = db.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(nil, &walPages, nil)
+	if err == nil {
+		stats.WALSizeBytes = walPages * stats.PageSize
+	}
+
+	// Get queue depth by status
+	err = db.QueryRow(`
+		SELECT
+			COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'sending' THEN 1 ELSE 0 END), 0)
+		FROM messages
+	`).Scan(&stats.QueuedMessages, &stats.SendingMessages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get message counts: %w", err)
+	}
+
+	// Get connection pool stats
+	dbStats := db.Stats()
+	stats.Connections = dbStats.OpenConnections
+
+	// Note: Cache hit ratio is not easily available in read-only mode
+	// Setting to 0 as indicator that it's not available
+	stats.CacheHitRatio = 0
+
+	return stats, nil
 }
 
 // GetIPReputationStats retrieves IP reputation information

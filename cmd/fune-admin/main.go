@@ -37,6 +37,7 @@ Commands:
   failures        Show recent delivery failures (last 20)
   callbacks       Show callback queue statistics
   reputation      Show IP reputation status
+  database        Show database statistics and health
   health          Show comprehensive health status (cluster, queue, circuit breaker, system)
   config          Show current configuration
   reload          Reload fune-server configuration (sends SIGHUP)
@@ -136,6 +137,13 @@ func main() {
 
 	case "reputation":
 		err := showReputation(dbPath, *jsonOutput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "database":
+		err := showDatabase(dbPath, *jsonOutput)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -361,6 +369,80 @@ func showCallbacks(dbPath string, jsonOutput bool) error {
 	fmt.Printf("Total callbacks:     %d\n", stats.Total)
 	fmt.Printf("Pending:             %d\n", stats.Pending)
 	fmt.Printf("Completed:           %d\n", stats.Completed)
+
+	return nil
+}
+
+func showDatabase(dbPath string, jsonOutput bool) error {
+	db, err := admin.NewAdminDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	// Get database file stats using the internal queue package
+	// We'll need to open a queue connection temporarily
+	queueDB, err := admin.GetDatabaseStats(dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to get database stats: %w", err)
+	}
+
+	if jsonOutput {
+		return outputJSON(queueDB)
+	}
+
+	fmt.Println("Database Statistics")
+	fmt.Println(strings.Repeat("=", 90))
+	fmt.Println()
+
+	fmt.Println("Storage:")
+	fmt.Printf("  Database Size:     %.2f MB\n", float64(queueDB.SizeBytes)/1024/1024)
+	fmt.Printf("  WAL Size:          %.2f MB\n", float64(queueDB.WALSizeBytes)/1024/1024)
+	fmt.Printf("  Total Size:        %.2f MB\n", float64(queueDB.SizeBytes+queueDB.WALSizeBytes)/1024/1024)
+	fmt.Printf("  Page Size:         %d bytes\n", queueDB.PageSize)
+	fmt.Printf("  Page Count:        %d\n", queueDB.PageCount)
+	fmt.Println()
+
+	fmt.Println("Performance:")
+	fmt.Printf("  Active Connections: %d\n", queueDB.Connections)
+	fmt.Printf("  Cache Hit Rate:     %.1f%%", queueDB.CacheHitRatio*100)
+	if queueDB.CacheHitRatio < 0.8 {
+		fmt.Printf(" ⚠️  LOW")
+	}
+	fmt.Println()
+	fmt.Printf("  Fragmentation:      %.1f%%", queueDB.FragmentRatio*100)
+	if queueDB.FragmentRatio > 0.3 {
+		fmt.Printf(" ⚠️  HIGH (consider VACUUM)")
+	}
+	fmt.Println()
+	fmt.Printf("  WAL Checkpoints:    %d\n", queueDB.WALCheckpoints)
+	fmt.Println()
+
+	fmt.Println("Queue Depth:")
+	fmt.Printf("  Queued Messages:    %d\n", queueDB.QueuedMessages)
+	fmt.Printf("  Sending Messages:   %d\n", queueDB.SendingMessages)
+	fmt.Printf("  Total Active:       %d\n", queueDB.QueuedMessages+queueDB.SendingMessages)
+	fmt.Println()
+
+	// Health recommendations
+	fmt.Println("Recommendations:")
+	hasRecommendations := false
+
+	if queueDB.FragmentRatio > 0.3 {
+		fmt.Println("  ⚠️  High fragmentation detected. Run 'sqlite3 queue.db \"VACUUM;\"' to compact database")
+		hasRecommendations = true
+	}
+	if queueDB.CacheHitRatio < 0.8 && queueDB.CacheHitRatio > 0 {
+		fmt.Println("  ⚠️  Low cache hit rate. Consider increasing SQLite cache_size")
+		hasRecommendations = true
+	}
+	if float64(queueDB.SizeBytes)/1024/1024 > 5000 { // 5GB
+		fmt.Println("  ⚠️  Large database size. Consider archiving old messages")
+		hasRecommendations = true
+	}
+	if !hasRecommendations {
+		fmt.Println("  ✓ Database health looks good")
+	}
 
 	return nil
 }
@@ -624,6 +706,7 @@ type HealthResponse struct {
 	Timestamp string                `json:"timestamp"`
 	Uptime    string                `json:"uptime"`
 	Queue     HealthQueue           `json:"queue"`
+	Database  *HealthDatabase       `json:"database,omitempty"`
 	Cluster   *HealthCluster        `json:"cluster,omitempty"`
 	Circuit   *HealthCircuitBreaker `json:"circuit_breaker,omitempty"`
 	System    HealthSystem          `json:"system"`
@@ -649,6 +732,16 @@ type HealthCircuitBreaker struct {
 	Failures      uint32 `json:"failures"`
 	Successes     uint32 `json:"successes"`
 	LastStateTime string `json:"last_state_time"`
+}
+
+type HealthDatabase struct {
+	SizeMB          float64 `json:"size_mb"`
+	WALSizeMB       float64 `json:"wal_size_mb"`
+	Connections     int     `json:"connections"`
+	FragmentPercent float64 `json:"fragment_percent"`
+	CacheHitPercent float64 `json:"cache_hit_percent"`
+	QueuedMessages  int64   `json:"queued_messages"`
+	SendingMessages int64   `json:"sending_messages"`
 }
 
 type HealthSystem struct {
@@ -689,6 +782,21 @@ func showHealth(serverAddr string, jsonOutput bool) error {
 
 	fmt.Println("Queue:")
 	fmt.Printf("  Pending:   %d\n\n", health.Queue.Pending)
+
+	if health.Database != nil {
+		fmt.Println("Database:")
+		fmt.Printf("  Size:           %.2f MB\n", health.Database.SizeMB)
+		fmt.Printf("  WAL Size:       %.2f MB\n", health.Database.WALSizeMB)
+		fmt.Printf("  Connections:    %d\n", health.Database.Connections)
+		fmt.Printf("  Fragment:       %.1f%%", health.Database.FragmentPercent)
+		if health.Database.FragmentPercent > 30 {
+			fmt.Printf(" ⚠️  HIGH")
+		}
+		fmt.Println()
+		fmt.Printf("  Cache Hit Rate: %.1f%%\n", health.Database.CacheHitPercent)
+		fmt.Printf("  Queued:         %d messages\n", health.Database.QueuedMessages)
+		fmt.Printf("  Sending:        %d messages\n\n", health.Database.SendingMessages)
+	}
 
 	if health.Cluster != nil {
 		fmt.Println("Cluster:")

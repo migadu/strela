@@ -330,6 +330,9 @@ func main() {
 		finalHandler = handler.MetricsMiddleware(httpHandler, m)
 	}
 
+	// Wrap with security headers middleware (defense in depth)
+	finalHandler = handler.SecurityHeadersMiddleware(finalHandler)
+
 	// Setup HTTP router
 	mux := http.NewServeMux()
 	mux.Handle("/", finalHandler)

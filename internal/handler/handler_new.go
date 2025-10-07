@@ -32,17 +32,27 @@ type QueueMessageHandler struct {
 	httpConfig     *config.InboundConfig
 	circuitBreaker *delivery.CircuitBreaker
 	gossip         GossipService
+	rateLimiter    *RateLimiter
 	logger         *zap.Logger
 }
 
 // NewQueueMessageHandler creates a new queue-based message handler
 func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.OutboundConfig, httpCfg *config.InboundConfig, circuitBreaker *delivery.CircuitBreaker, logger *zap.Logger) *QueueMessageHandler {
+	var rateLimiter *RateLimiter
+	if httpCfg.RateLimitEnabled {
+		rateLimiter = NewRateLimiter(httpCfg.RateLimitRequestsPerIP, httpCfg.RateLimitWindowSeconds)
+		logger.Info("rate limiting enabled",
+			zap.Int("requests_per_ip", httpCfg.RateLimitRequestsPerIP),
+			zap.Int("window_seconds", httpCfg.RateLimitWindowSeconds))
+	}
+
 	return &QueueMessageHandler{
 		queue:          q,
 		deliveryConfig: deliveryCfg,
 		httpConfig:     httpCfg,
 		circuitBreaker: circuitBreaker,
 		gossip:         nil, // Set via SetGossip() after initialization
+		rateLimiter:    rateLimiter,
 		logger:         logger,
 	}
 }
@@ -69,6 +79,19 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if r.Method != http.MethodPost {
 		h.logger.Warn("method not allowed", zap.String("method", r.Method))
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check rate limit
+	if h.rateLimiter != nil && !h.rateLimiter.Allow(r) {
+		h.logger.Warn("rate limit exceeded",
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.String("path", r.URL.Path))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "API Rate Limit Exceeded",
+		})
 		return
 	}
 

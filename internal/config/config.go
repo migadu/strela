@@ -40,6 +40,11 @@ type InboundConfig struct {
 	WriteTimeoutSecs int    `toml:"write_timeout_seconds"` // Write timeout for responses
 	IdleTimeoutSecs  int    `toml:"idle_timeout_seconds"`  // Idle timeout for keep-alive
 
+	// Rate limiting configuration
+	RateLimitEnabled       bool `toml:"rate_limit_enabled"`         // Enable HTTP rate limiting (default: false)
+	RateLimitRequestsPerIP int  `toml:"rate_limit_requests_per_ip"` // Max requests per IP per window (default: 100)
+	RateLimitWindowSeconds int  `toml:"rate_limit_window_seconds"`  // Rate limit time window in seconds (default: 60)
+
 	// Idempotency configuration
 	IdempotencyEnabled  bool   `toml:"idempotency_enabled"`   // Enable idempotency key support (default: false)
 	IdempotencyHeader   string `toml:"idempotency_header"`    // Header name for idempotency key (default: X-Idempotency-Key)
@@ -177,6 +182,12 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Inbound.IdleTimeoutSecs == 0 {
 		c.Inbound.IdleTimeoutSecs = 120
+	}
+	if c.Inbound.RateLimitRequestsPerIP == 0 {
+		c.Inbound.RateLimitRequestsPerIP = 100
+	}
+	if c.Inbound.RateLimitWindowSeconds == 0 {
+		c.Inbound.RateLimitWindowSeconds = 60
 	}
 	if c.Inbound.IdempotencyHeader == "" {
 		c.Inbound.IdempotencyHeader = "X-Idempotency-Key"

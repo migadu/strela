@@ -39,6 +39,7 @@ type HealthResponse struct {
 	Timestamp string                `json:"timestamp"`
 	Uptime    string                `json:"uptime"`
 	Queue     QueueHealth           `json:"queue"`
+	Database  *DatabaseHealth       `json:"database,omitempty"`
 	Cluster   *ClusterHealth        `json:"cluster,omitempty"`
 	Circuit   *CircuitBreakerHealth `json:"circuit_breaker,omitempty"`
 	System    SystemHealth          `json:"system"`
@@ -67,6 +68,17 @@ type CircuitBreakerHealth struct {
 	Failures      uint32 `json:"failures"`
 	Successes     uint32 `json:"successes"`
 	LastStateTime string `json:"last_state_time"`
+}
+
+// DatabaseHealth represents database statistics
+type DatabaseHealth struct {
+	SizeMB          float64 `json:"size_mb"`
+	WALSizeMB       float64 `json:"wal_size_mb"`
+	Connections     int     `json:"connections"`
+	FragmentPercent float64 `json:"fragment_percent"`
+	CacheHitPercent float64 `json:"cache_hit_percent"`
+	QueuedMessages  int64   `json:"queued_messages"`
+	SendingMessages int64   `json:"sending_messages"`
 }
 
 // SystemHealth represents system resource information
@@ -107,6 +119,21 @@ func (h *HealthHandler) buildHealthResponse() HealthResponse {
 		Uptime:    formatDuration(time.Since(h.startTime)),
 		Queue:     h.getQueueHealth(),
 		System:    h.getSystemHealth(),
+	}
+
+	// Add database health if available
+	if h.queue != nil {
+		response.Database = h.getDatabaseHealth()
+
+		// Check for database health issues
+		if response.Database != nil {
+			if response.Database.FragmentPercent > 30 {
+				response.Status = "degraded"
+			}
+			if response.Database.SizeMB > 10000 { // 10GB
+				response.Status = "degraded"
+			}
+		}
 	}
 
 	// Add cluster health if gossip is enabled
@@ -195,6 +222,28 @@ func (h *HealthHandler) getCircuitBreakerHealth(cb *delivery.CircuitBreaker) *Ci
 		Failures:      failures,
 		Successes:     successes,
 		LastStateTime: lastStateChange.Format(time.RFC3339),
+	}
+}
+
+func (h *HealthHandler) getDatabaseHealth() *DatabaseHealth {
+	if h.queue == nil {
+		return nil
+	}
+
+	stats, err := h.queue.GetDatabaseStats()
+	if err != nil {
+		h.logger.Error("failed to get database stats", zap.Error(err))
+		return nil
+	}
+
+	return &DatabaseHealth{
+		SizeMB:          float64(stats.SizeBytes) / 1024 / 1024,
+		WALSizeMB:       float64(stats.WALSizeBytes) / 1024 / 1024,
+		Connections:     stats.Connections,
+		FragmentPercent: stats.FragmentRatio * 100,
+		CacheHitPercent: stats.CacheHitRatio * 100,
+		QueuedMessages:  stats.QueuedMessages,
+		SendingMessages: stats.SendingMessages,
 	}
 }
 

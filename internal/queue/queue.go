@@ -896,6 +896,77 @@ func (q *Queue) GetQueueDepth() (int64, error) {
 	return count, nil
 }
 
+// DatabaseStats holds database statistics
+type DatabaseStats struct {
+	PageCount       int64   // Total number of pages in database
+	PageSize        int64   // Size of each page in bytes
+	SizeBytes       int64   // Total database size in bytes
+	WALSizeBytes    int64   // Size of WAL file in bytes
+	Connections     int     // Number of active connections
+	FragmentRatio   float64 // Database fragmentation ratio (0-1)
+	CacheHitRatio   float64 // Cache hit ratio (0-1)
+	WALCheckpoints  int64   // Number of WAL checkpoints
+	QueuedMessages  int64   // Messages in queued status
+	SendingMessages int64   // Messages in sending status
+}
+
+// GetDatabaseStats retrieves comprehensive database statistics
+func (q *Queue) GetDatabaseStats() (*DatabaseStats, error) {
+	stats := &DatabaseStats{}
+
+	// Get page count and size
+	err := q.db.QueryRow("PRAGMA page_count").Scan(&stats.PageCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page count: %w", err)
+	}
+
+	err = q.db.QueryRow("PRAGMA page_size").Scan(&stats.PageSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page size: %w", err)
+	}
+
+	stats.SizeBytes = stats.PageCount * stats.PageSize
+
+	// Get freelist count (for fragmentation)
+	var freelistCount int64
+	err = q.db.QueryRow("PRAGMA freelist_count").Scan(&freelistCount)
+	if err == nil && stats.PageCount > 0 {
+		stats.FragmentRatio = float64(freelistCount) / float64(stats.PageCount)
+	}
+
+	// Get cache stats
+	var cacheHit, cacheMiss int64
+	err = q.db.QueryRow("SELECT cache_hit, cache_miss FROM (SELECT (SELECT value FROM pragma_stats WHERE name='cache_hit') as cache_hit, (SELECT value FROM pragma_stats WHERE name='cache_miss') as cache_miss)").Scan(&cacheHit, &cacheMiss)
+	if err == nil && (cacheHit+cacheMiss) > 0 {
+		stats.CacheHitRatio = float64(cacheHit) / float64(cacheHit+cacheMiss)
+	}
+
+	// Get WAL checkpoint count
+	q.db.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&stats.WALCheckpoints, nil, nil)
+
+	// Get queue depth by status
+	err = q.db.QueryRow(`
+		SELECT
+			COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'sending' THEN 1 ELSE 0 END), 0)
+		FROM messages
+	`).Scan(&stats.QueuedMessages, &stats.SendingMessages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get message counts: %w", err)
+	}
+
+	// Get connection pool stats from database/sql
+	dbStats := q.db.Stats()
+	stats.Connections = dbStats.OpenConnections
+
+	return stats, nil
+}
+
+// GetDatabasePath returns the path to the database file (if available from connection string)
+func (q *Queue) GetDB() *sql.DB {
+	return q.db
+}
+
 // Close closes the database connection
 func (q *Queue) Close() error {
 	close(q.notifyCh)

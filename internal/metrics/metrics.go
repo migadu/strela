@@ -29,6 +29,12 @@ type Metrics struct {
 	// IP reputation metrics
 	IPReputationDegraded *prometheus.GaugeVec
 	IPReputationEvents   *prometheus.CounterVec
+
+	// Database metrics
+	DatabaseSize          prometheus.Gauge
+	DatabaseWALSize       prometheus.Gauge
+	DatabaseConnections   prometheus.Gauge
+	DatabaseQueryDuration *prometheus.HistogramVec
 }
 
 // NewMetrics creates and registers all Prometheus metrics
@@ -134,6 +140,40 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"event_type", "source_ip"},
 		),
+
+		// Database size in bytes
+		DatabaseSize: promauto.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "fune_database_size_bytes",
+				Help: "Size of the SQLite database file in bytes",
+			},
+		),
+
+		// Database WAL size in bytes
+		DatabaseWALSize: promauto.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "fune_database_wal_size_bytes",
+				Help: "Size of the SQLite WAL file in bytes",
+			},
+		),
+
+		// Active database connections
+		DatabaseConnections: promauto.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "fune_database_connections",
+				Help: "Number of active database connections",
+			},
+		),
+
+		// Database query duration
+		DatabaseQueryDuration: promauto.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "fune_database_query_duration_seconds",
+				Help:    "Time taken for database queries",
+				Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+			},
+			[]string{"operation"},
+		),
 	}
 }
 
@@ -182,4 +222,24 @@ func (m *Metrics) SetIPReputationDegraded(sourceIP string, degraded bool) {
 // RecordIPReputationEvent records an IP reputation event (degraded or recovered)
 func (m *Metrics) RecordIPReputationEvent(eventType, sourceIP string) {
 	m.IPReputationEvents.WithLabelValues(eventType, sourceIP).Inc()
+}
+
+// SetDatabaseSize sets the database file size in bytes
+func (m *Metrics) SetDatabaseSize(sizeBytes int64) {
+	m.DatabaseSize.Set(float64(sizeBytes))
+}
+
+// SetDatabaseWALSize sets the database WAL file size in bytes
+func (m *Metrics) SetDatabaseWALSize(sizeBytes int64) {
+	m.DatabaseWALSize.Set(float64(sizeBytes))
+}
+
+// SetDatabaseConnections sets the number of active database connections
+func (m *Metrics) SetDatabaseConnections(count int) {
+	m.DatabaseConnections.Set(float64(count))
+}
+
+// RecordDatabaseQuery records a database query execution time
+func (m *Metrics) RecordDatabaseQuery(operation string, duration float64) {
+	m.DatabaseQueryDuration.WithLabelValues(operation).Observe(duration)
 }

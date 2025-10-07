@@ -1,0 +1,29 @@
+[Unit]
+Description=Fune SMTP Delivery Service
+After=network.target
+Documentation=https://github.com/migadu/fune
+
+[Service]
+Type=simple
+User=fune
+Group=fune
+WorkingDirectory=/opt/fune
+ExecStart=/opt/fune/bin/fune-server -config /etc/fune/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fune /var/log/fune
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fune
+
+[Install]
+WantedBy=multi-user.target

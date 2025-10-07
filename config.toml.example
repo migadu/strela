@@ -35,6 +35,11 @@ read_timeout_seconds = 30                       # Request read timeout [HOT RELO
 write_timeout_seconds = 30                      # Response write timeout [HOT RELOAD]
 idle_timeout_seconds = 120                      # Keep-alive idle timeout [HOT RELOAD]
 
+# Rate limiting per IP address (token bucket algorithm)
+rate_limit_enabled = false                      # Enable HTTP rate limiting (recommended for production)
+rate_limit_requests_per_ip = 100                # Maximum requests per IP address per window
+rate_limit_window_seconds = 60                  # Time window in seconds (default: 60s = 100 req/min)
+
 # Idempotency prevents duplicate message delivery
 idempotency_enabled = false                     # Enable idempotency key support
 idempotency_header = "X-Idempotency-Key"        # HTTP header name for idempotency key
