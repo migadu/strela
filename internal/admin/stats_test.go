@@ -302,12 +302,12 @@ func TestGetThroughputStats(t *testing.T) {
 	}{
 		{-30 * time.Minute, 1}, // Last 1 hour
 		{-30 * time.Minute, 1},
-		{-3 * time.Hour, 1},      // Last 6 hours
-		{-12 * time.Hour, 1},     // Last 24 hours
-		{-48 * time.Hour, 1},     // Last 7 days
-		{-30 * time.Minute, 0},   // Failed (last 1 hour)
-		{-5 * time.Hour, 0},      // Failed (last 6 hours)
-		{-200 * time.Hour, 1},    // Outside 7 days
+		{-3 * time.Hour, 1},    // Last 6 hours
+		{-12 * time.Hour, 1},   // Last 24 hours
+		{-48 * time.Hour, 1},   // Last 7 days
+		{-30 * time.Minute, 0}, // Failed (last 1 hour)
+		{-5 * time.Hour, 0},    // Failed (last 6 hours)
+		{-200 * time.Hour, 1},  // Outside 7 days
 	}
 
 	for i, td := range testData {
@@ -430,10 +430,10 @@ func TestGetCallbackStats(t *testing.T) {
 		eventType   string
 		completedAt sql.NullString
 	}{
-		{"msg1", "delivered", sql.NullString{Valid: false}}, // Pending
-		{"msg2", "delivered", sql.NullString{Valid: false}}, // Pending
+		{"msg1", "delivered", sql.NullString{Valid: false}},               // Pending
+		{"msg2", "delivered", sql.NullString{Valid: false}},               // Pending
 		{"msg3", "hard_bounce", sql.NullString{String: now, Valid: true}}, // Completed
-		{"msg4", "delivered", sql.NullString{String: now, Valid: true}},    // Completed
+		{"msg4", "delivered", sql.NullString{String: now, Valid: true}},   // Completed
 	}
 
 	for _, td := range testData {
