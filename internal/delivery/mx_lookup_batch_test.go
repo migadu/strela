@@ -9,11 +9,11 @@ import (
 	"fune/internal/config"
 	"fune/internal/queue"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 func TestBatchPrefetch(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	dbPath := "./test_batch_mx.db"
 	defer os.Remove(dbPath)
 
@@ -63,7 +63,7 @@ func TestBatchPrefetch(t *testing.T) {
 }
 
 func TestBatchPrefetchEmptyList(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	dbPath := "./test_batch_empty.db"
 	defer os.Remove(dbPath)
 
@@ -93,7 +93,7 @@ func TestBatchPrefetchEmptyList(t *testing.T) {
 }
 
 func TestBatchPrefetchSkipsCached(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	dbPath := "./test_batch_cached.db"
 	defer os.Remove(dbPath)
 
@@ -145,7 +145,7 @@ func TestBatchPrefetchSkipsCached(t *testing.T) {
 }
 
 func TestBatchPrefetchContextCancellation(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	dbPath := "./test_batch_cancel.db"
 	defer os.Remove(dbPath)
 

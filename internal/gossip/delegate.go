@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"github.com/hashicorp/memberlist"
-	"go.uber.org/zap"
 )
 
 // delegate implements memberlist.Delegate for custom message handling and state
@@ -24,7 +23,7 @@ func (d *delegate) NodeMeta(limit int) []byte {
 // based on their MessageType (idempotency claims, node status updates, etc.).
 func (d *delegate) NotifyMsg(msg []byte) {
 	if err := d.gossip.handleMessage(msg); err != nil {
-		d.gossip.logger.Error("failed to handle gossip message", zap.Error(err))
+		d.gossip.logger.Error("failed to handle gossip message", "error", err)
 	}
 }
 
@@ -59,8 +58,8 @@ type eventDelegate struct {
 // re-election and invokes the user-defined join callback if configured.
 func (e *eventDelegate) NotifyJoin(node *memberlist.Node) {
 	e.gossip.logger.Info("node joined cluster",
-		zap.String("node_id", node.Name),
-		zap.String("addr", node.Address()))
+		"node_id", node.Name,
+		"addr", node.Address())
 
 	// Re-evaluate leader
 	e.gossip.updateLeader()
@@ -75,8 +74,8 @@ func (e *eventDelegate) NotifyJoin(node *memberlist.Node) {
 // triggers leader re-election, and invokes the user-defined leave callback.
 func (e *eventDelegate) NotifyLeave(node *memberlist.Node) {
 	e.gossip.logger.Info("node left cluster",
-		zap.String("node_id", node.Name),
-		zap.String("addr", node.Address()))
+		"node_id", node.Name,
+		"addr", node.Address())
 
 	// Remove node status
 	e.gossip.nodeStatuses.Delete(node.Name)
@@ -94,5 +93,5 @@ func (e *eventDelegate) NotifyLeave(node *memberlist.Node) {
 // broadcasts for node status updates instead of metadata propagation.
 func (e *eventDelegate) NotifyUpdate(node *memberlist.Node) {
 	e.gossip.logger.Debug("node updated",
-		zap.String("node_id", node.Name))
+		"node_id", node.Name)
 }

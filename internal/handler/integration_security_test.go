@@ -10,12 +10,12 @@ import (
 	"fune/internal/config"
 	"fune/internal/queue"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 // TestSecurityHeadersIntegration tests that security headers are applied to actual handler responses
 func TestSecurityHeadersIntegration(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 
 	// Create test queue
 	q, cleanup := queue.SetupTestQueue(t)

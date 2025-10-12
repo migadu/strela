@@ -3,22 +3,22 @@ package callback
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"fune/internal/config"
 	"fune/internal/delivery"
 	"fune/internal/queue"
-
-	"go.uber.org/zap"
 )
 
 func setupTestCallbackHandler(t *testing.T) (*CallbackHandler, *queue.Queue, func()) {
 	t.Helper()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 
 	cfg := &config.CallbacksConfig{
@@ -256,7 +256,7 @@ func TestCallbackHandler_SendHTTPCallback_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -292,7 +292,7 @@ func TestCallbackHandler_SendHTTPCallback_Failure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -328,7 +328,7 @@ func TestCallbackHandler_SendCallback_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -375,7 +375,7 @@ func TestCallbackHandler_SendCallback_RetryOnFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -425,7 +425,7 @@ func TestCallbackHandler_SendCallback_GiveUpAfterMaxAttempts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -468,7 +468,7 @@ func TestCallbackHandler_SendCallback_GiveUpAfterMaxAttempts(t *testing.T) {
 }
 
 func TestCallbackHandler_SendCallback_InvalidPayload(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -539,7 +539,7 @@ func TestCallbackHandler_WithoutAuthToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 

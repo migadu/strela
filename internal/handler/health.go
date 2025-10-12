@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"runtime"
 	"time"
@@ -9,8 +10,6 @@ import (
 	"fune/internal/delivery"
 	"fune/internal/gossip"
 	"fune/internal/queue"
-
-	"go.uber.org/zap"
 )
 
 // HealthHandler provides comprehensive health and status information for monitoring and alerting.
@@ -53,7 +52,7 @@ type HealthHandler struct {
 	queue     *queue.Queue
 	deliverer *delivery.Deliverer
 	startTime time.Time
-	logger    *zap.Logger
+	logger    *slog.Logger
 }
 
 // NewHealthHandler creates a new health check HTTP handler.
@@ -73,7 +72,7 @@ type HealthHandler struct {
 //
 //	handler := NewHealthHandler(gossip, queue, deliverer, logger)
 //	http.Handle("/health", handler)
-func NewHealthHandler(g *gossip.Gossip, q *queue.Queue, d *delivery.Deliverer, logger *zap.Logger) *HealthHandler {
+func NewHealthHandler(g *gossip.Gossip, q *queue.Queue, d *delivery.Deliverer, logger *slog.Logger) *HealthHandler {
 	return &HealthHandler{
 		gossip:    g,
 		queue:     q,
@@ -292,7 +291,7 @@ func (h *HealthHandler) getQueueHealth() QueueHealth {
 	// Get queue depth (queued + sending messages)
 	queueDepth, err := h.queue.GetQueueDepth()
 	if err != nil {
-		h.logger.Error("failed to get queue depth", zap.Error(err))
+		h.logger.Error("failed to get queue depth", "error", err)
 		queueDepth = 0
 	}
 
@@ -354,7 +353,7 @@ func (h *HealthHandler) getDatabaseHealth() *DatabaseHealth {
 
 	stats, err := h.queue.GetDatabaseStats()
 	if err != nil {
-		h.logger.Error("failed to get database stats", zap.Error(err))
+		h.logger.Error("failed to get database stats", "error", err)
 		return nil
 	}
 

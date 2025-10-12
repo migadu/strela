@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 // MockCircuitBreakerMetrics implements CircuitBreakerMetrics for testing
@@ -22,7 +22,7 @@ func (m *MockCircuitBreakerMetrics) RecordCircuitBreakerTransition(fromState, to
 }
 
 func TestCircuitBreaker_InitialState(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 5*time.Second, logger)
 
 	if cb.GetState() != CircuitClosed {
@@ -35,7 +35,7 @@ func TestCircuitBreaker_InitialState(t *testing.T) {
 }
 
 func TestCircuitBreaker_OpenOnFailures(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 100*time.Millisecond, logger)
 
 	// Record local errors to trigger circuit breaker
@@ -53,7 +53,7 @@ func TestCircuitBreaker_OpenOnFailures(t *testing.T) {
 }
 
 func TestCircuitBreaker_IgnoreNonLocalErrors(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 5*time.Second, logger)
 
 	// Record non-local errors (should be ignored)
@@ -72,7 +72,7 @@ func TestCircuitBreaker_IgnoreNonLocalErrors(t *testing.T) {
 }
 
 func TestCircuitBreaker_HalfOpenTransition(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 50*time.Millisecond, logger)
 
 	// Open the circuit
@@ -98,7 +98,7 @@ func TestCircuitBreaker_HalfOpenTransition(t *testing.T) {
 }
 
 func TestCircuitBreaker_RecoverFromHalfOpen(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 50*time.Millisecond, logger)
 
 	// Open the circuit
@@ -127,7 +127,7 @@ func TestCircuitBreaker_RecoverFromHalfOpen(t *testing.T) {
 }
 
 func TestCircuitBreaker_ReopenFromHalfOpen(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 50*time.Millisecond, logger)
 
 	// Open the circuit
@@ -152,7 +152,7 @@ func TestCircuitBreaker_ReopenFromHalfOpen(t *testing.T) {
 }
 
 func TestCircuitBreaker_SuccessResetsFailures(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 5*time.Second, logger)
 
 	// Record some failures (not enough to open)
@@ -178,7 +178,7 @@ func TestCircuitBreaker_SuccessResetsFailures(t *testing.T) {
 }
 
 func TestCircuitBreaker_GetStats(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 5*time.Second, logger)
 
 	// Record some failures
@@ -209,7 +209,7 @@ func TestCircuitBreaker_GetStats(t *testing.T) {
 }
 
 func TestCircuitBreaker_SetMetrics(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(3, 2, 5*time.Second, logger)
 
 	mockMetrics := &MockCircuitBreakerMetrics{}
@@ -308,7 +308,7 @@ func TestIsLocalError(t *testing.T) {
 }
 
 func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(10, 5, 100*time.Millisecond, logger)
 
 	// Run concurrent operations
@@ -339,7 +339,7 @@ func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
 }
 
 func TestCircuitBreaker_MultipleStateTransitions(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	cb := NewCircuitBreaker(2, 2, 50*time.Millisecond, logger)
 
 	mockMetrics := &MockCircuitBreakerMetrics{}

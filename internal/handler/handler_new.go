@@ -46,6 +46,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -57,7 +58,6 @@ import (
 	"fune/internal/recovery"
 
 	"github.com/emersion/go-message/mail"
-	"go.uber.org/zap"
 )
 
 // GossipService defines the interface for distributed idempotency via gossip protocol.
@@ -116,7 +116,7 @@ type QueueMessageHandler struct {
 	circuitBreaker *delivery.CircuitBreaker
 	gossip         GossipService
 	rateLimiter    *RateLimiter
-	logger         *zap.Logger
+	logger         *slog.Logger
 }
 
 // NewQueueMessageHandler creates a new HTTP handler for message submission.
@@ -145,13 +145,13 @@ type QueueMessageHandler struct {
 //	    circuitBreaker,
 //	    logger,
 //	)
-func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.OutboundConfig, httpCfg *config.InboundConfig, circuitBreaker *delivery.CircuitBreaker, logger *zap.Logger) *QueueMessageHandler {
+func NewQueueMessageHandler(q *queue.Queue, deliveryCfg *config.OutboundConfig, httpCfg *config.InboundConfig, circuitBreaker *delivery.CircuitBreaker, logger *slog.Logger) *QueueMessageHandler {
 	var rateLimiter *RateLimiter
 	if httpCfg.RateLimitEnabled {
 		rateLimiter = NewRateLimiter(httpCfg.RateLimitRequestsPerIP, httpCfg.RateLimitWindowSeconds)
 		logger.Info("rate limiting enabled",
-			zap.Int("requests_per_ip", httpCfg.RateLimitRequestsPerIP),
-			zap.Int("window_seconds", httpCfg.RateLimitWindowSeconds))
+			"requests_per_ip", httpCfg.RateLimitRequestsPerIP,
+			"window_seconds", httpCfg.RateLimitWindowSeconds)
 	}
 
 	return &QueueMessageHandler{
@@ -264,13 +264,13 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 	// Log incoming request
 	h.logger.Info("incoming request",
-		zap.String("method", r.Method),
-		zap.String("path", r.URL.Path),
-		zap.String("remote_addr", r.RemoteAddr),
-		zap.String("content_type", r.Header.Get("Content-Type")))
+		"method", r.Method,
+		"path", r.URL.Path,
+		"remote_addr", r.RemoteAddr,
+		"content_type", r.Header.Get("Content-Type"))
 
 	if r.Method != http.MethodPost {
-		h.logger.Warn("method not allowed", zap.String("method", r.Method))
+		h.logger.Warn("method not allowed", "method", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -278,8 +278,8 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Check rate limit
 	if h.rateLimiter != nil && !h.rateLimiter.Allow(r) {
 		h.logger.Warn("rate limit exceeded",
-			zap.String("remote_addr", r.RemoteAddr),
-			zap.String("path", r.URL.Path))
+			"remote_addr", r.RemoteAddr,
+			"path", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -291,7 +291,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Check circuit breaker - reject requests if circuit is open
 	if h.circuitBreaker != nil && !h.circuitBreaker.CanAttempt() {
 		h.logger.Warn("circuit breaker open, rejecting request",
-			zap.String("remote_addr", r.RemoteAddr))
+			"remote_addr", r.RemoteAddr)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error":       "Service temporarily unavailable due to delivery failures",
@@ -308,7 +308,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
 			h.logger.Warn("unauthorized request - missing auth header",
-				zap.String("remote_addr", r.RemoteAddr))
+				"remote_addr", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -316,7 +316,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		// Validate Bearer token format
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			h.logger.Warn("unauthorized request - invalid auth format",
-				zap.String("remote_addr", r.RemoteAddr))
+				"remote_addr", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -325,7 +325,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		// Use constant-time comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(token), []byte(h.httpConfig.AuthToken)) != 1 {
 			h.logger.Warn("unauthorized request - invalid token",
-				zap.String("remote_addr", r.RemoteAddr))
+				"remote_addr", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -339,16 +339,16 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	case "application/json":
 		if err := json.NewDecoder(r.Body).Decode(&msgReq); err != nil {
 			h.logger.Error("failed to decode JSON",
-				zap.Error(err),
-				zap.String("remote_addr", r.RemoteAddr))
+				"error", err,
+				"remote_addr", r.RemoteAddr)
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
 	case "application/x-www-form-urlencoded":
 		if err := r.ParseForm(); err != nil {
 			h.logger.Error("failed to parse form",
-				zap.Error(err),
-				zap.String("remote_addr", r.RemoteAddr))
+				"error", err,
+				"remote_addr", r.RemoteAddr)
 			http.Error(w, "Invalid form data", http.StatusBadRequest)
 			return
 		}
@@ -359,7 +359,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		msgReq.HTML = r.FormValue("html")
 	default:
 		h.logger.Warn("unsupported content type",
-			zap.String("content_type", contentType))
+			"content_type", contentType)
 		http.Error(w, "Unsupported Content-Type", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -367,9 +367,9 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Validate required fields
 	if msgReq.From == "" || msgReq.To == "" || msgReq.Subject == "" {
 		h.logger.Warn("missing required fields",
-			zap.String("from", msgReq.From),
-			zap.String("to", msgReq.To),
-			zap.String("subject", msgReq.Subject))
+			"from", msgReq.From,
+			"to", msgReq.To,
+			"subject", msgReq.Subject)
 		http.Error(w, "Missing required fields: from, to, subject", http.StatusBadRequest)
 		return
 	}
@@ -384,7 +384,7 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	toDomain := queue.ExtractDomain(msgReq.To)
 	if toDomain == "" {
 		h.logger.Warn("invalid recipient email",
-			zap.String("to", msgReq.To))
+			"to", msgReq.To)
 		http.Error(w, "Invalid recipient email address", http.StatusBadRequest)
 		return
 	}
@@ -400,8 +400,8 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 				if claimedBy := h.gossip.CheckIdempotencyKey(idempotencyKey); claimedBy != "" {
 					// Key is claimed by another node - return 409 Conflict
 					h.logger.Warn("duplicate request detected via gossip - claimed by another node",
-						zap.String("idempotency_key", idempotencyKey),
-						zap.String("claimed_by", claimedBy))
+						"idempotency_key", idempotencyKey,
+						"claimed_by", claimedBy)
 
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusConflict) // 409 = duplicate being processed elsewhere
@@ -418,15 +418,15 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			existing, err := h.queue.GetMessageByIdempotencyKey(idempotencyKey)
 			if err != nil {
 				h.logger.Error("failed to check idempotency key",
-					zap.String("idempotency_key", idempotencyKey),
-					zap.Error(err))
+					"idempotency_key", idempotencyKey,
+					"error", err)
 				// Don't fail the request, continue without idempotency
 			} else if existing != nil {
 				// Duplicate request - return existing message with 202 Accepted (idempotent response)
 				h.logger.Info("duplicate request detected via database idempotency key",
-					zap.String("idempotency_key", idempotencyKey),
-					zap.String("existing_message_id", existing.MessageID),
-					zap.String("status", string(existing.Status)))
+					"idempotency_key", idempotencyKey,
+					"existing_message_id", existing.MessageID,
+					"status", string(existing.Status))
 
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusAccepted) // 202 = idempotent response
@@ -448,14 +448,14 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		keySize, err := dkim.ValidatePrivateKey(msgReq.DKIMPrivateKey)
 		if err != nil {
 			h.logger.Warn("invalid DKIM private key",
-				zap.Error(err),
-				zap.String("message_id", messageID))
+				"error", err,
+				"message_id", messageID)
 			http.Error(w, fmt.Sprintf("Invalid DKIM private key: %v", err), http.StatusBadRequest)
 			return
 		}
 		h.logger.Debug("DKIM key validated",
-			zap.String("message_id", messageID),
-			zap.Int("key_size_bits", keySize))
+			"message_id", messageID,
+			"key_size_bits", keySize)
 	}
 
 	// Default DKIM domain to sender's domain if not specified
@@ -468,8 +468,8 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	rawMessage, err := h.buildRawMessage(&msgReq)
 	if err != nil {
 		h.logger.Error("failed to build message",
-			zap.Error(err),
-			zap.String("message_id", messageID))
+			"error", err,
+			"message_id", messageID)
 		http.Error(w, "Failed to build message", http.StatusInternalServerError)
 		return
 	}
@@ -492,8 +492,8 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	// Enqueue message
 	if err := h.queue.Enqueue(queuedMsg); err != nil {
 		h.logger.Error("failed to enqueue message",
-			zap.Error(err),
-			zap.String("message_id", messageID))
+			"error", err,
+			"message_id", messageID)
 		http.Error(w, "Failed to enqueue message", http.StatusInternalServerError)
 		return
 	}
@@ -502,8 +502,8 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if h.gossip != nil && idempotencyKey != "" {
 		if err := h.gossip.BroadcastIdempotencyKey(idempotencyKey); err != nil {
 			h.logger.Warn("failed to broadcast idempotency key",
-				zap.String("idempotency_key", idempotencyKey),
-				zap.Error(err))
+				"idempotency_key", idempotencyKey,
+				"error", err)
 			// Don't fail the request - gossip is best-effort
 		}
 	}
@@ -511,11 +511,11 @@ func (h *QueueMessageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	duration := time.Since(start)
 
 	h.logger.Info("message enqueued",
-		zap.String("message_id", messageID),
-		zap.String("from", msgReq.From),
-		zap.String("to", msgReq.To),
-		zap.String("subject", msgReq.Subject),
-		zap.Duration("duration", duration))
+		"message_id", messageID,
+		"from", msgReq.From,
+		"to", msgReq.To,
+		"subject", msgReq.Subject,
+		"duration", duration)
 
 	// Return 200 OK with message ID
 	response := EnqueueResponse{

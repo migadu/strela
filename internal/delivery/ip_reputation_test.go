@@ -12,11 +12,11 @@ import (
 	"fune/internal/config"
 	"fune/internal/queue"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 func setupTestReputationTracker(_ *testing.T, cfg *config.ReputationConfig) *IPReputationTracker {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	if cfg == nil {
 		cfg = &config.ReputationConfig{
 			EnableIPTracking:       true,
@@ -763,7 +763,7 @@ func TestIPReputationTracker_EmptyIPString(t *testing.T) {
 // Integration tests with delivery system
 
 func TestDelivery_Integration_ReputationTracking(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	// Create test webhook server
 	var receivedAlerts []ReputationAlert
@@ -870,7 +870,7 @@ func TestDelivery_Integration_ReputationTracking(t *testing.T) {
 }
 
 func TestDelivery_Integration_AllIPsDegraded(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},
@@ -927,7 +927,7 @@ func TestDelivery_Integration_AllIPsDegraded(t *testing.T) {
 }
 
 func TestDelivery_Integration_NonReputationError(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100"},
@@ -982,7 +982,7 @@ func TestDelivery_Integration_NonReputationError(t *testing.T) {
 }
 
 func TestDelivery_Integration_ReputationTrackingDisabled(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	cfg := &config.OutboundConfig{
 		SourceIPs:                []string{"192.168.1.100", "192.168.1.101"},

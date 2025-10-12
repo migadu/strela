@@ -72,9 +72,9 @@ import (
 	tlsmanager "fune/internal/tls"
 	"fune/internal/worker"
 
+	"log/slog"
+
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // Version information, injected at build time via ldflags.
@@ -101,7 +101,7 @@ var (
 //
 // Returns an HTTP handler that enforces authentication before delegating to next.
 // Unauthorized requests receive 401 Unauthorized with WWW-Authenticate header.
-func basicAuthMiddleware(next http.Handler, username, password string, logger *zap.Logger) http.Handler {
+func basicAuthMiddleware(next http.Handler, username, password string, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Get credentials from Authorization header
 		user, pass, ok := r.BasicAuth()
@@ -109,8 +109,8 @@ func basicAuthMiddleware(next http.Handler, username, password string, logger *z
 		// Check if credentials match
 		if !ok || user != username || pass != password {
 			logger.Warn("metrics endpoint unauthorized access attempt",
-				zap.String("remote_addr", r.RemoteAddr),
-				zap.String("user_agent", r.UserAgent()))
+				"remote_addr", r.RemoteAddr,
+				"user_agent", r.UserAgent())
 
 			w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
 			w.WriteHeader(http.StatusUnauthorized)
@@ -123,67 +123,51 @@ func basicAuthMiddleware(next http.Handler, username, password string, logger *z
 	})
 }
 
-// initLogger creates a zap logger configured for production use.
+// initLogger creates a slog logger configured for production use.
 //
-// The logger writes to stdout/stderr for systemd compatibility and supports
+// The logger writes to stdout for systemd compatibility and supports
 // two output formats:
 //   - JSON: Structured logging suitable for log aggregation systems
-//   - Console: Human-readable format with colored log levels
+//   - Console: Human-readable format (text handler)
 //
 // Log levels supported: debug, info, warn, error
-//
-// The logger includes:
-//   - Caller information (file:line) for all messages
-//   - Stack traces for error-level logs
-//   - ISO8601 timestamps for JSON format
-//   - Colored output for console format
 //
 // Parameters:
 //   - logCfg: Configuration specifying log level and format
 //
-// Returns a configured zap logger or an error if configuration is invalid.
-func initLogger(logCfg *config.LoggingConfig) (*zap.Logger, error) {
+// Returns a configured slog logger or an error if configuration is invalid.
+func initLogger(logCfg *config.LoggingConfig) (*slog.Logger, error) {
 	// Parse log level
-	var level zapcore.Level
+	var level slog.Level
 	switch strings.ToLower(logCfg.Level) {
 	case "debug":
-		level = zapcore.DebugLevel
+		level = slog.LevelDebug
 	case "info":
-		level = zapcore.InfoLevel
+		level = slog.LevelInfo
 	case "warn":
-		level = zapcore.WarnLevel
+		level = slog.LevelWarn
 	case "error":
-		level = zapcore.ErrorLevel
+		level = slog.LevelError
 	default:
-		level = zapcore.InfoLevel
+		level = slog.LevelInfo
 	}
 
-	// Create encoder based on format
-	var encoder zapcore.Encoder
+	// Create handler based on format
+	opts := &slog.HandlerOptions{
+		AddSource: true,
+		Level:     level,
+	}
+
+	var handler slog.Handler
 	if strings.ToLower(logCfg.Format) == "json" {
 		// JSON format - good for systemd with structured logging
-		encoderConfig := zap.NewProductionEncoderConfig()
-		encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
+		handler = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
-		// Console format - good for human readability
-		encoderConfig := zap.NewProductionEncoderConfig()
-		encoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05")
-		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		encoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+		// Text format - good for human readability
+		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 
-	// Create core that writes to stdout
-	core := zapcore.NewCore(
-		encoder,
-		zapcore.AddSync(os.Stdout),
-		level,
-	)
-
-	// Create logger with caller info and stack traces on errors
-	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
-
+	logger := slog.New(handler)
 	return logger, nil
 }
 
@@ -231,19 +215,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
 
 	logger.Info("starting fune SMTP delivery service",
-		zap.String("version", version),
-		zap.String("commit", commit),
-		zap.String("build_date", date),
-		zap.String("log_level", tempCfg.Logging.Level),
-		zap.String("log_format", tempCfg.Logging.Format))
+		"version", version,
+		"commit", commit,
+		"build_date", date,
+		"log_level", tempCfg.Logging.Level,
+		"log_format", tempCfg.Logging.Format)
 
 	// Load reloadable configuration
 	reloadableCfg, err := config.NewReloadableConfig("config.toml", logger)
 	if err != nil {
-		logger.Fatal("failed to load reloadable config", zap.Error(err))
+		logger.Error("failed to load reloadable config", "error", err)
+		os.Exit(1)
 	}
 
 	cfg := reloadableCfg.Get()
@@ -252,20 +236,21 @@ func main() {
 	pid := os.Getpid()
 	err = os.WriteFile(cfg.Server.PIDFile, []byte(strconv.Itoa(pid)+"\n"), 0644)
 	if err != nil {
-		logger.Fatal("failed to write PID file", zap.String("pid_file", cfg.Server.PIDFile), zap.Error(err))
+		logger.Error("failed to write PID file", "pid_file", cfg.Server.PIDFile, "error", err)
+		os.Exit(1)
 	}
 	defer os.Remove(cfg.Server.PIDFile)
 
-	logger.Info("PID file written", zap.String("pid_file", cfg.Server.PIDFile), zap.Int("pid", pid))
+	logger.Info("PID file written", "pid_file", cfg.Server.PIDFile, "pid", pid)
 
 	// Log configuration
 	logger.Info("configuration loaded",
-		zap.String("database", cfg.Server.DatabasePath),
-		zap.Int("workers", cfg.Queue.WorkerCount),
-		zap.Int("source_ips", len(cfg.Outbound.SourceIPs)),
-		zap.String("source_ip_selection", cfg.Outbound.SourceIPSelection),
-		zap.String("callback_url", cfg.Callbacks.WebhookURL),
-		zap.Int("max_message_age_hours", cfg.Outbound.MaxMessageAgeHours))
+		"database", cfg.Server.DatabasePath,
+		"workers", cfg.Queue.WorkerCount,
+		"source_ips", len(cfg.Outbound.SourceIPs),
+		"source_ip_selection", cfg.Outbound.SourceIPSelection,
+		"callback_url", cfg.Callbacks.WebhookURL,
+		"max_message_age_hours", cfg.Outbound.MaxMessageAgeHours)
 
 	// Initialize metrics (if enabled)
 	var m *metrics.Metrics
@@ -273,7 +258,7 @@ func main() {
 		logger.Warn("metrics are DISABLED")
 	} else {
 		m = metrics.NewMetrics()
-		logger.Info("metrics initialized", zap.String("path", cfg.Metrics.Path))
+		logger.Info("metrics initialized", "path", cfg.Metrics.Path)
 	}
 
 	// Initialize cluster gossip service (if enabled)
@@ -289,15 +274,16 @@ func main() {
 
 	g, err := gossip.NewGossip(gossipCfg, logger)
 	if err != nil {
-		logger.Fatal("failed to initialize cluster", zap.Error(err))
+		logger.Error("failed to initialize cluster", "error", err)
+		os.Exit(1)
 	}
 	if g != nil {
 		defer g.Shutdown()
 		logger.Info("cluster gossip initialized",
-			zap.Bool("enabled", cfg.Cluster.Enabled),
-			zap.String("bind_addr", cfg.Cluster.BindAddr),
-			zap.Int("bind_port", cfg.Cluster.BindPort),
-			zap.Strings("peers", cfg.Cluster.Peers))
+			"enabled", cfg.Cluster.Enabled,
+			"bind_addr", cfg.Cluster.BindAddr,
+			"bind_port", cfg.Cluster.BindPort,
+			"peers", slog.Any("peers", cfg.Cluster.Peers))
 	}
 
 	// Initialize TLS Manager for auto-certificates
@@ -306,7 +292,8 @@ func main() {
 	tlsManager, err := tlsmanager.NewManager(initCtx, &cfg.TLS, g, logger)
 	initCancel() // Clean up context after initialization
 	if err != nil {
-		logger.Fatal("failed to initialize TLS manager", zap.Error(err))
+		logger.Error("failed to initialize TLS manager", "error", err)
+		os.Exit(1)
 	}
 
 	// Track server start time for uptime reporting
@@ -315,7 +302,8 @@ func main() {
 	// Initialize queue
 	q, err := queue.NewQueue(cfg.Server.DatabasePath, logger)
 	if err != nil {
-		logger.Fatal("failed to initialize queue", zap.Error(err))
+		logger.Error("failed to initialize queue", "error", err)
+		os.Exit(1)
 	}
 
 	// Wire metrics to queue
@@ -323,7 +311,7 @@ func main() {
 		q.SetMetrics(m)
 	}
 
-	logger.Info("queue initialized", zap.String("database", cfg.Server.DatabasePath))
+	logger.Info("queue initialized", "database", cfg.Server.DatabasePath)
 
 	// Initialize MX lookup with DNS resolver configuration
 	mxLookup := delivery.NewMXLookup(q, &cfg.DNS, &cfg.Outbound, logger)
@@ -367,7 +355,7 @@ func main() {
 	w.Start(cfg.Queue.WorkerCount)
 	defer w.Stop()
 
-	logger.Info("background workers started", zap.Int("count", cfg.Queue.WorkerCount))
+	logger.Info("background workers started", "count", cfg.Queue.WorkerCount)
 
 	// Start background metrics updater for queue depth
 	if m != nil {
@@ -377,7 +365,7 @@ func main() {
 
 			for range ticker.C {
 				if err := q.UpdateQueueMetrics(); err != nil {
-					logger.Error("failed to update queue metrics", zap.Error(err))
+					logger.Error("failed to update queue metrics", "error", err)
 				}
 			}
 		})
@@ -392,16 +380,16 @@ func main() {
 		for range ticker.C {
 			deleted, err := q.CleanupTerminalMessages(cfg.Inbound.IdempotencyTTLHours)
 			if err != nil {
-				logger.Error("failed to cleanup terminal messages", zap.Error(err))
+				logger.Error("failed to cleanup terminal messages", "error", err)
 			} else if deleted > 0 {
 				logger.Info("cleaned up terminal messages",
-					zap.Int64("deleted_count", deleted),
-					zap.Int("idempotency_ttl_hours", cfg.Inbound.IdempotencyTTLHours))
+					"deleted_count", deleted,
+					"idempotency_ttl_hours", cfg.Inbound.IdempotencyTTLHours)
 			}
 		}
 	})
 	logger.Info("terminal message cleanup job started",
-		zap.Int("idempotency_ttl_hours", cfg.Inbound.IdempotencyTTLHours))
+		"idempotency_ttl_hours", cfg.Inbound.IdempotencyTTLHours)
 
 	// Start degraded IP cleanup job
 	recovery.SafeGo(logger, "degraded IP cleanup", func() {
@@ -445,11 +433,11 @@ func main() {
 		if cfg.Metrics.Username != "" && cfg.Metrics.Password != "" {
 			metricsHandler = basicAuthMiddleware(metricsHandler, cfg.Metrics.Username, cfg.Metrics.Password, logger)
 			logger.Info("metrics endpoint registered with Basic Auth",
-				zap.String("path", cfg.Metrics.Path),
-				zap.String("username", cfg.Metrics.Username))
+				"path", cfg.Metrics.Path,
+				"username", cfg.Metrics.Username)
 		} else {
 			logger.Warn("metrics endpoint registered WITHOUT authentication - not recommended for production",
-				zap.String("path", cfg.Metrics.Path))
+				"path", cfg.Metrics.Path)
 		}
 
 		mux.Handle(cfg.Metrics.Path, metricsHandler)
@@ -459,7 +447,7 @@ func main() {
 	if g != nil {
 		clusterHandler := handler.NewClusterStatusHandler(g, logger)
 		mux.Handle("/admin/cluster/status", clusterHandler)
-		logger.Info("cluster status endpoint registered", zap.String("path", "/admin/cluster/status"))
+		logger.Info("cluster status endpoint registered", "path", "/admin/cluster/status")
 	}
 
 	// Start periodic node status broadcasting if gossip is enabled
@@ -472,7 +460,7 @@ func main() {
 				// Get current queue depth (queued + sending messages)
 				queueDepth, err := q.GetQueueDepth()
 				if err != nil {
-					logger.Error("failed to get queue depth for gossip", zap.Error(err))
+					logger.Error("failed to get queue depth for gossip", "error", err)
 					queueDepth = 0 // Use 0 on error
 				}
 
@@ -484,12 +472,12 @@ func main() {
 
 				// Broadcast status to cluster
 				if err := g.BroadcastNodeStatus(queueDepth, activeWorkers, uptime); err != nil {
-					logger.Error("failed to broadcast node status", zap.Error(err))
+					logger.Error("failed to broadcast node status", "error", err)
 				} else {
 					logger.Debug("broadcast node status to cluster",
-						zap.Int64("queue_depth", queueDepth),
-						zap.Int("active_workers", activeWorkers),
-						zap.Duration("uptime", uptime))
+						"queue_depth", queueDepth,
+						"active_workers", activeWorkers,
+						"uptime", uptime)
 				}
 			}
 		})
@@ -506,11 +494,11 @@ func main() {
 		if cfg.Health.Username != "" && cfg.Health.Password != "" {
 			finalHealthHandler = basicAuthMiddleware(healthHandler, cfg.Health.Username, cfg.Health.Password, logger)
 			logger.Info("health endpoint registered with Basic Auth",
-				zap.String("listen_addr", cfg.Health.ListenAddr),
-				zap.String("username", cfg.Health.Username))
+				"listen_addr", cfg.Health.ListenAddr,
+				"username", cfg.Health.Username)
 		} else {
 			logger.Info("health endpoint registered without authentication",
-				zap.String("listen_addr", cfg.Health.ListenAddr))
+				"listen_addr", cfg.Health.ListenAddr)
 		}
 
 		healthMux := http.NewServeMux()
@@ -526,9 +514,9 @@ func main() {
 
 		// Start health server in background
 		recovery.SafeGo(logger, "health server", func() {
-			logger.Info("health server starting", zap.String("addr", cfg.Health.ListenAddr))
+			logger.Info("health server starting", "addr", cfg.Health.ListenAddr)
 			if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Error("health server failed", zap.Error(err))
+				logger.Error("health server failed", "error", err)
 			}
 		})
 	} else {
@@ -568,10 +556,11 @@ func main() {
 				recovery.SafeGo(logger, "HTTP-01 challenge server", func() {
 					logger.Info("starting ACME HTTP-01 challenge server on port 80")
 					if err := httpChallengeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-						logger.Fatal("HTTP-01 challenge server failed - port 80 required for Let's Encrypt",
-							zap.Error(err),
-							zap.String("hint", "ensure port 80 is available and not in use by another service"),
-							zap.String("help", "check with: sudo lsof -i :80"))
+						logger.Error("HTTP-01 challenge server failed - port 80 required for Let's Encrypt",
+							"error", err,
+							"hint", "ensure port 80 is available and not in use by another service",
+							"help", "check with: sudo lsof -i :80")
+						os.Exit(1)
 					}
 				})
 
@@ -594,16 +583,18 @@ func main() {
 				logger.Info("certificate monitoring started (checks every 6 hours)")
 
 				logger.Info("TLS configured with letsencrypt provider",
-					zap.Strings("domains", cfg.TLS.LetsEncrypt.Domains))
+					"domains", slog.Any("domains", cfg.TLS.LetsEncrypt.Domains))
 			} else {
-				logger.Fatal("TLS provider is letsencrypt, but manager failed to initialize")
+				logger.Error("TLS provider is letsencrypt, but manager failed to initialize")
+				os.Exit(1)
 			}
 		case "file":
 			fallthrough
 		default:
 			// Validate TLS configuration
 			if cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
-				logger.Fatal("TLS enabled with file provider, but cert_file or key_file not specified")
+				logger.Error("TLS enabled with file provider, but cert_file or key_file not specified")
+				os.Exit(1)
 			}
 
 			// Setup TLS config with GetCertificate callback for hot reload
@@ -614,7 +605,7 @@ func main() {
 					// This allows hot reload when certificate files are updated
 					tlsConfig, err := reloadableCfg.LoadTLSConfig()
 					if err != nil {
-						logger.Error("failed to load TLS certificate", zap.Error(err))
+						logger.Error("failed to load TLS certificate", "error", err)
 						return nil, err
 					}
 					if len(tlsConfig.Certificates) == 0 {
@@ -625,8 +616,8 @@ func main() {
 			}
 
 			logger.Info("TLS configured with file provider and hot reload support",
-				zap.String("cert_file", cfg.TLS.CertFile),
-				zap.String("key_file", cfg.TLS.KeyFile))
+				"cert_file", cfg.TLS.CertFile,
+				"key_file", cfg.TLS.KeyFile)
 		}
 	}
 
@@ -635,14 +626,14 @@ func main() {
 		// Log server configuration
 		if cfg.Inbound.AuthToken != "" {
 			logger.Info("starting HTTP server",
-				zap.String("listen", cfg.Inbound.Listen),
-				zap.Bool("auth_enabled", true),
-				zap.Bool("tls_enabled", cfg.TLS.Enabled))
+				"listen", cfg.Inbound.Listen,
+				"auth_enabled", true,
+				"tls_enabled", cfg.TLS.Enabled)
 		} else {
 			logger.Warn("starting HTTP server WITHOUT authentication",
-				zap.String("listen", cfg.Inbound.Listen),
-				zap.Bool("auth_enabled", false),
-				zap.Bool("tls_enabled", cfg.TLS.Enabled))
+				"listen", cfg.Inbound.Listen,
+				"auth_enabled", false,
+				"tls_enabled", cfg.TLS.Enabled)
 		}
 
 		// Start server with or without TLS
@@ -656,7 +647,8 @@ func main() {
 		}
 
 		if err != nil && err != http.ErrServerClosed {
-			logger.Fatal("HTTP server failed", zap.Error(err))
+			logger.Error("HTTP server failed", "error", err)
+			os.Exit(1)
 		}
 	})
 
@@ -690,7 +682,7 @@ func main() {
 		case <-reload:
 			logger.Info("SIGHUP received, reloading configuration...")
 			if err := reloadableCfg.Reload(); err != nil {
-				logger.Error("failed to reload configuration", zap.Error(err))
+				logger.Error("failed to reload configuration", "error", err)
 			} else {
 				logger.Info("configuration reloaded successfully")
 			}
@@ -709,14 +701,14 @@ shutdown:
 	// Shutdown HTTP servers
 	logger.Info("shutting down HTTP server...")
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("HTTP server shutdown error", zap.Error(err))
+		logger.Error("HTTP server shutdown error", "error", err)
 	}
 
 	// Shutdown HTTP challenge server (if running)
 	if httpChallengeServer != nil {
 		logger.Info("shutting down HTTP-01 challenge server...")
 		if err := httpChallengeServer.Shutdown(ctx); err != nil {
-			logger.Error("HTTP challenge server shutdown error", zap.Error(err))
+			logger.Error("HTTP challenge server shutdown error", "error", err)
 		}
 	}
 
@@ -724,7 +716,7 @@ shutdown:
 	if healthServer != nil {
 		logger.Info("shutting down health server...")
 		if err := healthServer.Shutdown(ctx); err != nil {
-			logger.Error("health server shutdown error", zap.Error(err))
+			logger.Error("health server shutdown error", "error", err)
 		}
 	}
 

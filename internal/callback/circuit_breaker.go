@@ -1,10 +1,9 @@
 package callback
 
 import (
+	"log/slog"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 // CallbackCircuitState represents the state of the callback circuit breaker.
@@ -47,7 +46,7 @@ type CallbackCircuitBreaker struct {
 	failureThreshold int           // Consecutive failures before opening
 	successThreshold int           // Consecutive successes in half-open to close
 	openTimeout      time.Duration // Time to wait before half-open
-	logger           *zap.Logger
+	logger           *slog.Logger
 
 	// State
 	state                CallbackCircuitState
@@ -68,7 +67,7 @@ type CallbackCircuitBreaker struct {
 // Returns:
 //
 //	A new circuit breaker initialized in the closed state.
-func NewCallbackCircuitBreaker(failureThreshold, successThreshold int, openTimeout time.Duration, logger *zap.Logger) *CallbackCircuitBreaker {
+func NewCallbackCircuitBreaker(failureThreshold, successThreshold int, openTimeout time.Duration, logger *slog.Logger) *CallbackCircuitBreaker {
 	return &CallbackCircuitBreaker{
 		failureThreshold: failureThreshold,
 		successThreshold: successThreshold,
@@ -105,7 +104,7 @@ func (cb *CallbackCircuitBreaker) CanAttempt() bool {
 			cb.consecutiveSuccesses = 0
 			cb.setState(CallbackCircuitHalfOpen)
 			cb.logger.Info("callback circuit breaker transitioning to half-open",
-				zap.Duration("open_duration", time.Since(cb.lastFailureTime)))
+				"open_duration", time.Since(cb.lastFailureTime))
 			return true
 		}
 		return false
@@ -174,8 +173,8 @@ func (cb *CallbackCircuitBreaker) RecordFailure() {
 		if cb.consecutiveFailures >= cb.failureThreshold {
 			cb.setState(CallbackCircuitOpen)
 			cb.logger.Error("callback circuit breaker opened due to consecutive network failures",
-				zap.Int("failures", cb.consecutiveFailures),
-				zap.Int("threshold", cb.failureThreshold))
+				"failures", cb.consecutiveFailures,
+				"threshold", cb.failureThreshold)
 		}
 
 	case CallbackCircuitHalfOpen:

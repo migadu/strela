@@ -5,13 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"fune/internal/config"
-
-	"go.uber.org/zap"
 )
 
 // IPState represents the health state of a source IP address.
@@ -71,7 +70,7 @@ type IPReputationTracker struct {
 	mu          sync.RWMutex
 	degradedIPs map[string]*DegradedIPInfo
 	config      *config.ReputationConfig
-	logger      *zap.Logger
+	logger      *slog.Logger
 	httpClient  *http.Client
 	enabled     bool
 	metrics     ReputationMetrics
@@ -80,14 +79,14 @@ type IPReputationTracker struct {
 // NewIPReputationTracker creates a new IP reputation tracker with the specified configuration.
 // If IP tracking is disabled in the config, all IPs will be considered healthy.
 // The tracker uses an HTTP client with configurable timeout for sending webhook alerts.
-func NewIPReputationTracker(cfg *config.ReputationConfig, logger *zap.Logger) *IPReputationTracker {
+func NewIPReputationTracker(cfg *config.ReputationConfig, logger *slog.Logger) *IPReputationTracker {
 	enabled := cfg.EnableIPTracking
 	if !enabled {
 		logger.Warn("IP reputation tracking is DISABLED")
 	} else {
 		logger.Info("IP reputation tracking enabled",
-			zap.Int("degraded_retry_hours", cfg.DegradedRetryHours),
-			zap.String("alert_webhook_url", cfg.AlertWebhookURL))
+			"degraded_retry_hours", cfg.DegradedRetryHours,
+			"alert_webhook_url", cfg.AlertWebhookURL)
 	}
 
 	return &IPReputationTracker{
@@ -120,8 +119,8 @@ func (rt *IPReputationTracker) IsIPHealthy(ip string) bool {
 	// Check if retry time has passed
 	if time.Now().After(info.RetryAfter) {
 		rt.logger.Debug("degraded IP retry time reached",
-			zap.String("ip", ip),
-			zap.Time("retry_after", info.RetryAfter))
+			"ip", ip,
+			"retry_after", info.RetryAfter)
 		return true // Retry time reached, allow attempt
 	}
 
@@ -165,12 +164,12 @@ func (rt *IPReputationTracker) MarkIPDegraded(ip string, smtpCode int, smtpRespo
 	rt.mu.Unlock()
 
 	rt.logger.Warn("IP marked as degraded due to reputation failure",
-		zap.String("ip", ip),
-		zap.Int("smtp_code", smtpCode),
-		zap.String("smtp_response", smtpResponse),
-		zap.Time("retry_after", retryAfter),
-		zap.Int("failure_count", failureCount),
-		zap.Int("total_degraded_ips", degradedCount))
+		"ip", ip,
+		"smtp_code", smtpCode,
+		"smtp_response", smtpResponse,
+		"retry_after", retryAfter,
+		"failure_count", failureCount,
+		"total_degraded_ips", degradedCount)
 
 	// Record metrics
 	if rt.metrics != nil {
@@ -219,10 +218,10 @@ func (rt *IPReputationTracker) MarkIPRecovered(ip string) {
 	rt.mu.Unlock()
 
 	rt.logger.Info("IP recovered from degraded state",
-		zap.String("ip", ip),
-		zap.Duration("degraded_duration", time.Since(degradedAt)),
-		zap.Int("total_failures", failureCount),
-		zap.Int("remaining_degraded_ips", degradedCount))
+		"ip", ip,
+		"degraded_duration", time.Since(degradedAt),
+		"total_failures", failureCount,
+		"remaining_degraded_ips", degradedCount)
 
 	// Record metrics
 	if rt.metrics != nil {
@@ -297,15 +296,15 @@ func (rt *IPReputationTracker) Cleanup() {
 			delete(rt.degradedIPs, ip)
 			removed++
 			rt.logger.Info("cleaned up old degraded IP entry",
-				zap.String("ip", ip),
-				zap.Duration("age", time.Since(info.DegradedAt)))
+				"ip", ip,
+				"age", time.Since(info.DegradedAt))
 		}
 	}
 
 	if removed > 0 {
 		rt.logger.Info("degraded IP cleanup completed",
-			zap.Int("removed", removed),
-			zap.Int("remaining", len(rt.degradedIPs)))
+			"removed", removed,
+			"remaining", len(rt.degradedIPs))
 	}
 }
 
@@ -326,9 +325,9 @@ func (rt *IPReputationTracker) GetHealthyIPs(ips []string) []string {
 
 	if len(healthy) < len(ips) {
 		rt.logger.Debug("filtered degraded IPs",
-			zap.Int("total_ips", len(ips)),
-			zap.Int("healthy_ips", len(healthy)),
-			zap.Int("degraded_ips", len(ips)-len(healthy)))
+			"total_ips", len(ips),
+			"healthy_ips", len(healthy),
+			"degraded_ips", len(ips)-len(healthy))
 	}
 
 	return healthy
@@ -348,16 +347,16 @@ func (rt *IPReputationTracker) sendAlert(alert ReputationAlert) {
 		jsonData, err := json.Marshal(alert)
 		if err != nil {
 			rt.logger.Error("failed to marshal reputation alert",
-				zap.String("ip", alert.SourceIP),
-				zap.Error(err))
+				"ip", alert.SourceIP,
+				"error", err)
 			return
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "POST", rt.config.AlertWebhookURL, bytes.NewReader(jsonData))
 		if err != nil {
 			rt.logger.Error("failed to create reputation alert request",
-				zap.String("ip", alert.SourceIP),
-				zap.Error(err))
+				"ip", alert.SourceIP,
+				"error", err)
 			return
 		}
 
@@ -369,23 +368,23 @@ func (rt *IPReputationTracker) sendAlert(alert ReputationAlert) {
 		resp, err := rt.httpClient.Do(req)
 		if err != nil {
 			rt.logger.Error("failed to send reputation alert",
-				zap.String("ip", alert.SourceIP),
-				zap.String("event_type", alert.EventType),
-				zap.Error(err))
+				"ip", alert.SourceIP,
+				"event_type", alert.EventType,
+				"error", err)
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			rt.logger.Info("reputation alert sent successfully",
-				zap.String("ip", alert.SourceIP),
-				zap.String("event_type", alert.EventType),
-				zap.Int("status_code", resp.StatusCode))
+				"ip", alert.SourceIP,
+				"event_type", alert.EventType,
+				"status_code", resp.StatusCode)
 		} else {
 			rt.logger.Warn("reputation alert returned non-2xx status",
-				zap.String("ip", alert.SourceIP),
-				zap.String("event_type", alert.EventType),
-				zap.Int("status_code", resp.StatusCode))
+				"ip", alert.SourceIP,
+				"event_type", alert.EventType,
+				"status_code", resp.StatusCode)
 		}
 	}()
 }

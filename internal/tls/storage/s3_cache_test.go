@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"go.uber.org/zap"
 	"golang.org/x/crypto/acme/autocert"
+	"log/slog"
 )
 
 func TestS3Cache_Get_Success(t *testing.T) {
@@ -17,7 +17,7 @@ func TestS3Cache_Get_Success(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return true },
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	data, err := cache.Get(context.Background(), "test-key")
@@ -37,7 +37,7 @@ func TestS3Cache_Get_NotFound(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return true },
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	_, err := cache.Get(context.Background(), "nonexistent-key")
@@ -54,7 +54,7 @@ func TestS3Cache_Get_S3Error(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return true },
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	_, err := cache.Get(context.Background(), "test-key")
@@ -73,7 +73,7 @@ func TestS3Cache_Put_AsLeader(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return true }, // This node is leader
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	testData := []byte("new-certificate-data")
@@ -97,7 +97,7 @@ func TestS3Cache_Put_AsNonLeader(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return false }, // This node is NOT leader
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	testData := []byte("new-certificate-data")
@@ -122,7 +122,7 @@ func TestS3Cache_Put_S3Error(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return true },
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	err := cache.Put(context.Background(), "test-key", []byte("data"))
@@ -139,7 +139,7 @@ func TestS3Cache_Delete_AsLeader(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return true },
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	err := cache.Delete(context.Background(), "delete-key")
@@ -161,7 +161,7 @@ func TestS3Cache_Delete_AsNonLeader(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return false }, // This node is NOT leader
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	err := cache.Delete(context.Background(), "delete-key")
@@ -185,7 +185,7 @@ func TestS3Cache_LeadershipChange(t *testing.T) {
 		S3Client:  mock,
 		Bucket:    "test-bucket",
 		IsLeaderF: func() bool { return isLeader },
-		Logger:    zap.NewNop(),
+		Logger:    slog.Default(),
 	}
 
 	// Write as leader

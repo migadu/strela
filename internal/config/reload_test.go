@@ -1,15 +1,14 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"go.uber.org/zap"
 )
 
 func TestReloadableConfig_Reload(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	// Create temporary config file
 	tmpDir := t.TempDir()
@@ -112,7 +111,7 @@ timeout_seconds = 10
 }
 
 func TestReloadableConfig_ReloadValidation(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	tests := []struct {
 		name          string
@@ -273,7 +272,7 @@ webhook_url = "https://different.com/webhook"
 }
 
 func TestReloadableConfig_ReloadCallback(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")
@@ -342,7 +341,7 @@ webhook_url = "https://example.com/webhook"
 }
 
 func TestReloadableConfig_InvalidSyntax(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")
@@ -392,7 +391,7 @@ invalid syntax here!
 }
 
 func TestReloadableConfig_GetMethods(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")

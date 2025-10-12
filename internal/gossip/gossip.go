@@ -57,13 +57,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/memberlist"
-	"go.uber.org/zap"
 )
 
 // MessageType represents the type of gossip message exchanged between cluster nodes.
@@ -110,7 +110,7 @@ type idempotencyCacheEntry struct {
 type Gossip struct {
 	nodeID     string
 	memberlist *memberlist.Memberlist
-	logger     *zap.Logger
+	logger     *slog.Logger
 
 	// Idempotency cache: key -> idempotencyCacheEntry
 	idempotencyCache sync.Map
@@ -156,7 +156,7 @@ type Config struct {
 // The gossip service starts background goroutines for cache cleanup and will
 // attempt to join the specified peers. Join failures are logged but not fatal,
 // allowing the node to operate standalone or join later through peer discovery.
-func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
+func NewGossip(cfg *Config, logger *slog.Logger) (*Gossip, error) {
 	if !cfg.Enabled {
 		logger.Info("gossip protocol disabled")
 		return nil, nil
@@ -200,18 +200,18 @@ func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
 
 		// Enable encryption with the provided key
 		mlConfig.SecretKey = keyBytes
-		logger.Info("gossip encryption enabled", zap.Int("key_length", len(keyBytes)))
+		logger.Info("gossip encryption enabled", "key_length", len(keyBytes))
 	} else {
 		logger.Warn("cluster encryption DISABLED - gossip communication is INSECURE",
-			zap.String("recommendation", "set cluster.secret_key for production deployments"))
+			"recommendation", "set cluster.secret_key for production deployments")
 	}
 
 	// Set delegate for custom message handling
 	mlConfig.Delegate = &delegate{gossip: g}
 	mlConfig.Events = &eventDelegate{gossip: g}
 
-	// Disable memberlist's built-in logger (we use zap)
-	mlConfig.LogOutput = &zapLogAdapter{logger: logger}
+	// Disable memberlist's built-in logger (we use slog)
+	mlConfig.LogOutput = &slogLogAdapter{logger: logger}
 
 	// Create memberlist
 	ml, err := memberlist.Create(mlConfig)
@@ -222,21 +222,21 @@ func NewGossip(cfg *Config, logger *zap.Logger) (*Gossip, error) {
 	g.memberlist = ml
 
 	logger.Info("gossip service initialized",
-		zap.String("node_id", nodeID),
-		zap.String("bind_addr", cfg.BindAddr),
-		zap.Int("bind_port", cfg.BindPort))
+		"node_id", nodeID,
+		"bind_addr", cfg.BindAddr,
+		"bind_port", cfg.BindPort)
 
 	// Join cluster if peers are provided
 	if len(cfg.Peers) > 0 {
 		n, err := ml.Join(cfg.Peers)
 		if err != nil {
 			logger.Warn("failed to join cluster",
-				zap.Strings("peers", cfg.Peers),
-				zap.Error(err))
+				"peers", cfg.Peers,
+				"error", err)
 		} else {
 			logger.Info("joined cluster",
-				zap.Int("peers_contacted", n),
-				zap.Strings("peers", cfg.Peers))
+				"peers_contacted", n,
+				"peers", cfg.Peers)
 		}
 	}
 
@@ -283,8 +283,8 @@ func (g *Gossip) BroadcastIdempotencyKey(idempotencyKey string) error {
 	g.memberlist.UpdateNode(time.Second)
 
 	g.logger.Debug("broadcast idempotency key",
-		zap.String("key", idempotencyKey),
-		zap.String("node_id", g.nodeID))
+		"key", idempotencyKey,
+		"node_id", g.nodeID)
 
 	return nil
 }
@@ -347,9 +347,9 @@ func (g *Gossip) BroadcastNodeStatus(queueDepth int64, activeWorkers int, uptime
 	g.memberlist.SendReliable(g.memberlist.LocalNode(), data)
 
 	g.logger.Debug("broadcast node status",
-		zap.String("node_id", g.nodeID),
-		zap.Int64("queue_depth", queueDepth),
-		zap.Int("active_workers", activeWorkers))
+		"node_id", g.nodeID,
+		"queue_depth", queueDepth,
+		"active_workers", activeWorkers)
 
 	return nil
 }
@@ -410,7 +410,7 @@ func (g *Gossip) Shutdown() error {
 
 	// Leave the cluster gracefully
 	if err := g.memberlist.Leave(time.Second * 5); err != nil {
-		g.logger.Warn("error leaving cluster", zap.Error(err))
+		g.logger.Warn("error leaving cluster", "error", err)
 	}
 
 	// Shutdown memberlist
@@ -472,7 +472,7 @@ func (g *Gossip) handleMessage(data []byte) error {
 		g.handleNodeStatus(status)
 
 	default:
-		g.logger.Warn("unknown message type", zap.Uint8("type", uint8(msgType)))
+		g.logger.Warn("unknown message type", "type", uint8(msgType))
 	}
 
 	return nil
@@ -492,8 +492,8 @@ func (g *Gossip) handleIdempotencyMessage(msg IdempotencyMessage) {
 	g.idempotencyCache.Store(msg.IdempotencyKey, entry)
 
 	g.logger.Debug("received idempotency key claim",
-		zap.String("key", msg.IdempotencyKey),
-		zap.String("claimed_by", msg.NodeID))
+		"key", msg.IdempotencyKey,
+		"claimed_by", msg.NodeID)
 }
 
 // handleNodeStatus processes an incoming node status update
@@ -504,9 +504,9 @@ func (g *Gossip) handleNodeStatus(status NodeStatus) {
 	g.nodeStatuses.Store(status.NodeID, status)
 
 	g.logger.Debug("received node status",
-		zap.String("node_id", status.NodeID),
-		zap.Int64("queue_depth", status.QueueDepth),
-		zap.Int("active_workers", status.ActiveWorkers))
+		"node_id", status.NodeID,
+		"queue_depth", status.QueueDepth,
+		"active_workers", status.ActiveWorkers)
 }
 
 // cleanupExpiredKeys removes expired idempotency keys and stale node statuses from the cache
@@ -542,8 +542,8 @@ func (g *Gossip) cleanupExpiredKeys() {
 		// Log cleanup stats if anything was removed
 		if idempotencyExpired > 0 || nodesExpired > 0 {
 			g.logger.Debug("gossip cache cleanup completed",
-				zap.Int("idempotency_keys_removed", idempotencyExpired),
-				zap.Int("stale_nodes_removed", nodesExpired))
+				"idempotency_keys_removed", idempotencyExpired,
+				"stale_nodes_removed", nodesExpired)
 		}
 	}
 }
@@ -624,8 +624,8 @@ func (g *Gossip) updateLeader() {
 		oldLeader := g.leader
 		g.leader = newLeader
 		g.logger.Info("cluster leader changed",
-			zap.String("old_leader", oldLeader),
-			zap.String("new_leader", g.leader),
-			zap.Bool("is_leader", g.leader == g.nodeID))
+			"old_leader", oldLeader,
+			"new_leader", g.leader,
+			"is_leader", g.leader == g.nodeID)
 	}
 }

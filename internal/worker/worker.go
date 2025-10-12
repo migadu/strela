@@ -51,6 +51,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -59,8 +60,6 @@ import (
 	"fune/internal/delivery"
 	"fune/internal/queue"
 	"fune/internal/recovery"
-
-	"go.uber.org/zap"
 )
 
 // Worker processes messages from the queue and attempts SMTP delivery.
@@ -81,7 +80,7 @@ type Worker struct {
 	mxLookup        *delivery.MXLookup
 	deliveryConfig  *config.OutboundConfig
 	queueConfig     *config.QueueConfig
-	logger          *zap.Logger
+	logger          *slog.Logger
 	callbackHandler *callback.CallbackHandler
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -110,7 +109,7 @@ func NewWorker(
 	callbackHandler *callback.CallbackHandler,
 	deliveryCfg *config.OutboundConfig,
 	queueCfg *config.QueueConfig,
-	logger *zap.Logger,
+	logger *slog.Logger,
 ) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -148,7 +147,7 @@ func NewWorker(
 //	worker.Stop() // Graceful shutdown
 func (w *Worker) Start(workerCount int) {
 	w.logger.Info("starting workers",
-		zap.Int("worker_count", workerCount))
+		slog.Int("worker_count", workerCount))
 
 	// Start queue processing workers
 	for i := 0; i < workerCount; i++ {
@@ -193,7 +192,7 @@ func (w *Worker) processQueue(workerID int) {
 	defer recovery.RecoverPanic(w.logger, fmt.Sprintf("queue worker %d", workerID))
 
 	w.logger.Info("queue worker started",
-		zap.Int("worker_id", workerID))
+		slog.Int("worker_id", workerID))
 
 	// Fallback ticker in case notifications are missed
 	pollInterval := time.Duration(w.queueConfig.PollIntervalSeconds) * time.Second
@@ -206,7 +205,7 @@ func (w *Worker) processQueue(workerID int) {
 		select {
 		case <-w.ctx.Done():
 			w.logger.Info("queue worker stopping",
-				zap.Int("worker_id", workerID))
+				slog.Int("worker_id", workerID))
 			return
 
 		case <-notifyCh:
@@ -234,8 +233,8 @@ func (w *Worker) processBatch(workerID int) {
 	messages, err := w.queue.GetNextMessages(batchSize)
 	if err != nil {
 		w.logger.Error("failed to get messages from queue",
-			zap.Int("worker_id", workerID),
-			zap.Error(err))
+			slog.Int("worker_id", workerID),
+			slog.Any("error", err))
 		return
 	}
 
@@ -244,8 +243,8 @@ func (w *Worker) processBatch(workerID int) {
 	}
 
 	w.logger.Debug("processing batch",
-		zap.Int("worker_id", workerID),
-		zap.Int("message_count", len(messages)))
+		slog.Int("worker_id", workerID),
+		slog.Int("message_count", len(messages)))
 
 	// Batch DNS prefetch: Extract unique domains and prefetch MX records in parallel
 	if w.mxLookup != nil && len(messages) > 1 {
@@ -278,9 +277,9 @@ func (w *Worker) processBatch(workerID int) {
 // of success or failure.
 func (w *Worker) processMessage(msg *queue.QueuedMessage) {
 	w.logger.Info("processing message",
-		zap.String("message_id", msg.MessageID),
-		zap.String("to", msg.ToAddr),
-		zap.Int("attempt", msg.Attempts+1))
+		slog.String("message_id", msg.MessageID),
+		slog.String("to", msg.ToAddr),
+		slog.Int("attempt", msg.Attempts+1))
 
 	// Mark as sending
 	w.queue.UpdateStatus(msg.MessageID, queue.StatusSending)
@@ -308,8 +307,8 @@ func (w *Worker) processMessage(msg *queue.QueuedMessage) {
 
 	if err := w.queue.RecordAttempt(attempt); err != nil {
 		w.logger.Error("failed to record attempt",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			slog.String("message_id", msg.MessageID),
+			slog.Any("error", err))
 	}
 
 	// Handle result
@@ -332,12 +331,12 @@ func (w *Worker) processMessage(msg *queue.QueuedMessage) {
 // the configured idempotency TTL window.
 func (w *Worker) handleSuccess(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	w.logger.Info("message delivered successfully",
-		zap.String("message_id", msg.MessageID),
-		zap.String("to", msg.ToAddr),
-		zap.String("mx_host", result.MXHost),
-		zap.String("source_ip", result.SourceIP),
-		zap.Int("attempts", msg.Attempts+1),
-		zap.Int64("duration_ms", result.DurationMs))
+		slog.String("message_id", msg.MessageID),
+		slog.String("to", msg.ToAddr),
+		slog.String("mx_host", result.MXHost),
+		slog.String("source_ip", result.SourceIP),
+		slog.Int("attempts", msg.Attempts+1),
+		slog.Int64("duration_ms", result.DurationMs))
 
 	// Update final delivery info
 	w.queue.UpdateDeliveryResult(msg.MessageID, result.MXHost, result.SourceIP, result.SMTPCode, result.SMTPResponse)
@@ -366,17 +365,17 @@ func (w *Worker) handleSuccess(msg *queue.QueuedMessage, result *delivery.Delive
 func (w *Worker) handleFailure(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	if result.Error == nil {
 		w.logger.Error("delivery failed but no error provided",
-			zap.String("message_id", msg.MessageID))
+			slog.String("message_id", msg.MessageID))
 		return
 	}
 
 	w.logger.Warn("delivery attempt failed",
-		zap.String("message_id", msg.MessageID),
-		zap.String("to", msg.ToAddr),
-		zap.String("error_category", string(result.Error.Category)),
-		zap.Int("smtp_code", result.SMTPCode),
-		zap.String("error", result.Error.Message),
-		zap.Int("attempts", msg.Attempts+1))
+		slog.String("message_id", msg.MessageID),
+		slog.String("to", msg.ToAddr),
+		slog.String("error_category", string(result.Error.Category)),
+		slog.Int("smtp_code", result.SMTPCode),
+		slog.String("error", result.Error.Message),
+		slog.Int("attempts", msg.Attempts+1))
 
 	// Check if message has expired
 	if delivery.IsExpired(msg) {
@@ -413,10 +412,10 @@ func (w *Worker) handleFailure(msg *queue.QueuedMessage, result *delivery.Delive
 // No retry is scheduled.
 func (w *Worker) handlePermanentFailure(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	w.logger.Info("permanent failure - hard bounce",
-		zap.String("message_id", msg.MessageID),
-		zap.String("to", msg.ToAddr),
-		zap.Int("smtp_code", result.SMTPCode),
-		zap.String("response", result.SMTPResponse))
+		slog.String("message_id", msg.MessageID),
+		slog.String("to", msg.ToAddr),
+		slog.Int("smtp_code", result.SMTPCode),
+		slog.String("response", result.SMTPResponse))
 
 	// Update final delivery info
 	w.queue.UpdateDeliveryResult(msg.MessageID, result.MXHost, result.SourceIP, result.SMTPCode, result.SMTPResponse)
@@ -445,10 +444,10 @@ func (w *Worker) handleThrottledDelivery(msg *queue.QueuedMessage, result *deliv
 	nextRetry := time.Now().Add(time.Duration(w.deliveryConfig.PerDomainRetrySeconds) * time.Second)
 
 	w.logger.Debug("delivery throttled, scheduling quick retry",
-		zap.String("message_id", msg.MessageID),
-		zap.String("domain", msg.ToDomain),
-		zap.Time("next_retry", nextRetry),
-		zap.Duration("delay", time.Until(nextRetry)))
+		slog.String("message_id", msg.MessageID),
+		slog.String("domain", msg.ToDomain),
+		slog.Time("next_retry", nextRetry),
+		slog.Duration("delay", time.Until(nextRetry)))
 
 	err := w.queue.ScheduleRetry(
 		msg.MessageID,
@@ -461,8 +460,8 @@ func (w *Worker) handleThrottledDelivery(msg *queue.QueuedMessage, result *deliv
 
 	if err != nil {
 		w.logger.Error("failed to schedule throttled retry",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			slog.String("message_id", msg.MessageID),
+			slog.Any("error", err))
 	}
 }
 
@@ -491,9 +490,9 @@ func (w *Worker) handleTemporaryFailure(msg *queue.QueuedMessage, result *delive
 	// Check if we've exceeded max age
 	if time.Now().After(msg.ExpiresAt) {
 		w.logger.Info("message expired after temporary failures",
-			zap.String("message_id", msg.MessageID),
-			zap.Int("total_attempts", newAttempts),
-			zap.Duration("age", time.Since(msg.CreatedAt)))
+			slog.String("message_id", msg.MessageID),
+			slog.Int("total_attempts", newAttempts),
+			slog.Duration("age", time.Since(msg.CreatedAt)))
 
 		// Update status
 		w.queue.UpdateStatus(msg.MessageID, queue.StatusTempExpired)
@@ -510,11 +509,11 @@ func (w *Worker) handleTemporaryFailure(msg *queue.QueuedMessage, result *delive
 	nextRetry := w.retryScheduler.GetNextRetryTime(newAttempts, result.Error.Category)
 
 	w.logger.Info("scheduling retry",
-		zap.String("message_id", msg.MessageID),
-		zap.Int("attempt", newAttempts),
-		zap.Time("next_retry", nextRetry),
-		zap.Duration("delay", time.Until(nextRetry)),
-		zap.String("error_category", string(result.Error.Category)))
+		slog.String("message_id", msg.MessageID),
+		slog.Int("attempt", newAttempts),
+		slog.Time("next_retry", nextRetry),
+		slog.Duration("delay", time.Until(nextRetry)),
+		slog.String("error_category", string(result.Error.Category)))
 
 	err := w.queue.ScheduleRetry(
 		msg.MessageID,
@@ -527,8 +526,8 @@ func (w *Worker) handleTemporaryFailure(msg *queue.QueuedMessage, result *delive
 
 	if err != nil {
 		w.logger.Error("failed to schedule retry",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			slog.String("message_id", msg.MessageID),
+			slog.Any("error", err))
 	}
 }
 
@@ -542,10 +541,10 @@ func (w *Worker) handleTemporaryFailure(msg *queue.QueuedMessage, result *delive
 // enqueued. No further delivery attempts are made.
 func (w *Worker) handleExpired(msg *queue.QueuedMessage, result *delivery.DeliveryResult) {
 	w.logger.Info("message expired",
-		zap.String("message_id", msg.MessageID),
-		zap.String("to", msg.ToAddr),
-		zap.Int("attempts", msg.Attempts+1),
-		zap.Duration("age", time.Since(msg.CreatedAt)))
+		slog.String("message_id", msg.MessageID),
+		slog.String("to", msg.ToAddr),
+		slog.Int("attempts", msg.Attempts+1),
+		slog.Duration("age", time.Since(msg.CreatedAt)))
 
 	// Update status
 	w.queue.UpdateStatus(msg.MessageID, queue.StatusExpired)
@@ -600,7 +599,7 @@ func (w *Worker) performCleanup() {
 	expired, err := w.queue.FindExpiredMessages()
 	if err != nil {
 		w.logger.Error("failed to find expired messages",
-			zap.Error(err))
+			slog.Any("error", err))
 		return
 	}
 
@@ -609,13 +608,13 @@ func (w *Worker) performCleanup() {
 	}
 
 	w.logger.Info("found expired messages",
-		zap.Int("count", len(expired)))
+		slog.Int("count", len(expired)))
 
 	for _, msg := range expired {
 		w.logger.Info("marking message as expired",
-			zap.String("message_id", msg.MessageID),
-			zap.String("to", msg.ToAddr),
-			zap.Duration("age", time.Since(msg.CreatedAt)))
+			slog.String("message_id", msg.MessageID),
+			slog.String("to", msg.ToAddr),
+			slog.Duration("age", time.Since(msg.CreatedAt)))
 
 		// Update status
 		w.queue.UpdateStatus(msg.MessageID, queue.StatusExpired)

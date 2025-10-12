@@ -1,11 +1,10 @@
 package queue
 
 import (
+	"log/slog"
 	"os"
 	"testing"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 func TestCleanupTerminalMessages_WithIdempotencyKey(t *testing.T) {
@@ -13,7 +12,7 @@ func TestCleanupTerminalMessages_WithIdempotencyKey(t *testing.T) {
 	dbPath := "./test_cleanup_with_idem.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -79,7 +78,7 @@ func TestCleanupTerminalMessages_WithoutIdempotencyKey(t *testing.T) {
 	dbPath := "./test_cleanup_no_idem.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -130,7 +129,7 @@ func TestCleanupTerminalMessages_OnlyTerminalStates(t *testing.T) {
 	dbPath := "./test_cleanup_states.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -205,7 +204,7 @@ func TestCleanupTerminalMessages_MixedIdempotencyKeys(t *testing.T) {
 	dbPath := "./test_cleanup_mixed.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)

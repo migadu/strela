@@ -3,12 +3,11 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"fune/internal/gossip"
-
-	"go.uber.org/zap"
 )
 
 // ClusterStatusHandler provides cluster-wide status information via HTTP API.
@@ -48,7 +47,7 @@ import (
 //   - Debugging distributed issues
 type ClusterStatusHandler struct {
 	statusProvider *gossip.Gossip
-	logger         *zap.Logger
+	logger         *slog.Logger
 }
 
 // NewClusterStatusHandler creates a new cluster status HTTP handler.
@@ -64,7 +63,7 @@ type ClusterStatusHandler struct {
 //
 //	handler := NewClusterStatusHandler(gossip, logger)
 //	http.Handle("/admin/cluster/status", handler)
-func NewClusterStatusHandler(g *gossip.Gossip, logger *zap.Logger) *ClusterStatusHandler {
+func NewClusterStatusHandler(g *gossip.Gossip, logger *slog.Logger) *ClusterStatusHandler {
 	return &ClusterStatusHandler{
 		statusProvider: g,
 		logger:         logger,

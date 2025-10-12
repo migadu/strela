@@ -49,6 +49,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -61,7 +62,6 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"go.uber.org/zap"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -70,7 +70,7 @@ import (
 // leader election to prevent duplicate ACME challenges.
 type Manager struct {
 	autocertManager *autocert.Manager
-	logger          *zap.Logger
+	logger          *slog.Logger
 	domains         []string // Track configured domains for monitoring
 }
 
@@ -89,7 +89,7 @@ type Manager struct {
 //
 // Returns nil manager if gossip service is unavailable, as leader coordination
 // cannot function without it.
-func NewManager(ctx context.Context, cfg *config.TLSConfig, gossipSvc *gossip.Gossip, logger *zap.Logger) (*Manager, error) {
+func NewManager(ctx context.Context, cfg *config.TLSConfig, gossipSvc *gossip.Gossip, logger *slog.Logger) (*Manager, error) {
 	if !cfg.Enabled || cfg.Provider != "letsencrypt" {
 		return nil, nil
 	}
@@ -114,9 +114,9 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, gossipSvc *gossip.Go
 	}
 
 	logger.Info("TLS manager initialized",
-		zap.Strings("domains", cfg.LetsEncrypt.Domains),
-		zap.String("email", cfg.LetsEncrypt.Email),
-		zap.String("storage", cfg.LetsEncrypt.StorageProvider))
+		"domains", cfg.LetsEncrypt.Domains,
+		"email", cfg.LetsEncrypt.Email,
+		"storage", cfg.LetsEncrypt.StorageProvider)
 
 	return &Manager{
 		autocertManager: m,
@@ -225,36 +225,36 @@ func (m *Manager) CheckCertificates() {
 
 		if info.Error != nil {
 			m.logger.Warn("certificate check failed",
-				zap.String("domain", domain),
-				zap.Error(info.Error))
+				"domain", domain,
+				"error", info.Error)
 			continue
 		}
 
 		if info.IsExpired {
 			m.logger.Error("certificate EXPIRED",
-				zap.String("domain", domain),
-				zap.Time("expired_at", info.NotAfter),
-				zap.Int("days_overdue", -info.DaysUntilExpiry))
+				"domain", domain,
+				"expired_at", info.NotAfter,
+				"days_overdue", -info.DaysUntilExpiry)
 		} else if info.DaysUntilExpiry <= 7 {
 			m.logger.Warn("certificate expiring soon",
-				zap.String("domain", domain),
-				zap.Time("expires_at", info.NotAfter),
-				zap.Int("days_remaining", info.DaysUntilExpiry))
+				"domain", domain,
+				"expires_at", info.NotAfter,
+				"days_remaining", info.DaysUntilExpiry)
 		} else if info.DaysUntilExpiry <= 30 {
 			m.logger.Info("certificate status",
-				zap.String("domain", domain),
-				zap.Time("expires_at", info.NotAfter),
-				zap.Int("days_remaining", info.DaysUntilExpiry))
+				"domain", domain,
+				"expires_at", info.NotAfter,
+				"days_remaining", info.DaysUntilExpiry)
 		} else {
 			m.logger.Debug("certificate status",
-				zap.String("domain", domain),
-				zap.Time("expires_at", info.NotAfter),
-				zap.Int("days_remaining", info.DaysUntilExpiry))
+				"domain", domain,
+				"expires_at", info.NotAfter,
+				"days_remaining", info.DaysUntilExpiry)
 		}
 	}
 }
 
-func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, isLeaderF func() bool, logger *zap.Logger) (*storage.S3Cache, error) {
+func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, isLeaderF func() bool, logger *slog.Logger) (*storage.S3Cache, error) {
 	// Create a timeout context for S3 initialization (10 seconds)
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -289,7 +289,7 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, isLeaderF 
 	s3Client := s3.NewFromConfig(awsCfg)
 
 	// Validate S3 bucket exists and is accessible
-	logger.Info("validating S3 bucket access", zap.String("bucket", cfg.S3.Bucket))
+	logger.Info("validating S3 bucket access", "bucket", cfg.S3.Bucket)
 	_, err = s3Client.HeadBucket(initCtx, &s3.HeadBucketInput{
 		Bucket: &cfg.S3.Bucket,
 	})
@@ -297,7 +297,7 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, isLeaderF 
 		return nil, fmt.Errorf("S3 bucket validation failed for '%s': %w (check bucket exists and IAM permissions)", cfg.S3.Bucket, err)
 	}
 
-	logger.Info("S3 bucket validated successfully", zap.String("bucket", cfg.S3.Bucket))
+	logger.Info("S3 bucket validated successfully", "bucket", cfg.S3.Bucket)
 
 	return &storage.S3Cache{
 		S3Client:  s3Client,

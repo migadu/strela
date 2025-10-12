@@ -7,11 +7,12 @@ import (
 
 	"fune/internal/config"
 
-	"go.uber.org/zap"
+	"log/slog"
+	"os"
 )
 
 func TestDNSResolver_SystemDefault(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cfg := &config.DNSConfig{
 		Resolvers:      []string{}, // Use system default
 		TimeoutSeconds: 5,
@@ -38,7 +39,7 @@ func TestDNSResolver_SystemDefault(t *testing.T) {
 }
 
 func TestDNSResolver_CustomResolvers(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cfg := &config.DNSConfig{
 		Resolvers:      []string{"8.8.8.8:53", "1.1.1.1:53"}, // Google and Cloudflare DNS
 		TimeoutSeconds: 5,
@@ -61,7 +62,7 @@ func TestDNSResolver_CustomResolvers(t *testing.T) {
 }
 
 func TestDNSResolver_Timeout(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cfg := &config.DNSConfig{
 		Resolvers:      []string{"192.0.2.1:53"}, // Non-routable IP (should timeout)
 		TimeoutSeconds: 2,                        // Short timeout
@@ -86,7 +87,7 @@ func TestDNSResolver_Timeout(t *testing.T) {
 }
 
 func TestDNSResolver_InvalidDomain(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cfg := &config.DNSConfig{
 		Resolvers:      []string{},
 		TimeoutSeconds: 5,
@@ -105,7 +106,7 @@ func TestDNSResolver_InvalidDomain(t *testing.T) {
 }
 
 func TestDNSResolver_HostLookup(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cfg := &config.DNSConfig{
 		Resolvers:      []string{},
 		TimeoutSeconds: 5,

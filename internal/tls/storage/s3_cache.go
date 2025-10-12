@@ -8,12 +8,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"go.uber.org/zap"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -36,7 +36,7 @@ type S3Cache struct {
 	S3Client  S3API
 	Bucket    string
 	IsLeaderF func() bool
-	Logger    *zap.Logger
+	Logger    *slog.Logger
 }
 
 // Get reads certificate data from S3. All nodes (leader and non-leader) can read
@@ -56,21 +56,21 @@ func (s *S3Cache) Get(ctx context.Context, key string) ([]byte, error) {
 	if err != nil {
 		var nsk *types.NoSuchKey
 		if errors.As(err, &nsk) {
-			s.Logger.Debug("certificate not found in S3", zap.String("key", key))
+			s.Logger.Debug("certificate not found in S3", "key", key)
 			return nil, autocert.ErrCacheMiss
 		}
-		s.Logger.Error("failed to get certificate from S3", zap.String("key", key), zap.Error(err))
+		s.Logger.Error("failed to get certificate from S3", "key", key, "error", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		s.Logger.Error("failed to read certificate data", zap.String("key", key), zap.Error(err))
+		s.Logger.Error("failed to read certificate data", "key", key, "error", err)
 		return nil, err
 	}
 
-	s.Logger.Info("certificate retrieved from S3", zap.String("key", key), zap.Int("size", len(data)))
+	s.Logger.Info("certificate retrieved from S3", "key", key, "size", len(data))
 	return data, nil
 }
 
@@ -85,7 +85,7 @@ func (s *S3Cache) Put(ctx context.Context, key string, data []byte) error {
 	// Check leadership before operation (prevents race condition)
 	wasLeader := s.IsLeaderF()
 	if !wasLeader {
-		s.Logger.Debug("skipping certificate write (not leader)", zap.String("key", key))
+		s.Logger.Debug("skipping certificate write (not leader)", "key", key)
 		return nil
 	}
 
@@ -99,17 +99,17 @@ func (s *S3Cache) Put(ctx context.Context, key string, data []byte) error {
 		Body:   bytes.NewReader(data),
 	})
 	if err != nil {
-		s.Logger.Error("failed to put certificate to S3", zap.String("key", key), zap.Error(err))
+		s.Logger.Error("failed to put certificate to S3", "key", key, "error", err)
 		return err
 	}
 
 	// Check if we're still leader after the write (detect race condition)
 	if !s.IsLeaderF() && wasLeader {
 		s.Logger.Warn("leadership changed during certificate write - write completed but node is no longer leader",
-			zap.String("key", key))
+			"key", key)
 	}
 
-	s.Logger.Info("certificate stored in S3", zap.String("key", key), zap.Int("size", len(data)))
+	s.Logger.Info("certificate stored in S3", "key", key, "size", len(data))
 	return nil
 }
 
@@ -122,7 +122,7 @@ func (s *S3Cache) Delete(ctx context.Context, key string) error {
 	// Check leadership before operation (prevents race condition)
 	wasLeader := s.IsLeaderF()
 	if !wasLeader {
-		s.Logger.Debug("skipping certificate delete (not leader)", zap.String("key", key))
+		s.Logger.Debug("skipping certificate delete (not leader)", "key", key)
 		return nil
 	}
 
@@ -135,16 +135,16 @@ func (s *S3Cache) Delete(ctx context.Context, key string) error {
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		s.Logger.Error("failed to delete certificate from S3", zap.String("key", key), zap.Error(err))
+		s.Logger.Error("failed to delete certificate from S3", "key", key, "error", err)
 		return err
 	}
 
 	// Check if we're still leader after the delete (detect race condition)
 	if !s.IsLeaderF() && wasLeader {
 		s.Logger.Warn("leadership changed during certificate delete - delete completed but node is no longer leader",
-			zap.String("key", key))
+			"key", key)
 	}
 
-	s.Logger.Info("certificate deleted from S3", zap.String("key", key))
+	s.Logger.Info("certificate deleted from S3", "key", key)
 	return nil
 }

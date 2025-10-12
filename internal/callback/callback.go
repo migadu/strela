@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,8 +15,6 @@ import (
 	"fune/internal/delivery"
 	"fune/internal/queue"
 	"fune/internal/recovery"
-
-	"go.uber.org/zap"
 )
 
 // CallbackMetrics defines the interface for recording callback processing metrics.
@@ -43,7 +42,7 @@ type CallbackMetrics interface {
 type CallbackHandler struct {
 	queue          *queue.Queue
 	config         *config.CallbacksConfig
-	logger         *zap.Logger
+	logger         *slog.Logger
 	client         *http.Client
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -64,7 +63,7 @@ type CallbackHandler struct {
 //
 // The returned handler is ready to start but not yet running. Call Start() to begin
 // processing callbacks, and SetMetrics() to enable metrics recording.
-func NewCallbackHandler(q *queue.Queue, cfg *config.CallbacksConfig, logger *zap.Logger) *CallbackHandler {
+func NewCallbackHandler(q *queue.Queue, cfg *config.CallbacksConfig, logger *slog.Logger) *CallbackHandler {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var cb *CallbackCircuitBreaker
@@ -76,9 +75,9 @@ func NewCallbackHandler(q *queue.Queue, cfg *config.CallbacksConfig, logger *zap
 			logger,
 		)
 		logger.Info("callback circuit breaker enabled",
-			zap.Int("failure_threshold", cfg.CircuitBreakerFailureThreshold),
-			zap.Int("success_threshold", cfg.CircuitBreakerSuccessThreshold),
-			zap.Int("open_timeout_secs", cfg.CircuitBreakerOpenTimeoutSecs))
+			"failure_threshold", cfg.CircuitBreakerFailureThreshold,
+			"success_threshold", cfg.CircuitBreakerSuccessThreshold,
+			"open_timeout_secs", cfg.CircuitBreakerOpenTimeoutSecs)
 	}
 
 	return &CallbackHandler{
@@ -159,8 +158,8 @@ func (c *CallbackHandler) EnqueueDeliveredCallback(msg *queue.QueuedMessage, res
 
 	if err := c.queue.EnqueueCallback(msg.MessageID, "delivered", payload); err != nil {
 		c.logger.Error("failed to enqueue delivered callback",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			"message_id", msg.MessageID,
+			"error", err)
 	}
 }
 
@@ -201,8 +200,8 @@ func (c *CallbackHandler) EnqueueHardBounceCallback(msg *queue.QueuedMessage, re
 
 	if err := c.queue.EnqueueCallback(msg.MessageID, "hard_bounce", payload); err != nil {
 		c.logger.Error("failed to enqueue hard bounce callback",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			"message_id", msg.MessageID,
+			"error", err)
 	}
 }
 
@@ -249,8 +248,8 @@ func (c *CallbackHandler) EnqueueTempExpiredCallback(msg *queue.QueuedMessage, r
 
 	if err := c.queue.EnqueueCallback(msg.MessageID, "temp_expired", payload); err != nil {
 		c.logger.Error("failed to enqueue temp expired callback",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			"message_id", msg.MessageID,
+			"error", err)
 	}
 }
 
@@ -281,8 +280,8 @@ func (c *CallbackHandler) EnqueueExpiredCallback(msg *queue.QueuedMessage, resul
 
 	if err := c.queue.EnqueueCallback(msg.MessageID, "expired", payload); err != nil {
 		c.logger.Error("failed to enqueue expired callback",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			"message_id", msg.MessageID,
+			"error", err)
 	}
 }
 
@@ -333,7 +332,7 @@ func (c *CallbackHandler) processBatch() {
 	callbacks, err := c.queue.GetPendingCallbacks(c.config.BatchSize)
 	if err != nil {
 		c.logger.Error("failed to get pending callbacks",
-			zap.Error(err))
+			"error", err)
 		return
 	}
 
@@ -342,7 +341,7 @@ func (c *CallbackHandler) processBatch() {
 	}
 
 	c.logger.Debug("processing callback batch",
-		zap.Int("count", len(callbacks)))
+		"count", len(callbacks))
 
 	for _, cb := range callbacks {
 		// Check if context is canceled before processing
@@ -375,8 +374,8 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 	// Check circuit breaker before attempting callback
 	if c.circuitBreaker != nil && !c.circuitBreaker.CanAttempt() {
 		c.logger.Warn("callback circuit breaker open, skipping callback",
-			zap.String("message_id", cb.MessageID),
-			zap.String("event_type", cb.EventType))
+			"message_id", cb.MessageID,
+			"event_type", cb.EventType)
 
 		// Schedule retry after circuit breaker timeout
 		retryDelay := time.Duration(c.config.CircuitBreakerOpenTimeoutSecs) * time.Second
@@ -384,22 +383,22 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 		c.queue.ScheduleCallbackRetry(cb.ID, nextRetry)
 
 		c.logger.Info("callback rescheduled due to circuit breaker",
-			zap.String("message_id", cb.MessageID),
-			zap.Time("next_retry", nextRetry))
+			"message_id", cb.MessageID,
+			"next_retry", nextRetry)
 		return
 	}
 
 	c.logger.Info("sending callback",
-		zap.String("message_id", cb.MessageID),
-		zap.String("event_type", cb.EventType),
-		zap.Int("attempt", cb.Attempts+1))
+		"message_id", cb.MessageID,
+		"event_type", cb.EventType,
+		"attempt", cb.Attempts+1)
 
 	// Parse payload
 	var payload DeliveryEventCallback
 	if err := json.Unmarshal([]byte(cb.Payload), &payload); err != nil {
 		c.logger.Error("failed to parse callback payload",
-			zap.Int64("callback_id", cb.ID),
-			zap.Error(err))
+			"callback_id", cb.ID,
+			"error", err)
 		// Mark as complete to prevent infinite retries
 		c.queue.MarkCallbackComplete(cb.ID)
 		return
@@ -412,8 +411,8 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 	if err == nil {
 		// Success
 		c.logger.Info("callback sent successfully",
-			zap.String("message_id", cb.MessageID),
-			zap.String("event_type", cb.EventType))
+			"message_id", cb.MessageID,
+			"event_type", cb.EventType)
 
 		if c.metrics != nil {
 			c.metrics.RecordCallbackAttempt("success", cb.EventType, duration)
@@ -428,10 +427,10 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 	} else {
 		// Failure
 		c.logger.Warn("callback failed",
-			zap.String("message_id", cb.MessageID),
-			zap.String("event_type", cb.EventType),
-			zap.Int("attempt", cb.Attempts+1),
-			zap.Error(err))
+			"message_id", cb.MessageID,
+			"event_type", cb.EventType,
+			"attempt", cb.Attempts+1,
+			"error", err)
 
 		if c.metrics != nil {
 			c.metrics.RecordCallbackAttempt("failure", cb.EventType, duration)
@@ -452,10 +451,10 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 		if age >= maxAge {
 			// Give up after max age
 			c.logger.Error("callback expired after max age",
-				zap.String("message_id", cb.MessageID),
-				zap.Int("attempts", cb.Attempts+1),
-				zap.Duration("age", age),
-				zap.Duration("max_age", maxAge))
+				"message_id", cb.MessageID,
+				"attempts", cb.Attempts+1,
+				"age", age,
+				"max_age", maxAge)
 
 			c.queue.MarkCallbackComplete(cb.ID)
 		} else {
@@ -466,18 +465,18 @@ func (c *CallbackHandler) sendCallback(cb queue.PendingCallback) {
 			// Don't schedule retry if it would exceed max age
 			if time.Until(nextRetry) > maxAge-age {
 				c.logger.Warn("callback retry would exceed max age, marking as complete",
-					zap.String("message_id", cb.MessageID),
-					zap.Duration("age", age),
-					zap.Duration("max_age", maxAge))
+					"message_id", cb.MessageID,
+					"age", age,
+					"max_age", maxAge)
 				c.queue.MarkCallbackComplete(cb.ID)
 			} else {
 				c.queue.ScheduleCallbackRetry(cb.ID, nextRetry)
 
 				c.logger.Info("callback retry scheduled with exponential backoff",
-					zap.String("message_id", cb.MessageID),
-					zap.Int("attempt", cb.Attempts+1),
-					zap.Duration("retry_delay", retryDelay),
-					zap.Time("next_retry", nextRetry))
+					"message_id", cb.MessageID,
+					"attempt", cb.Attempts+1,
+					"retry_delay", retryDelay,
+					"next_retry", nextRetry)
 			}
 		}
 	}

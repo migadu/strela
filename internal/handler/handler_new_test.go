@@ -10,7 +10,7 @@ import (
 	"fune/internal/config"
 	"fune/internal/queue"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 func getDefaultInboundConfig() *config.InboundConfig {
@@ -22,7 +22,7 @@ func getDefaultInboundConfig() *config.InboundConfig {
 }
 
 func TestQueueMessageHandler_Authentication(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -95,7 +95,7 @@ func TestQueueMessageHandler_Authentication(t *testing.T) {
 }
 
 func TestQueueMessageHandler_NoAuth(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -130,7 +130,7 @@ func TestQueueMessageHandler_NoAuth(t *testing.T) {
 }
 
 func TestQueueMessageHandler_ValidRequest(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -188,7 +188,7 @@ func TestQueueMessageHandler_ValidRequest(t *testing.T) {
 }
 
 func TestQueueMessageHandler_BodySizeLimit(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -227,7 +227,7 @@ func TestQueueMessageHandler_BodySizeLimit(t *testing.T) {
 }
 
 func TestQueueMessageHandler_RateLimit(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -290,7 +290,7 @@ func TestQueueMessageHandler_RateLimit(t *testing.T) {
 }
 
 func TestQueueMessageHandler_RateLimit_DifferentIPs(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 

@@ -6,9 +6,8 @@ package config
 import (
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"sync"
-
-	"go.uber.org/zap"
 )
 
 // ReloadableConfig wraps Config with thread-safe hot reload capability.
@@ -58,13 +57,13 @@ import (
 //
 //	// Trigger reload (typically called in SIGHUP handler)
 //	if err := reloadable.Reload(); err != nil {
-//	    logger.Error("Config reload failed", zap.Error(err))
+//	    logger.Error("Config reload failed", "error", err)
 //	}
 type ReloadableConfig struct {
 	mu         sync.RWMutex
 	config     *Config
 	configPath string
-	logger     *zap.Logger
+	logger     *slog.Logger
 
 	// Callbacks for components that need to react to config changes
 	onReload []func(*Config) error
@@ -80,7 +79,7 @@ type ReloadableConfig struct {
 // instance should be passed to all components that need configuration access.
 //
 // Returns an error if the initial config file cannot be loaded or parsed.
-func NewReloadableConfig(configPath string, logger *zap.Logger) (*ReloadableConfig, error) {
+func NewReloadableConfig(configPath string, logger *slog.Logger) (*ReloadableConfig, error) {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return nil, err
@@ -216,17 +215,17 @@ func (rc *ReloadableConfig) RegisterReloadCallback(callback func(*Config) error)
 //	go func() {
 //	    for range sigChan {
 //	        if err := reloadable.Reload(); err != nil {
-//	            logger.Error("Config reload failed", zap.Error(err))
+//	            logger.Error("Config reload failed", "error", err)
 //	        }
 //	    }
 //	}()
 func (rc *ReloadableConfig) Reload() error {
-	rc.logger.Info("reloading configuration", zap.String("path", rc.configPath))
+	rc.logger.Info("reloading configuration", "path", rc.configPath)
 
 	// Load new config
 	newConfig, err := LoadConfig(rc.configPath)
 	if err != nil {
-		rc.logger.Error("failed to reload config", zap.Error(err))
+		rc.logger.Error("failed to reload config", "error", err)
 		return fmt.Errorf("failed to reload config: %w", err)
 	}
 
@@ -236,7 +235,7 @@ func (rc *ReloadableConfig) Reload() error {
 	rc.mu.RUnlock()
 
 	if err := rc.validateReload(oldConfig, newConfig); err != nil {
-		rc.logger.Error("config validation failed", zap.Error(err))
+		rc.logger.Error("config validation failed", "error", err)
 		return err
 	}
 
@@ -244,7 +243,7 @@ func (rc *ReloadableConfig) Reload() error {
 	// This allows components to prepare for the change
 	for _, callback := range rc.onReload {
 		if err := callback(newConfig); err != nil {
-			rc.logger.Error("reload callback failed", zap.Error(err))
+			rc.logger.Error("reload callback failed", "error", err)
 			return fmt.Errorf("reload callback failed: %w", err)
 		}
 	}
@@ -255,10 +254,10 @@ func (rc *ReloadableConfig) Reload() error {
 	rc.mu.Unlock()
 
 	rc.logger.Info("configuration reloaded successfully",
-		zap.Int("source_ips", len(newConfig.Outbound.SourceIPs)),
-		zap.Bool("tls_enabled", newConfig.TLS.Enabled),
-		zap.Bool("metrics_enabled", newConfig.Metrics.Enabled),
-		zap.Bool("circuit_breaker_enabled", newConfig.Outbound.CircuitBreakerEnabled))
+		"source_ips", len(newConfig.Outbound.SourceIPs),
+		"tls_enabled", newConfig.TLS.Enabled,
+		"metrics_enabled", newConfig.Metrics.Enabled,
+		"circuit_breaker_enabled", newConfig.Outbound.CircuitBreakerEnabled)
 
 	return nil
 }
@@ -327,7 +326,7 @@ func (rc *ReloadableConfig) validateReload(oldCfg, newCfg *Config) error {
 //
 //	tlsConfig, err := reloadable.LoadTLSConfig()
 //	if err != nil {
-//	    logger.Error("Failed to load TLS config", zap.Error(err))
+//	    logger.Error("Failed to load TLS config", "error", err)
 //	    return
 //	}
 //	server.TLSConfig = tlsConfig

@@ -27,12 +27,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"go.uber.org/zap"
 )
 
 // MetricsRecorder is an interface for recording queue-related metrics.
@@ -51,7 +51,7 @@ type MetricsRecorder interface {
 // All write operations are serialized via writeMu to ensure SQLite consistency.
 type Queue struct {
 	db               *sql.DB
-	logger           *zap.Logger
+	logger           *slog.Logger
 	notifyCh         chan struct{}   // Channel to notify workers of new messages
 	callbackNotifyCh chan struct{}   // Channel to notify callback processor of new callbacks
 	writeMu          sync.Mutex      // Mutex to serialize write operations
@@ -143,7 +143,7 @@ type DeliveryAttempt struct {
 //   - Automatic schema initialization and migrations
 //
 // Returns an error if the database cannot be opened or schema initialization fails.
-func NewQueue(dbPath string, logger *zap.Logger) (*Queue, error) {
+func NewQueue(dbPath string, logger *slog.Logger) (*Queue, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -318,15 +318,15 @@ func (q *Queue) Enqueue(msg *QueuedMessage) error {
 
 	if err != nil {
 		q.logger.Error("failed to enqueue message",
-			zap.String("message_id", msg.MessageID),
-			zap.Error(err))
+			"message_id", msg.MessageID,
+			"error", err)
 		return fmt.Errorf("failed to enqueue: %w", err)
 	}
 
 	q.logger.Info("message enqueued",
-		zap.String("message_id", msg.MessageID),
-		zap.String("to", msg.ToAddr),
-		zap.Time("expires_at", msg.ExpiresAt))
+		"message_id", msg.MessageID,
+		"to", msg.ToAddr,
+		"expires_at", msg.ExpiresAt)
 
 	// Notify workers of new message (non-blocking)
 	select {
@@ -446,9 +446,9 @@ func (q *Queue) UpdateStatus(messageID string, status MessageStatus) error {
 	_, err := q.db.Exec(query, status, time.Now().Format(time.RFC3339), messageID)
 	if err != nil {
 		q.logger.Error("failed to update status",
-			zap.String("message_id", messageID),
-			zap.String("status", string(status)),
-			zap.Error(err))
+			"message_id", messageID,
+			"status", string(status),
+			"error", err)
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -490,16 +490,16 @@ func (q *Queue) ScheduleRetry(messageID string, nextRetry time.Time, attempts in
 	_, err := q.db.Exec(query, attempts, nextRetry.Format(time.RFC3339), lastError, smtpCode, smtpResponse, time.Now().Format(time.RFC3339), messageID)
 	if err != nil {
 		q.logger.Error("failed to schedule retry",
-			zap.String("message_id", messageID),
-			zap.Time("next_retry", nextRetry),
-			zap.Error(err))
+			"message_id", messageID,
+			"next_retry", nextRetry,
+			"error", err)
 		return fmt.Errorf("failed to schedule retry: %w", err)
 	}
 
 	q.logger.Info("retry scheduled",
-		zap.String("message_id", messageID),
-		zap.Int("attempt", attempts),
-		zap.Time("next_retry", nextRetry))
+		"message_id", messageID,
+		"attempt", attempts,
+		"next_retry", nextRetry)
 
 	return nil
 }
@@ -555,8 +555,8 @@ func (q *Queue) RecordAttempt(attempt *DeliveryAttempt) error {
 
 	if err != nil {
 		q.logger.Error("failed to record attempt",
-			zap.String("message_id", attempt.MessageID),
-			zap.Error(err))
+			"message_id", attempt.MessageID,
+			"error", err)
 		return fmt.Errorf("failed to record attempt: %w", err)
 	}
 
@@ -601,13 +601,13 @@ func (q *Queue) DeleteMessage(messageID string) error {
 	_, err := q.db.Exec("DELETE FROM messages WHERE message_id = ?", messageID)
 	if err != nil {
 		q.logger.Error("failed to delete message",
-			zap.String("message_id", messageID),
-			zap.Error(err))
+			"message_id", messageID,
+			"error", err)
 		return fmt.Errorf("failed to delete message: %w", err)
 	}
 
 	q.logger.Debug("message deleted from queue",
-		zap.String("message_id", messageID))
+		"message_id", messageID)
 
 	return nil
 }
@@ -698,15 +698,15 @@ func (q *Queue) EnqueueCallback(messageID string, eventType string, payload inte
 	_, err = q.db.Exec(query, messageID, eventType, string(jsonPayload), time.Now().Format(time.RFC3339))
 	if err != nil {
 		q.logger.Error("failed to enqueue callback",
-			zap.String("message_id", messageID),
-			zap.String("event_type", eventType),
-			zap.Error(err))
+			"message_id", messageID,
+			"event_type", eventType,
+			"error", err)
 		return fmt.Errorf("failed to enqueue callback: %w", err)
 	}
 
 	q.logger.Debug("callback enqueued",
-		zap.String("message_id", messageID),
-		zap.String("event_type", eventType))
+		"message_id", messageID,
+		"event_type", eventType)
 
 	// Notify callback processor (non-blocking)
 	select {

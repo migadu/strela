@@ -23,7 +23,7 @@ import (
 	"fune/internal/queue"
 	"fune/internal/worker"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 // mockSMTPServer is a simple SMTP server that accepts messages
@@ -226,8 +226,7 @@ func (m *mockWebhookServer) Close() {
 // TestFullMessageLifecycle tests the complete flow: HTTP submit → queue → deliver → callback
 func TestFullMessageLifecycle(t *testing.T) {
 	// Setup logger
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	// Create test database
 	dbPath := "./test_lifecycle.db"
@@ -411,8 +410,7 @@ func TestFullMessageLifecycle(t *testing.T) {
 
 // TestFullMessageLifecycle_MultipleMessages tests handling multiple messages
 func TestFullMessageLifecycle_MultipleMessages(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	dbPath := "./test_lifecycle_multi.db"
 	defer os.Remove(dbPath)

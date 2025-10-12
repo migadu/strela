@@ -3,13 +3,12 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync/atomic"
 	"time"
 
 	"fune/internal/config"
-
-	"go.uber.org/zap"
 )
 
 // DNSResolver handles DNS queries with custom resolvers, round-robin distribution,
@@ -20,14 +19,14 @@ import (
 type DNSResolver struct {
 	resolvers  []string
 	timeout    time.Duration
-	logger     *zap.Logger
+	logger     *slog.Logger
 	currentIdx atomic.Uint32 // Round-robin counter for resolver selection
 }
 
 // NewDNSResolver creates a new DNS resolver with custom configuration.
 // If no custom resolvers are specified in the config, the system's default resolver
 // will be used. The timeout applies to individual DNS queries.
-func NewDNSResolver(cfg *config.DNSConfig, logger *zap.Logger) *DNSResolver {
+func NewDNSResolver(cfg *config.DNSConfig, logger *slog.Logger) *DNSResolver {
 	return &DNSResolver{
 		resolvers: cfg.Resolvers,
 		timeout:   time.Duration(cfg.TimeoutSeconds) * time.Second,
@@ -62,10 +61,10 @@ func (d *DNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, e
 					customResolver := d.resolvers[idx]
 
 					d.logger.Debug("attempting DNS resolver",
-						zap.String("resolver", customResolver),
-						zap.String("domain", domain),
-						zap.Int("resolver_index", idx),
-						zap.String("network", network))
+						"resolver", customResolver,
+						"domain", domain,
+						"resolver_index", idx,
+						"network", network)
 
 					dialer := &net.Dialer{
 						Timeout: d.timeout,
@@ -76,28 +75,28 @@ func (d *DNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, e
 					if err != nil {
 						// UDP failed, try TCP
 						d.logger.Debug("UDP DNS failed, trying TCP",
-							zap.String("resolver", customResolver),
-							zap.Error(err))
+							"resolver", customResolver,
+							"error", err)
 
 						conn, err = dialer.DialContext(ctx, "tcp", customResolver)
 						if err != nil {
 							d.logger.Warn("DNS resolver failed (both UDP and TCP)",
-								zap.String("resolver", customResolver),
-								zap.Int("resolver_index", idx),
-								zap.Error(err))
+								"resolver", customResolver,
+								"resolver_index", idx,
+								"error", err)
 							lastErr = err
 							continue
 						}
 
 						d.logger.Debug("connected to DNS resolver via TCP",
-							zap.String("resolver", customResolver),
-							zap.Int("resolver_index", idx))
+							"resolver", customResolver,
+							"resolver_index", idx)
 						return conn, nil
 					}
 
 					d.logger.Debug("connected to DNS resolver via UDP",
-						zap.String("resolver", customResolver),
-						zap.Int("resolver_index", idx))
+						"resolver", customResolver,
+						"resolver_index", idx)
 					return conn, nil
 				}
 
@@ -116,16 +115,16 @@ func (d *DNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, e
 
 	if err != nil {
 		d.logger.Error("MX lookup failed",
-			zap.String("domain", domain),
-			zap.Duration("duration", duration),
-			zap.Error(err))
+			"domain", domain,
+			"duration", duration,
+			"error", err)
 		return nil, fmt.Errorf("MX lookup failed: %w", err)
 	}
 
 	d.logger.Debug("MX lookup successful",
-		zap.String("domain", domain),
-		zap.Int("records", len(mxRecords)),
-		zap.Duration("duration", duration))
+		"domain", domain,
+		"records", len(mxRecords),
+		"duration", duration)
 
 	return mxRecords, nil
 }
@@ -153,9 +152,9 @@ func (d *DNSResolver) LookupHost(ctx context.Context, host string) ([]string, er
 					dialer := &net.Dialer{Timeout: d.timeout}
 
 					d.logger.Debug("attempting DNS resolver for host lookup",
-						zap.String("resolver", customResolver),
-						zap.String("host", host),
-						zap.Int("resolver_index", idx))
+						"resolver", customResolver,
+						"host", host,
+						"resolver_index", idx)
 
 					// Try UDP first, then TCP fallback
 					conn, err := dialer.DialContext(ctx, "udp", customResolver)
@@ -163,9 +162,9 @@ func (d *DNSResolver) LookupHost(ctx context.Context, host string) ([]string, er
 						conn, err = dialer.DialContext(ctx, "tcp", customResolver)
 						if err != nil {
 							d.logger.Debug("DNS resolver failed for host lookup",
-								zap.String("resolver", customResolver),
-								zap.Int("resolver_index", idx),
-								zap.Error(err))
+								"resolver", customResolver,
+								"resolver_index", idx,
+								"error", err)
 							lastErr = err
 							continue
 						}

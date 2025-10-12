@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
 	"fune/internal/config"
 	"fune/internal/queue"
-
-	"go.uber.org/zap"
 )
 
 // MXLookup handles MX record lookups with two-level caching (successful and negative responses).
@@ -22,7 +21,7 @@ import (
 type MXLookup struct {
 	queue       *queue.Queue
 	dnsResolver *DNSResolver
-	logger      *zap.Logger
+	logger      *slog.Logger
 	cacheTTL    time.Duration // MX cache TTL (for successful lookups)
 	negativeTTL time.Duration // Negative cache TTL (for failures)
 }
@@ -36,7 +35,7 @@ type MXRecord struct {
 
 // NewMXLookup creates a new MX lookup service with the specified configuration.
 // It initializes a custom DNS resolver and sets cache TTLs from the config.
-func NewMXLookup(q *queue.Queue, dnsCfg *config.DNSConfig, deliveryCfg *config.OutboundConfig, logger *zap.Logger) *MXLookup {
+func NewMXLookup(q *queue.Queue, dnsCfg *config.DNSConfig, deliveryCfg *config.OutboundConfig, logger *slog.Logger) *MXLookup {
 	return &MXLookup{
 		queue:       q,
 		dnsResolver: NewDNSResolver(dnsCfg, logger),
@@ -55,8 +54,8 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 	cached, err := m.getFromCache(domain)
 	if err == nil && cached != nil {
 		m.logger.Debug("MX cache hit",
-			zap.String("domain", domain),
-			zap.Int("records", len(cached)))
+			"domain", domain,
+			"records", len(cached))
 		// Ensure cached records are sorted by priority
 		sort.Slice(cached, func(i, j int) bool {
 			return cached[i].Priority < cached[j].Priority
@@ -66,13 +65,13 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 
 	// Cache miss - perform DNS lookup
 	m.logger.Debug("MX cache miss, performing DNS lookup",
-		zap.String("domain", domain))
+		"domain", domain)
 
 	records, err := m.lookupDNS(ctx, domain)
 	if err != nil {
 		m.logger.Error("MX lookup failed",
-			zap.String("domain", domain),
-			zap.Error(err))
+			"domain", domain,
+			"error", err)
 		return nil, err
 	}
 
@@ -84,13 +83,13 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 	// Store in cache
 	if err := m.storeInCache(domain, records); err != nil {
 		m.logger.Warn("failed to cache MX records",
-			zap.String("domain", domain),
-			zap.Error(err))
+			"domain", domain,
+			"error", err)
 	}
 
 	m.logger.Info("MX lookup successful",
-		zap.String("domain", domain),
-		zap.Int("records", len(records)))
+		"domain", domain,
+		"records", len(records))
 
 	return records, nil
 }
@@ -131,12 +130,12 @@ func (m *MXLookup) storeNegativeCache(domain string) {
 	ttlSeconds := int(m.negativeTTL.Seconds())
 	if err := m.queue.StoreMXCache(domain, string(recordsJSON), ttlSeconds); err != nil {
 		m.logger.Warn("failed to cache negative DNS response",
-			zap.String("domain", domain),
-			zap.Error(err))
+			"domain", domain,
+			"error", err)
 	} else {
 		m.logger.Debug("cached negative DNS response",
-			zap.String("domain", domain),
-			zap.Int("ttl", ttlSeconds))
+			"domain", domain,
+			"ttl", ttlSeconds)
 	}
 }
 
@@ -156,8 +155,8 @@ func (m *MXLookup) getFromCache(domain string) ([]*MXRecord, error) {
 	// Check if cache is expired
 	if time.Since(cached) > time.Duration(ttlSeconds)*time.Second {
 		m.logger.Debug("MX cache expired",
-			zap.String("domain", domain),
-			zap.Duration("age", time.Since(cached)))
+			"domain", domain,
+			"age", time.Since(cached))
 		return nil, fmt.Errorf("cache expired")
 	}
 
@@ -187,13 +186,13 @@ func (m *MXLookup) InvalidateCache(domain string) error {
 	err := m.queue.InvalidateMXCache(domain)
 	if err != nil {
 		m.logger.Error("failed to invalidate cache",
-			zap.String("domain", domain),
-			zap.Error(err))
+			"domain", domain,
+			"error", err)
 		return err
 	}
 
 	m.logger.Debug("cache invalidated",
-		zap.String("domain", domain))
+		"domain", domain)
 
 	return nil
 }
@@ -209,7 +208,7 @@ func (m *MXLookup) CleanupExpiredCache() (int, error) {
 
 	if rowsAffected > 0 {
 		m.logger.Info("cleaned up expired MX cache entries",
-			zap.Int64("count", rowsAffected))
+			"count", rowsAffected)
 	}
 
 	return int(rowsAffected), nil
@@ -229,8 +228,8 @@ func (m *MXLookup) ReloadConfig(dnsCfg *config.DNSConfig, deliveryCfg *config.Ou
 	m.dnsResolver = NewDNSResolver(dnsCfg, m.logger)
 
 	m.logger.Info("DNS resolver configuration reloaded",
-		zap.Duration("cache_ttl", m.cacheTTL),
-		zap.Duration("negative_ttl", m.negativeTTL))
+		"cache_ttl", m.cacheTTL,
+		"negative_ttl", m.negativeTTL)
 
 	return nil
 }
@@ -258,7 +257,7 @@ func (m *MXLookup) BatchPrefetch(ctx context.Context, domains []string) map[stri
 		cached, err := m.getFromCache(domain)
 		if err == nil && cached != nil {
 			m.logger.Debug("domain already cached, skipping prefetch",
-				zap.String("domain", domain))
+				"domain", domain)
 			continue
 		}
 
@@ -271,9 +270,9 @@ func (m *MXLookup) BatchPrefetch(ctx context.Context, domains []string) map[stri
 	}
 
 	m.logger.Info("batch DNS prefetch starting",
-		zap.Int("total_domains", len(domains)),
-		zap.Int("unique_domains", len(uniqueDomains)),
-		zap.Int("to_fetch", len(domainsToFetch)))
+		"total_domains", len(domains),
+		"unique_domains", len(uniqueDomains),
+		"to_fetch", len(domainsToFetch))
 
 	// Prefetch in parallel
 	results := make(map[string]error)
@@ -308,9 +307,9 @@ func (m *MXLookup) BatchPrefetch(ctx context.Context, domains []string) map[stri
 	}
 
 	m.logger.Info("batch DNS prefetch completed",
-		zap.Int("fetched", len(domainsToFetch)),
-		zap.Int("successes", successes),
-		zap.Int("failures", failures))
+		"fetched", len(domainsToFetch),
+		"successes", successes,
+		"failures", failures)
 
 	return results
 }

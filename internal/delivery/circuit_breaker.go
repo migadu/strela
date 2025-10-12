@@ -1,10 +1,9 @@
 package delivery
 
 import (
+	"log/slog"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 // CircuitState represents the state of the circuit breaker.
@@ -39,7 +38,7 @@ type CircuitBreaker struct {
 	failureThreshold int           // Consecutive failures before opening
 	successThreshold int           // Consecutive successes in half-open to close
 	openTimeout      time.Duration // Time to wait before half-open
-	logger           *zap.Logger
+	logger           *slog.Logger
 	metrics          CircuitBreakerMetrics
 
 	// State
@@ -54,7 +53,7 @@ type CircuitBreaker struct {
 // The failureThreshold defines how many consecutive local failures trigger opening the circuit.
 // The successThreshold defines how many consecutive successes in half-open state close the circuit.
 // The openTimeout defines how long to wait before entering half-open state.
-func NewCircuitBreaker(failureThreshold, successThreshold int, openTimeout time.Duration, logger *zap.Logger) *CircuitBreaker {
+func NewCircuitBreaker(failureThreshold, successThreshold int, openTimeout time.Duration, logger *slog.Logger) *CircuitBreaker {
 	return &CircuitBreaker{
 		failureThreshold: failureThreshold,
 		successThreshold: successThreshold,
@@ -83,7 +82,7 @@ func (cb *CircuitBreaker) CanAttempt() bool {
 			cb.consecutiveSuccesses = 0
 			cb.setState(CircuitHalfOpen)
 			cb.logger.Info("circuit breaker transitioning to half-open",
-				zap.Duration("open_duration", time.Since(cb.lastFailureTime)))
+				"open_duration", time.Since(cb.lastFailureTime))
 			return true
 		}
 		return false
@@ -142,8 +141,8 @@ func (cb *CircuitBreaker) RecordFailure(isLocalError bool) {
 		if cb.consecutiveFailures >= cb.failureThreshold {
 			cb.setState(CircuitOpen)
 			cb.logger.Error("circuit breaker opened due to consecutive failures",
-				zap.Int("failures", cb.consecutiveFailures),
-				zap.Int("threshold", cb.failureThreshold))
+				"failures", cb.consecutiveFailures,
+				"threshold", cb.failureThreshold)
 		}
 
 	case CircuitHalfOpen:

@@ -9,13 +9,13 @@ import (
 	"fune/internal/delivery"
 	"fune/internal/queue"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 	t.Helper()
 
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 	q, queueCleanup := queue.SetupTestQueue(t)
 
 	cfg := &config.OutboundConfig{

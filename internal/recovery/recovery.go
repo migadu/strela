@@ -41,9 +41,8 @@ package recovery
 
 import (
 	"fmt"
+	"log/slog"
 	"runtime/debug"
-
-	"go.uber.org/zap"
 )
 
 // RecoverPanic recovers from panics and logs them with full stack traces.
@@ -56,12 +55,12 @@ import (
 //		defer recovery.RecoverPanic(logger, "worker-goroutine")
 //		// ... goroutine work
 //	}()
-func RecoverPanic(logger *zap.Logger, context string) {
+func RecoverPanic(logger *slog.Logger, context string) {
 	if r := recover(); r != nil {
 		logger.Error("panic recovered",
-			zap.String("context", context),
-			zap.Any("panic", r),
-			zap.String("stack", string(debug.Stack())))
+			"context", context,
+			"panic", r,
+			"stack", string(debug.Stack()))
 	}
 }
 
@@ -74,7 +73,7 @@ func RecoverPanic(logger *zap.Logger, context string) {
 //	recovery.SafeGo(logger, "cleanup-task", func() {
 //		// ... cleanup work that might panic
 //	})
-func SafeGo(logger *zap.Logger, context string, fn func()) {
+func SafeGo(logger *slog.Logger, context string, fn func()) {
 	go func() {
 		defer RecoverPanic(logger, context)
 		fn()
@@ -91,12 +90,12 @@ func SafeGo(logger *zap.Logger, context string, fn func()) {
 //		// Send alert or perform cleanup
 //		alerting.SendPanicAlert(fmt.Sprintf("Critical panic: %v", r))
 //	})
-func RecoverPanicWithCallback(logger *zap.Logger, context string, onPanic func(interface{})) {
+func RecoverPanicWithCallback(logger *slog.Logger, context string, onPanic func(interface{})) {
 	if r := recover(); r != nil {
 		logger.Error("panic recovered",
-			zap.String("context", context),
-			zap.Any("panic", r),
-			zap.String("stack", string(debug.Stack())))
+			"context", context,
+			"panic", r,
+			"stack", string(debug.Stack()))
 
 		if onPanic != nil {
 			// Call the panic handler in a safe way (catch panics in the handler too)
@@ -104,8 +103,8 @@ func RecoverPanicWithCallback(logger *zap.Logger, context string, onPanic func(i
 				defer func() {
 					if r2 := recover(); r2 != nil {
 						logger.Error("panic in panic handler",
-							zap.String("context", context),
-							zap.Any("secondary_panic", r2))
+							"context", context,
+							"secondary_panic", r2)
 					}
 				}()
 				onPanic(r)
@@ -128,14 +127,14 @@ func RecoverPanicWithCallback(logger *zap.Logger, context string, onPanic func(i
 //	wrappedHandler := middleware(func() {
 //		// ... HTTP handler logic that might panic
 //	})
-func HTTPPanicHandler(logger *zap.Logger) func(next func()) func() {
+func HTTPPanicHandler(logger *slog.Logger) func(next func()) func() {
 	return func(next func()) func() {
 		return func() {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("HTTP handler panic recovered",
-						zap.Any("panic", r),
-						zap.String("stack", string(debug.Stack())))
+						"panic", r,
+						"stack", string(debug.Stack()))
 
 					// The panic is recovered, the handler will return 500 automatically
 					// because the response wasn't written

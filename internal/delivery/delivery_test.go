@@ -10,7 +10,8 @@ import (
 	"fune/internal/queue"
 
 	"github.com/emersion/go-smtp"
-	"go.uber.org/zap"
+	"log/slog"
+	"os"
 )
 
 func TestIPRotator_RoundRobin(t *testing.T) {
@@ -166,7 +167,7 @@ func TestExtractSMTPError_GenericError(t *testing.T) {
 }
 
 func TestDeliverer_DeliverMessage_NoMXRecords(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -210,7 +211,7 @@ func TestDeliverer_DeliverMessage_NoMXRecords(t *testing.T) {
 }
 
 func TestDeliverer_SelectSourceIP(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -342,7 +343,7 @@ func TestIPRotator_RoundRobin_ThreadSafety(t *testing.T) {
 }
 
 func TestDeliverer_LoggingOnFailure(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -383,7 +384,7 @@ func TestDeliverer_LoggingOnFailure(t *testing.T) {
 }
 
 func TestDeliverer_EmptySourceIPs(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -453,7 +454,7 @@ func TestIPRotator_Distribution(t *testing.T) {
 }
 
 func TestDeliverer_ReloadConfig(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	// Initial config
 	initialCfg := &config.OutboundConfig{
@@ -517,7 +518,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 }
 
 func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	// Initial config with circuit breaker enabled
 	initialCfg := &config.OutboundConfig{
@@ -556,7 +557,7 @@ func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
 }
 
 func TestDeliverer_ReloadConfig_EnableCircuitBreaker(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 
 	// Initial config with circuit breaker disabled
 	initialCfg := &config.OutboundConfig{

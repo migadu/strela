@@ -7,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"log/slog"
 )
 
 // safeBuffer is a thread-safe bytes.Buffer wrapper
@@ -32,9 +31,7 @@ func (sb *safeBuffer) String() string {
 func TestRecoverPanic(t *testing.T) {
 	// Create a logger that writes to a buffer
 	var buf bytes.Buffer
-	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-	core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zapcore.DebugLevel)
-	logger := zap.New(core)
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	// Trigger a panic and recover
 	func() {
@@ -57,9 +54,7 @@ func TestRecoverPanic(t *testing.T) {
 
 func TestSafeGo(t *testing.T) {
 	buf := &safeBuffer{}
-	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-	core := zapcore.NewCore(encoder, zapcore.AddSync(buf), zapcore.DebugLevel)
-	logger := zap.New(core)
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -71,9 +66,6 @@ func TestSafeGo(t *testing.T) {
 	})
 
 	wg.Wait()
-
-	// Sync logger to ensure all log entries are flushed
-	logger.Sync()
 
 	// Small sleep to ensure all writes complete
 	time.Sleep(10 * time.Millisecond)
@@ -90,9 +82,7 @@ func TestSafeGo(t *testing.T) {
 
 func TestRecoverPanicWithCallback(t *testing.T) {
 	var buf bytes.Buffer
-	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-	core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zapcore.DebugLevel)
-	logger := zap.New(core)
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	callbackCalled := false
 	var panicValue interface{}
@@ -120,9 +110,7 @@ func TestRecoverPanicWithCallback(t *testing.T) {
 
 func TestRecoverPanicWithCallbackPanic(t *testing.T) {
 	var buf bytes.Buffer
-	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-	core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zapcore.DebugLevel)
-	logger := zap.New(core)
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	// Test that a panic in the callback itself is handled
 	func() {
@@ -143,9 +131,7 @@ func TestRecoverPanicWithCallbackPanic(t *testing.T) {
 
 func TestNoPanic(t *testing.T) {
 	var buf bytes.Buffer
-	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-	core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zapcore.DebugLevel)
-	logger := zap.New(core)
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	// Test that normal execution doesn't log anything
 	func() {

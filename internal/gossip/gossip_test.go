@@ -2,14 +2,13 @@ package gossip
 
 import (
 	"encoding/base64"
+	"log/slog"
 	"testing"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 func TestGossipEncryptionKeyValidation(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 
 	tests := []struct {
 		name        string
@@ -64,7 +63,7 @@ func TestGossipEncryptionKeyValidation(t *testing.T) {
 }
 
 func TestGossipDisabled(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.Default()
 
 	cfg := &Config{
 		Enabled: false,

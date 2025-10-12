@@ -1,15 +1,14 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"go.uber.org/zap"
 )
 
 func TestBasicAuthMiddleware_ValidCredentials(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	called := false
 
 	// Create test handler that sets a flag when called
@@ -40,7 +39,7 @@ func TestBasicAuthMiddleware_ValidCredentials(t *testing.T) {
 }
 
 func TestBasicAuthMiddleware_InvalidCredentials(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	called := false
 
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +68,7 @@ func TestBasicAuthMiddleware_InvalidCredentials(t *testing.T) {
 }
 
 func TestBasicAuthMiddleware_NoCredentials(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	called := false
 
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +93,7 @@ func TestBasicAuthMiddleware_NoCredentials(t *testing.T) {
 }
 
 func TestBasicAuthMiddleware_WrongUsername(t *testing.T) {
-	logger := zap.NewNop()
+	logger := slog.Default()
 	called := false
 
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,11 +1,10 @@
 package queue
 
 import (
+	"log/slog"
 	"os"
 	"testing"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 func TestIdempotencyKeyDeduplication(t *testing.T) {
@@ -13,7 +12,7 @@ func TestIdempotencyKeyDeduplication(t *testing.T) {
 	dbPath := "./test_idempotency.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -85,7 +84,7 @@ func TestIdempotencyKeyUniqueness(t *testing.T) {
 	dbPath := "./test_idempotency_unique.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -141,7 +140,7 @@ func TestIdempotencyKeyWithNullValues(t *testing.T) {
 	dbPath := "./test_idempotency_null.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)

@@ -11,7 +11,7 @@ import (
 	"fune/internal/config"
 	"fune/internal/queue"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 func TestHandlerIdempotency_Disabled(t *testing.T) {
@@ -19,7 +19,7 @@ func TestHandlerIdempotency_Disabled(t *testing.T) {
 	dbPath := "./test_handler_idem_disabled.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := queue.NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -86,7 +86,7 @@ func TestHandlerIdempotency_Enabled_SameKey(t *testing.T) {
 	dbPath := "./test_handler_idem_enabled.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := queue.NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -164,7 +164,7 @@ func TestHandlerIdempotency_Enabled_DifferentKeys(t *testing.T) {
 	dbPath := "./test_handler_idem_diff_keys.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := queue.NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -234,7 +234,7 @@ func TestHandlerIdempotency_CustomHeader(t *testing.T) {
 	dbPath := "./test_handler_custom_header.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := queue.NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)
@@ -296,7 +296,7 @@ func TestHandlerIdempotency_AfterTerminalState(t *testing.T) {
 	dbPath := "./test_handler_terminal.db"
 	defer os.Remove(dbPath)
 
-	logger := zap.NewNop()
+	logger := slog.Default()
 	q, err := queue.NewQueue(dbPath, logger)
 	if err != nil {
 		t.Fatalf("Failed to create queue: %v", err)

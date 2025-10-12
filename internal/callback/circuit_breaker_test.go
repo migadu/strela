@@ -1,14 +1,14 @@
 package callback
 
 import (
+	"log/slog"
+	"os"
 	"testing"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 func TestCallbackCircuitBreakerBasicOperation(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cb := NewCallbackCircuitBreaker(3, 2, 1*time.Second, logger)
 
 	// Initially should be closed
@@ -36,7 +36,7 @@ func TestCallbackCircuitBreakerBasicOperation(t *testing.T) {
 }
 
 func TestCallbackCircuitBreakerRecovery(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cb := NewCallbackCircuitBreaker(2, 2, 100*time.Millisecond, logger)
 
 	// Open the circuit
@@ -77,7 +77,7 @@ func TestCallbackCircuitBreakerRecovery(t *testing.T) {
 }
 
 func TestCallbackCircuitBreakerHalfOpenFailure(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cb := NewCallbackCircuitBreaker(2, 2, 50*time.Millisecond, logger)
 
 	// Open the circuit
@@ -105,7 +105,7 @@ func TestCallbackCircuitBreakerHalfOpenFailure(t *testing.T) {
 }
 
 func TestCallbackCircuitBreakerSuccessResetsFailures(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cb := NewCallbackCircuitBreaker(3, 2, 1*time.Second, logger)
 
 	// Record 2 failures
@@ -129,7 +129,7 @@ func TestCallbackCircuitBreakerSuccessResetsFailures(t *testing.T) {
 }
 
 func TestCallbackCircuitBreakerGetStats(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	cb := NewCallbackCircuitBreaker(3, 2, 1*time.Second, logger)
 
 	stats := cb.GetStats()

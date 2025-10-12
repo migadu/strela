@@ -9,11 +9,12 @@ import (
 	"fune/internal/config"
 	"fune/internal/queue"
 
-	"go.uber.org/zap"
+	"log/slog"
+	"os"
 )
 
 func TestMXLookup_LookupDNS(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -59,7 +60,7 @@ func TestMXLookup_LookupDNS(t *testing.T) {
 }
 
 func TestMXLookup_LookupDNS_NoMXRecords(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -74,16 +75,18 @@ func TestMXLookup_LookupDNS_NoMXRecords(t *testing.T) {
 
 	mx := NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 
-	// Test domain with no MX records (should fail)
+	// Test domain with no DNS records at all (should fail)
+	// Note: localhost may have implicit MX records per RFC 5321 (falls back to A/AAAA)
+	// So we use a domain that definitely doesn't exist
 	ctx := context.Background()
-	_, err := mx.lookupDNS(ctx, "localhost")
+	_, err := mx.lookupDNS(ctx, "this-domain-has-no-dns-records-12345.invalid")
 	if err == nil {
-		t.Error("Expected error for domain with no MX records")
+		t.Error("Expected error for domain with no DNS records")
 	}
 }
 
 func TestMXLookup_LookupDNS_InvalidDomain(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -107,7 +110,7 @@ func TestMXLookup_LookupDNS_InvalidDomain(t *testing.T) {
 }
 
 func TestMXLookup_Cache(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -151,7 +154,7 @@ func TestMXLookup_Cache(t *testing.T) {
 }
 
 func TestMXLookup_CacheExpiration(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -186,7 +189,7 @@ func TestMXLookup_CacheExpiration(t *testing.T) {
 }
 
 func TestMXLookup_StoreAndRetrieveCache(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -234,7 +237,7 @@ func TestMXLookup_StoreAndRetrieveCache(t *testing.T) {
 }
 
 func TestMXLookup_InvalidateCache(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -275,7 +278,7 @@ func TestMXLookup_InvalidateCache(t *testing.T) {
 }
 
 func TestMXLookup_CleanupExpiredCache(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 
@@ -323,7 +326,7 @@ func TestMXLookup_CleanupExpiredCache(t *testing.T) {
 }
 
 func TestMXLookup_SortByPriority(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	q, cleanup := queue.SetupTestQueue(t)
 	defer cleanup()
 

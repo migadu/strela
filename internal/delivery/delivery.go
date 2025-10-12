@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net"
 	"sync"
@@ -46,7 +47,6 @@ import (
 	"fune/internal/queue"
 
 	"github.com/emersion/go-smtp"
-	"go.uber.org/zap"
 )
 
 // DestinationThrottle tracks last delivery attempt per domain to prevent spam-like behavior.
@@ -124,7 +124,7 @@ type Deliverer struct {
 	mu                sync.RWMutex
 	config            *config.OutboundConfig
 	mxLookup          *MXLookup
-	logger            *zap.Logger
+	logger            *slog.Logger
 	ipRotator         *IPRotator
 	throttle          *DestinationThrottle
 	circuitBreaker    *CircuitBreaker
@@ -149,7 +149,7 @@ type DeliveryResult struct {
 // It initializes the circuit breaker (if enabled), IP reputation tracker, IP rotator,
 // and destination throttle. The circuit breaker can be disabled via configuration,
 // which means the service will continue accepting requests even during delivery failures.
-func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *zap.Logger, reputationConfig *config.ReputationConfig) *Deliverer {
+func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *slog.Logger, reputationConfig *config.ReputationConfig) *Deliverer {
 	// Create circuit breaker with configured values
 	var circuitBreaker *CircuitBreaker
 	if !config.CircuitBreakerEnabled {
@@ -164,9 +164,9 @@ func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *zap
 			logger,
 		)
 		logger.Info("circuit breaker enabled",
-			zap.Int("failure_threshold", config.CircuitBreakerFailureThreshold),
-			zap.Int("success_threshold", config.CircuitBreakerSuccessThreshold),
-			zap.Duration("open_timeout", openTimeout))
+			"failure_threshold", config.CircuitBreakerFailureThreshold,
+			"success_threshold", config.CircuitBreakerSuccessThreshold,
+			"open_timeout", openTimeout)
 	}
 
 	// Create reputation tracker
@@ -193,18 +193,18 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 	startTime := time.Now()
 
 	d.logger.Info("starting delivery attempt",
-		zap.String("message_id", msg.MessageID),
-		zap.String("to", msg.ToAddr),
-		zap.String("to_domain", msg.ToDomain),
-		zap.Int("attempt", msg.Attempts+1))
+		"message_id", msg.MessageID,
+		"to", msg.ToAddr,
+		"to_domain", msg.ToDomain,
+		"attempt", msg.Attempts+1)
 
 	// Check if we should throttle delivery to this domain
 	if shouldThrottle, waitTime := d.throttle.ShouldThrottle(msg.ToDomain); shouldThrottle {
 		d.logger.Info("throttling delivery to domain",
-			zap.String("message_id", msg.MessageID),
-			zap.String("domain", msg.ToDomain),
-			zap.Duration("wait_time", waitTime),
-			zap.Int("min_interval_seconds", d.config.PerDomainIntervalSeconds))
+			"message_id", msg.MessageID,
+			"domain", msg.ToDomain,
+			"wait_time", waitTime,
+			"min_interval_seconds", d.config.PerDomainIntervalSeconds)
 
 		result := &DeliveryResult{
 			Success: false,
@@ -225,9 +225,9 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 	mxRecords, err := d.mxLookup.Lookup(ctx, msg.ToDomain)
 	if err != nil {
 		d.logger.Error("MX lookup failed",
-			zap.String("message_id", msg.MessageID),
-			zap.String("domain", msg.ToDomain),
-			zap.Error(err))
+			"message_id", msg.MessageID,
+			"domain", msg.ToDomain,
+			"error", err)
 
 		result := &DeliveryResult{
 			Success:    false,
@@ -239,8 +239,8 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 	}
 
 	d.logger.Debug("MX records found",
-		zap.String("domain", msg.ToDomain),
-		zap.Int("mx_count", len(mxRecords)))
+		"domain", msg.ToDomain,
+		"mx_count", len(mxRecords))
 
 	// Try each MX in priority order with source IP rotation on local failures
 	var lastResult *DeliveryResult
@@ -253,29 +253,29 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 		if len(allSourceIPs) > 0 {
 			// All IPs are degraded, log warning
 			d.logger.Warn("all source IPs are degraded, using default",
-				zap.String("message_id", msg.MessageID),
-				zap.Int("total_ips", len(allSourceIPs)))
+				"message_id", msg.MessageID,
+				"total_ips", len(allSourceIPs))
 		}
 		sourceIPs = []string{""} // Empty string means use default source IP
 	} else if len(sourceIPs) < len(allSourceIPs) {
 		d.logger.Info("some source IPs are degraded",
-			zap.String("message_id", msg.MessageID),
-			zap.Int("healthy_ips", len(sourceIPs)),
-			zap.Int("total_ips", len(allSourceIPs)))
+			"message_id", msg.MessageID,
+			"healthy_ips", len(sourceIPs),
+			"total_ips", len(allSourceIPs))
 	}
 
 	for i, mx := range mxRecords {
 		// Try delivery with source IP rotation on local failures
 		for ipIdx, sourceIP := range sourceIPs {
 			d.logger.Debug("attempting MX server",
-				zap.String("message_id", msg.MessageID),
-				zap.String("mx_host", mx.Host),
-				zap.Int("priority", int(mx.Priority)),
-				zap.Int("mx_index", i+1),
-				zap.Int("total_mx", len(mxRecords)),
-				zap.String("source_ip", sourceIP),
-				zap.Int("source_ip_index", ipIdx+1),
-				zap.Int("total_source_ips", len(sourceIPs)))
+				"message_id", msg.MessageID,
+				"mx_host", mx.Host,
+				"priority", int(mx.Priority),
+				"mx_index", i+1,
+				"total_mx", len(mxRecords),
+				"source_ip", sourceIP,
+				"source_ip_index", ipIdx+1,
+				"total_source_ips", len(sourceIPs))
 
 			result := d.attemptDelivery(ctx, msg, mx.Host, sourceIP)
 			result.DurationMs = time.Since(startTime).Milliseconds()
@@ -298,10 +298,10 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 				}
 
 				d.logger.Info("delivery successful",
-					zap.String("message_id", msg.MessageID),
-					zap.String("mx_host", mx.Host),
-					zap.String("source_ip", sourceIP),
-					zap.Int64("duration_ms", result.DurationMs))
+					"message_id", msg.MessageID,
+					"mx_host", mx.Host,
+					"source_ip", sourceIP,
+					"duration_ms", result.DurationMs)
 				d.recordDeliveryMetrics(result)
 				return result
 			}
@@ -313,18 +313,18 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 			}
 
 			d.logger.Warn("MX delivery failed",
-				zap.String("message_id", msg.MessageID),
-				zap.String("mx_host", mx.Host),
-				zap.String("source_ip", sourceIP),
-				zap.Int("smtp_code", result.SMTPCode),
-				zap.String("error", result.Error.Message),
-				zap.Bool("is_local_error", isLocalError))
+				"message_id", msg.MessageID,
+				"mx_host", mx.Host,
+				"source_ip", sourceIP,
+				"smtp_code", result.SMTPCode,
+				"error", result.Error.Message,
+				"is_local_error", isLocalError)
 
 			// If permanent error, don't try other IPs or MX servers
 			if result.Error != nil && result.Error.Category == ErrorPermanent {
 				d.logger.Info("permanent error, not trying other MX servers",
-					zap.String("message_id", msg.MessageID),
-					zap.String("error_category", string(result.Error.Category)))
+					"message_id", msg.MessageID,
+					"error_category", string(result.Error.Category))
 				d.recordDeliveryMetrics(result)
 				return result
 			}
@@ -332,10 +332,10 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 			// If local network error or reputation error, try next source IP
 			if (isLocalError || result.Error.Category == ErrorReputation) && ipIdx < len(sourceIPs)-1 {
 				d.logger.Info("local network or reputation error, trying next source IP",
-					zap.String("message_id", msg.MessageID),
-					zap.String("failed_source_ip", sourceIP),
-					zap.String("next_source_ip", sourceIPs[ipIdx+1]),
-					zap.String("error_category", string(result.Error.Category)))
+					"message_id", msg.MessageID,
+					"failed_source_ip", sourceIP,
+					"next_source_ip", sourceIPs[ipIdx+1],
+					"error_category", string(result.Error.Category))
 				continue
 			}
 
@@ -349,9 +349,9 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage
 
 	// All MX servers failed
 	d.logger.Error("all MX servers failed",
-		zap.String("message_id", msg.MessageID),
-		zap.String("domain", msg.ToDomain),
-		zap.Int("mx_count", len(mxRecords)))
+		"message_id", msg.MessageID,
+		"domain", msg.ToDomain,
+		"mx_count", len(mxRecords))
 
 	// Return last result if available
 	if lastResult != nil {
@@ -379,9 +379,9 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, msg *queue.QueuedMessag
 	addrs, err := resolver.LookupHost(ctx, mxHost)
 	if err != nil {
 		d.logger.Error("failed to resolve MX hostname",
-			zap.String("message_id", msg.MessageID),
-			zap.String("mx_host", mxHost),
-			zap.Error(err))
+			"message_id", msg.MessageID,
+			"mx_host", mxHost,
+			"error", err)
 		return &DeliveryResult{
 			Success: false,
 			MXHost:  mxHost,
@@ -390,9 +390,9 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, msg *queue.QueuedMessag
 	}
 
 	d.logger.Debug("resolved MX hostname",
-		zap.String("mx_host", mxHost),
-		zap.Strings("addresses", addrs),
-		zap.Int("ip_count", len(addrs)))
+		"mx_host", mxHost,
+		"addresses", addrs,
+		"ip_count", len(addrs))
 
 	// Separate IPv6 and IPv4 addresses
 	var ipv6Addrs, ipv4Addrs []string
@@ -417,18 +417,18 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, msg *queue.QueuedMessag
 	for _, ipAddr := range ipv6Addrs {
 		if totalAttempts >= maxIPs {
 			d.logger.Warn("reached max IP limit for MX host",
-				zap.String("mx_host", mxHost),
-				zap.Int("max_ips", maxIPs),
-				zap.Int("skipped_ipv6", len(ipv6Addrs)-totalAttempts))
+				"mx_host", mxHost,
+				"max_ips", maxIPs,
+				"skipped_ipv6", len(ipv6Addrs)-totalAttempts)
 			break
 		}
 
 		d.logger.Debug("attempting IPv6 address",
-			zap.String("message_id", msg.MessageID),
-			zap.String("mx_host", mxHost),
-			zap.String("ip_address", ipAddr),
-			zap.Int("attempt", totalAttempts+1),
-			zap.Int("max_attempts", maxIPs))
+			"message_id", msg.MessageID,
+			"mx_host", mxHost,
+			"ip_address", ipAddr,
+			"attempt", totalAttempts+1,
+			"max_attempts", maxIPs)
 
 		result := d.tryDeliveryToIP(ctx, msg, mxHost, ipAddr, sourceIP, "tcp6")
 		totalAttempts++
@@ -442,19 +442,19 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, msg *queue.QueuedMessag
 	for _, ipAddr := range ipv4Addrs {
 		if totalAttempts >= maxIPs {
 			d.logger.Warn("reached max IP limit for MX host",
-				zap.String("mx_host", mxHost),
-				zap.Int("max_ips", maxIPs),
-				zap.Int("total_ips", len(ipv6Addrs)+len(ipv4Addrs)),
-				zap.Int("tried", totalAttempts))
+				"mx_host", mxHost,
+				"max_ips", maxIPs,
+				"total_ips", len(ipv6Addrs)+len(ipv4Addrs),
+				"tried", totalAttempts)
 			break
 		}
 
 		d.logger.Debug("attempting IPv4 address",
-			zap.String("message_id", msg.MessageID),
-			zap.String("mx_host", mxHost),
-			zap.String("ip_address", ipAddr),
-			zap.Int("attempt", totalAttempts+1),
-			zap.Int("max_attempts", maxIPs))
+			"message_id", msg.MessageID,
+			"mx_host", mxHost,
+			"ip_address", ipAddr,
+			"attempt", totalAttempts+1,
+			"max_attempts", maxIPs)
 
 		result := d.tryDeliveryToIP(ctx, msg, mxHost, ipAddr, sourceIP, "tcp4")
 		totalAttempts++
@@ -549,13 +549,13 @@ func (d *Deliverer) tryDeliveryToIP(ctx context.Context, msg *queue.QueuedMessag
 	if err != nil {
 		// STARTTLS failed, try without TLS
 		d.logger.Warn("STARTTLS failed, trying without TLS",
-			zap.String("mx_host", mxHost),
-			zap.Error(err))
+			"mx_host", mxHost,
+			"error", err)
 
 		client = smtp.NewClient(conn)
 	} else {
 		d.logger.Debug("STARTTLS successful",
-			zap.String("mx_host", mxHost))
+			"mx_host", mxHost)
 	}
 	defer client.Close()
 
@@ -603,16 +603,16 @@ func (d *Deliverer) tryDeliveryToIP(ctx context.Context, msg *queue.QueuedMessag
 	messageToSend := msg.RawMessage
 	if msg.DKIMPrivateKey != "" {
 		d.logger.Debug("signing message with DKIM",
-			zap.String("message_id", msg.MessageID),
-			zap.String("dkim_selector", msg.DKIMSelector),
-			zap.String("dkim_domain", msg.DKIMDomain))
+			"message_id", msg.MessageID,
+			"dkim_selector", msg.DKIMSelector,
+			"dkim_domain", msg.DKIMDomain)
 
 		signedMessage, err := dkim.SignMessage(msg.RawMessage, msg.DKIMPrivateKey, msg.DKIMSelector, msg.DKIMDomain)
 		if err != nil {
 			dataWriter.Close()
 			d.logger.Error("DKIM signing failed",
-				zap.String("message_id", msg.MessageID),
-				zap.Error(err))
+				"message_id", msg.MessageID,
+				"error", err)
 			return &DeliveryResult{
 				Success:  false,
 				MXHost:   mxHost,
@@ -625,7 +625,7 @@ func (d *Deliverer) tryDeliveryToIP(ctx context.Context, msg *queue.QueuedMessag
 		}
 		messageToSend = signedMessage
 		d.logger.Debug("DKIM signature added successfully",
-			zap.String("message_id", msg.MessageID))
+			"message_id", msg.MessageID)
 	}
 
 	// Write message data
@@ -774,10 +774,10 @@ func (d *Deliverer) ReloadConfig(newConfig *config.OutboundConfig) error {
 	defer d.mu.Unlock()
 
 	d.logger.Info("reloading delivery configuration",
-		zap.Int("old_source_ips", len(d.config.SourceIPs)),
-		zap.Int("new_source_ips", len(newConfig.SourceIPs)),
-		zap.String("old_ip_selection", d.config.SourceIPSelection),
-		zap.String("new_ip_selection", newConfig.SourceIPSelection))
+		"old_source_ips", len(d.config.SourceIPs),
+		"new_source_ips", len(newConfig.SourceIPs),
+		"old_ip_selection", d.config.SourceIPSelection,
+		"new_ip_selection", newConfig.SourceIPSelection)
 
 	// Update config
 	d.config = newConfig

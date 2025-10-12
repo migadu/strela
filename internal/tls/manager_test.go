@@ -7,13 +7,13 @@ import (
 
 	"fune/internal/config"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 func TestNewManager_Disabled(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.TLSConfig{Enabled: false}
-	manager, err := NewManager(ctx, cfg, nil, zap.NewNop())
+	manager, err := NewManager(ctx, cfg, nil, slog.Default())
 	if err != nil {
 		t.Errorf("NewManager() with disabled config should not return an error, got %v", err)
 	}
@@ -25,7 +25,7 @@ func TestNewManager_Disabled(t *testing.T) {
 func TestNewManager_WrongProvider(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.TLSConfig{Enabled: true, Provider: "manual"}
-	manager, err := NewManager(ctx, cfg, nil, zap.NewNop())
+	manager, err := NewManager(ctx, cfg, nil, slog.Default())
 	if err != nil {
 		t.Errorf("NewManager() with wrong provider should not return an error, got %v", err)
 	}
@@ -41,7 +41,7 @@ func TestNewManager_NoGossip(t *testing.T) {
 		Provider: "letsencrypt",
 	}
 	// A nil gossip service is passed
-	manager, err := NewManager(ctx, cfg, nil, zap.NewNop())
+	manager, err := NewManager(ctx, cfg, nil, slog.Default())
 	if err != nil {
 		t.Errorf("NewManager() with nil gossip service should not return an error, got %v", err)
 	}
@@ -78,7 +78,7 @@ func TestManager_HTTPHandler_ValidManager(t *testing.T) {
 	// Create a manager with autocert manager set (but not fully initialized)
 	m := &Manager{
 		autocertManager: nil, // Even with nil autocert, should return fallback
-		logger:          zap.NewNop(),
+		logger:          slog.Default(),
 	}
 
 	fallback := &testHandler{name: "fallback"}
@@ -106,7 +106,7 @@ func TestManager_GetCertificateInfo_NilManager(t *testing.T) {
 func TestManager_GetCertificateInfo_NilAutocertManager(t *testing.T) {
 	m := &Manager{
 		autocertManager: nil,
-		logger:          zap.NewNop(),
+		logger:          slog.Default(),
 	}
 
 	info := m.GetCertificateInfo("example.com")
@@ -131,7 +131,7 @@ func TestManager_CheckCertificates_NilManager(t *testing.T) {
 func TestManager_CheckCertificates_NilAutocertManager(t *testing.T) {
 	m := &Manager{
 		autocertManager: nil,
-		logger:          zap.NewNop(),
+		logger:          slog.Default(),
 		domains:         []string{"example.com"},
 	}
 

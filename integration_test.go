@@ -28,14 +28,13 @@ import (
 	"fune/internal/queue"
 	"fune/internal/worker"
 
-	"go.uber.org/zap"
+	"log/slog"
 )
 
 // TestFullMessageFlow tests the complete message flow from HTTP to queue to delivery
 func TestFullMessageFlow(t *testing.T) {
 	// Setup logger
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.Default()
 
 	// Create test database
 	dbPath := "./test_queue.db"
@@ -419,8 +418,7 @@ func TestEndToEndDelivery(t *testing.T) {
 
 // TestWorkerLifecycle tests worker start, processing, and graceful shutdown
 func TestWorkerLifecycle(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.Default()
 
 	dbPath := "./test_worker_lifecycle.db"
 	defer os.Remove(dbPath)
@@ -552,8 +550,7 @@ func TestCallbackWebhook(t *testing.T) {
 	}))
 	defer webhookServer.Close()
 
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.Default()
 
 	dbPath := "./test_callback.db"
 	defer os.Remove(dbPath)
@@ -630,8 +627,7 @@ func TestCallbackWebhook(t *testing.T) {
 
 // TestDeliveryRetry tests retry logic with temporary failures
 func TestDeliveryRetry(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.Default()
 
 	dbPath := "./test_retry.db"
 	defer os.Remove(dbPath)
@@ -707,8 +703,7 @@ func TestDeliveryRetry(t *testing.T) {
 
 // TestDestinationThrottling tests rate limiting per destination domain
 func TestDestinationThrottling(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	_ = slog.Default() // logger not used in this test
 
 	deliveryCfg := &config.OutboundConfig{
 		PerDomainIntervalSeconds: 2, // 2 second throttle
@@ -766,8 +761,7 @@ func TestDestinationThrottling(t *testing.T) {
 
 // TestConcurrentWorkers tests multiple workers processing messages concurrently
 func TestConcurrentWorkers(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.Default()
 
 	dbPath := "./test_concurrent.db"
 	defer os.Remove(dbPath)
@@ -892,8 +886,7 @@ func generateTestRSAKey(bits int) (string, error) {
 
 // TestDKIMSigningEndToEnd tests complete DKIM signing flow from HTTP to delivery
 func TestDKIMSigningEndToEnd(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	logger := slog.Default()
 
 	dbPath := "./test_dkim.db"
 	defer os.Remove(dbPath)
