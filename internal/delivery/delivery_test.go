@@ -182,7 +182,7 @@ func TestDeliverer_DeliverMessage_NoMXRecords(t *testing.T) {
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	msg := &queue.QueuedMessage{
 		MessageID:  "test_msg",
@@ -226,7 +226,7 @@ func TestDeliverer_SelectSourceIP(t *testing.T) {
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	// Verify IP rotator is initialized
 	if deliverer.ipRotator == nil {
@@ -358,7 +358,7 @@ func TestDeliverer_LoggingOnFailure(t *testing.T) {
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	msg := &queue.QueuedMessage{
 		MessageID:  "test_msg",
@@ -399,7 +399,7 @@ func TestDeliverer_EmptySourceIPs(t *testing.T) {
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	// Should handle empty source IPs gracefully
 	if deliverer.ipRotator == nil {
@@ -469,7 +469,7 @@ func TestDeliverer_ReloadConfig(t *testing.T) {
 
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := &MXLookup{logger: logger}
-	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	// Verify initial config
 	if len(deliverer.ipRotator.GetAllIPs()) != 1 {
@@ -532,7 +532,7 @@ func TestDeliverer_ReloadConfig_DisableCircuitBreaker(t *testing.T) {
 
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := &MXLookup{logger: logger}
-	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	if deliverer.circuitBreaker == nil {
 		t.Error("circuit breaker should be enabled initially")
@@ -568,7 +568,7 @@ func TestDeliverer_ReloadConfig_EnableCircuitBreaker(t *testing.T) {
 
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
 	mxLookup := &MXLookup{logger: logger}
-	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(initialCfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	if deliverer.circuitBreaker != nil {
 		t.Error("circuit breaker should be disabled initially")

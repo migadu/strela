@@ -99,6 +99,8 @@ type Config struct {
 	Callbacks  CallbacksConfig  `toml:"callbacks"`
 	Reputation ReputationConfig `toml:"reputation"`
 	Cluster    ClusterConfig    `toml:"cluster"`
+	ARC        ARCConfig        `toml:"arc"`
+	SRS        SRSConfig        `toml:"srs"`
 }
 
 // ServerConfig contains core server settings.
@@ -198,13 +200,17 @@ type TLSConfig struct {
 
 // LetsEncryptConfig configures automatic certificate provisioning via Let's Encrypt.
 //
-// Requires S3 storage for certificate persistence and cluster-wide sharing.
+// Supports two storage backends:
+//   - "s3": S3 storage for multi-node cluster deployments (requires gossip for coordination)
+//   - "file": Local filesystem storage for single-node deployments
+//
 // The email address receives expiration notices and important updates from
 // Let's Encrypt.
 type LetsEncryptConfig struct {
 	Email           string   `toml:"email"`
 	Domains         []string `toml:"domains"`
-	StorageProvider string   `toml:"storage_provider"` // "s3" (default: s3)
+	StorageProvider string   `toml:"storage_provider"` // "s3" or "file" (default: s3)
+	CacheDir        string   `toml:"cache_dir"`        // Directory for file storage (used when storage_provider="file")
 	S3              S3Config `toml:"s3"`
 }
 
@@ -368,6 +374,56 @@ type ClusterConfig struct {
 	SecretKey string   `toml:"secret_key"` // 32-byte base64 encoded encryption key for AES-256
 }
 
+// ARCConfig configures Authenticated Received Chain (ARC) signing for email forwarding.
+//
+// ARC (RFC 8617) preserves authentication results across forwarding hops, preventing
+// DMARC failures when forwarding authenticated emails. When enabled, Fune adds ARC
+// headers to outgoing messages:
+//   - ARC-Seal: Seals the ARC chain with this server's signature
+//   - ARC-Message-Signature: Signs the message body and selected headers
+//   - ARC-Authentication-Results: Records authentication results from this hop
+//
+// Essential for email forwarding scenarios where messages pass through Fune to
+// reach the final recipient. Without ARC, forwarded messages may fail SPF/DKIM
+// checks at the destination.
+//
+// All fields are hot-reloadable.
+type ARCConfig struct {
+	Enabled        bool   `toml:"enabled"`          // Enable ARC signing (default: false)
+	Selector       string `toml:"selector"`         // DNS selector for ARC public key (e.g., "arc-2024")
+	Domain         string `toml:"domain"`           // Domain for ARC signing (e.g., "example.com")
+	PrivateKeyPath string `toml:"private_key_path"` // Path to RSA private key in PEM format
+	HeaderCanon    string `toml:"header_canon"`     // Header canonicalization: "relaxed" or "simple" (default: relaxed)
+	BodyCanon      string `toml:"body_canon"`       // Body canonicalization: "relaxed" or "simple" (default: relaxed)
+}
+
+// SRSConfig configures Sender Rewriting Scheme (SRS) for envelope sender rewriting.
+//
+// SRS rewrites the envelope sender (MAIL FROM) address when forwarding email to prevent
+// SPF failures. When email is forwarded, the original sender's domain won't authorize
+// Fune's sending IPs, causing SPF checks to fail. SRS solves this by rewriting the
+// envelope sender to use Fune's domain while encoding the original sender information.
+//
+// How SRS works:
+//   - Original: MAIL FROM:<user@original.com>
+//   - Rewritten: MAIL FROM:<SRS0=hash=timestamp=original.com=user@yourdomain.com>
+//   - Bounces are sent to the SRS address, which can be decoded to route back
+//
+// Essential for email forwarding to pass SPF checks. Without SRS, forwarded messages
+// will fail SPF validation at the destination, potentially causing delivery failures
+// or messages being marked as spam.
+//
+// All fields are hot-reloadable.
+type SRSConfig struct {
+	Enabled       bool   `toml:"enabled"`        // Enable SRS envelope rewriting (default: false)
+	Domain        string `toml:"domain"`         // Domain for rewritten addresses (e.g., "mail.example.com")
+	Secret        string `toml:"secret"`         // Secret key for HMAC hash (min 16 chars, keep secure)
+	MaxAge        int    `toml:"max_age"`        // Maximum age in days for SRS addresses (default: 21)
+	HashLength    int    `toml:"hash_length"`    // Length of hash in SRS address (default: 4, range: 2-8)
+	Separator     string `toml:"separator"`      // Separator character (default: "=")
+	AlwaysRewrite bool   `toml:"always_rewrite"` // Rewrite all senders, not just forwarded (default: false)
+}
+
 // SetDefaults sets default values for optional configuration fields.
 //
 // This method is called automatically by LoadConfig after parsing the TOML file.
@@ -434,6 +490,9 @@ func (c *Config) SetDefaults() {
 	}
 	if c.TLS.LetsEncrypt.StorageProvider == "" {
 		c.TLS.LetsEncrypt.StorageProvider = "s3"
+	}
+	if c.TLS.LetsEncrypt.CacheDir == "" {
+		c.TLS.LetsEncrypt.CacheDir = "./letsencrypt-cache"
 	}
 	if c.Queue.WorkerCount == 0 {
 		c.Queue.WorkerCount = 10
@@ -549,6 +608,21 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Cluster.BindPort == 0 {
 		c.Cluster.BindPort = 7946
+	}
+	if c.ARC.HeaderCanon == "" {
+		c.ARC.HeaderCanon = "relaxed"
+	}
+	if c.ARC.BodyCanon == "" {
+		c.ARC.BodyCanon = "relaxed"
+	}
+	if c.SRS.MaxAge == 0 {
+		c.SRS.MaxAge = 21
+	}
+	if c.SRS.HashLength == 0 {
+		c.SRS.HashLength = 4
+	}
+	if c.SRS.Separator == "" {
+		c.SRS.Separator = "="
 	}
 }
 

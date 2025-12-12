@@ -57,7 +57,7 @@ func setupTestWorker(t *testing.T) (*Worker, *queue.Queue, func()) {
 
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := delivery.NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := delivery.NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := delivery.NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 	retryScheduler := delivery.NewRetryScheduler(cfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackConfig, logger)
 

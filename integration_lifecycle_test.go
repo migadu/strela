@@ -307,7 +307,7 @@ func TestFullMessageLifecycle(t *testing.T) {
 	// Initialize components
 	mxLookup := delivery.NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
-	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
+	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg, nil, nil)
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
 
 	// Initialize callback handler

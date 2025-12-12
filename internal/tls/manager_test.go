@@ -34,19 +34,81 @@ func TestNewManager_WrongProvider(t *testing.T) {
 	}
 }
 
-func TestNewManager_NoGossip(t *testing.T) {
+func TestNewManager_NoGossip_S3Storage(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.TLSConfig{
 		Enabled:  true,
 		Provider: "letsencrypt",
+		LetsEncrypt: config.LetsEncryptConfig{
+			StorageProvider: "s3",
+		},
 	}
-	// A nil gossip service is passed
+	// A nil gossip service is passed with S3 storage - should return nil
 	manager, err := NewManager(ctx, cfg, nil, slog.Default())
 	if err != nil {
-		t.Errorf("NewManager() with nil gossip service should not return an error, got %v", err)
+		t.Errorf("NewManager() with nil gossip service and S3 storage should not return an error, got %v", err)
 	}
 	if manager != nil {
-		t.Error("NewManager() with nil gossip service should return a nil manager")
+		t.Error("NewManager() with nil gossip service and S3 storage should return a nil manager")
+	}
+}
+
+func TestNewManager_FileStorage(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	cfg := &config.TLSConfig{
+		Enabled:  true,
+		Provider: "letsencrypt",
+		LetsEncrypt: config.LetsEncryptConfig{
+			Email:           "test@example.com",
+			Domains:         []string{"example.com"},
+			StorageProvider: "file",
+			CacheDir:        tmpDir,
+		},
+	}
+
+	// File storage does not require gossip service
+	manager, err := NewManager(ctx, cfg, nil, slog.Default())
+	if err != nil {
+		t.Errorf("NewManager() with file storage should not return an error, got %v", err)
+	}
+	if manager == nil {
+		t.Fatal("NewManager() with file storage should return a valid manager")
+	}
+
+	// Verify manager was initialized correctly
+	if manager.autocertManager == nil {
+		t.Error("autocertManager should be initialized")
+	}
+	if len(manager.domains) != 1 || manager.domains[0] != "example.com" {
+		t.Errorf("expected domains [example.com], got %v", manager.domains)
+	}
+}
+
+func TestNewManager_InvalidStorageProvider(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.TLSConfig{
+		Enabled:  true,
+		Provider: "letsencrypt",
+		LetsEncrypt: config.LetsEncryptConfig{
+			Email:           "test@example.com",
+			Domains:         []string{"example.com"},
+			StorageProvider: "invalid",
+		},
+	}
+
+	manager, err := NewManager(ctx, cfg, nil, slog.Default())
+	if err == nil {
+		t.Error("NewManager() with invalid storage provider should return an error")
+	}
+	if manager != nil {
+		t.Error("NewManager() with invalid storage provider should return a nil manager")
+	}
+
+	expectedErrMsg := "unsupported storage provider: invalid (must be 's3' or 'file')"
+	if err.Error() != expectedErrMsg {
+		t.Errorf("expected error message '%s', got '%s'", expectedErrMsg, err.Error())
 	}
 }
 

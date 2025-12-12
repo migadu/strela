@@ -75,41 +75,59 @@ type Manager struct {
 }
 
 // NewManager creates a new TLS manager for Let's Encrypt certificate management.
-// Returns nil if TLS is disabled or provider is not "letsencrypt". Requires a
-// gossip service for leader-based coordination in multi-node clusters.
+// Returns nil if TLS is disabled or provider is not "letsencrypt".
 //
-// The context is used for S3 initialization and bucket validation with a 10-second
-// timeout. If bucket validation fails, returns an error before starting the manager.
+// Storage Backends:
+//   - "s3": Requires gossip service for leader-based coordination in multi-node clusters.
+//     The context is used for S3 initialization and bucket validation with a 10-second
+//     timeout. If bucket validation fails, returns an error before starting the manager.
+//   - "file": Uses local filesystem storage (autocert.DirCache). Suitable for single-node
+//     deployments. Does not require gossip service.
 //
 // Parameters:
-//   - ctx: Context for S3 initialization (timeout recommended)
+//   - ctx: Context for S3 initialization (timeout recommended, ignored for file storage)
 //   - cfg: TLS configuration with Let's Encrypt settings
-//   - gossipSvc: Gossip service for leader election (required for multi-node)
+//   - gossipSvc: Gossip service for leader election (required for S3 storage, optional for file)
 //   - logger: Structured logger for certificate operations
 //
-// Returns nil manager if gossip service is unavailable, as leader coordination
-// cannot function without it.
+// Returns nil manager if using S3 storage and gossip service is unavailable, as leader
+// coordination cannot function without it.
 func NewManager(ctx context.Context, cfg *config.TLSConfig, gossipSvc *gossip.Gossip, logger *slog.Logger) (*Manager, error) {
 	if !cfg.Enabled || cfg.Provider != "letsencrypt" {
 		return nil, nil
 	}
 
-	// Validate gossip service for leader-based coordination
-	if gossipSvc == nil {
-		logger.Warn("gossip service not available, TLS manager will not use leader coordination")
-		return nil, nil
-	}
+	var cache autocert.Cache
 
-	// Create S3 cache with context for proper cancellation and timeout handling
-	s3Cache, err := createS3Cache(ctx, cfg.LetsEncrypt, gossipSvc.IsLeader, logger)
-	if err != nil {
-		return nil, err
+	switch cfg.LetsEncrypt.StorageProvider {
+	case "s3":
+		// Validate gossip service for leader-based coordination in S3 mode
+		if gossipSvc == nil {
+			logger.Warn("gossip service not available, TLS manager will not use leader coordination")
+			return nil, nil
+		}
+
+		// Create S3 cache with context for proper cancellation and timeout handling
+		s3Cache, err := createS3Cache(ctx, cfg.LetsEncrypt, gossipSvc.IsLeader, logger)
+		if err != nil {
+			return nil, err
+		}
+		cache = s3Cache
+
+	case "file":
+		// Use autocert.DirCache for local filesystem storage
+		cache = autocert.DirCache(cfg.LetsEncrypt.CacheDir)
+		logger.Info("using file-based certificate cache",
+			"cache_dir", cfg.LetsEncrypt.CacheDir)
+
+	default:
+		return nil, fmt.Errorf("unsupported storage provider: %s (must be 's3' or 'file')", cfg.LetsEncrypt.StorageProvider)
 	}
 
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		HostPolicy: autocert.HostWhitelist(cfg.LetsEncrypt.Domains...),
-		Cache:      s3Cache,
+		Cache:      cache,
 		Email:      cfg.LetsEncrypt.Email,
 	}
 

@@ -38,13 +38,16 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"fune/internal/arc"
 	"fune/internal/config"
 	"fune/internal/dkim"
 	"fune/internal/queue"
+	"fune/internal/srs"
 
 	"github.com/emersion/go-smtp"
 )
@@ -119,10 +122,12 @@ type DeliveryMetrics interface {
 // Deliverer is the main delivery engine that handles direct SMTP delivery to recipient MX servers.
 // It coordinates MX lookups, source IP rotation, SMTP session management, delivery attempts,
 // error classification, retry scheduling, and IP reputation tracking. The engine attempts IPv6
-// first before falling back to IPv4, and supports DKIM signing and STARTTLS encryption.
+// first before falling back to IPv4, and supports DKIM signing, ARC signing, SRS rewriting, and
+// STARTTLS encryption.
 type Deliverer struct {
 	mu                sync.RWMutex
 	config            *config.OutboundConfig
+	arcConfig         *config.ARCConfig
 	mxLookup          *MXLookup
 	logger            *slog.Logger
 	ipRotator         *IPRotator
@@ -130,6 +135,8 @@ type Deliverer struct {
 	circuitBreaker    *CircuitBreaker
 	metrics           DeliveryMetrics
 	reputationTracker *IPReputationTracker
+	arcPrivateKey     string   // Cached ARC private key
+	srs               *srs.SRS // SRS instance for envelope rewriting
 }
 
 // DeliveryResult contains the complete result of a delivery attempt, including success status,
@@ -147,9 +154,10 @@ type DeliveryResult struct {
 
 // NewDeliverer creates a new delivery engine with the specified configuration.
 // It initializes the circuit breaker (if enabled), IP reputation tracker, IP rotator,
-// and destination throttle. The circuit breaker can be disabled via configuration,
-// which means the service will continue accepting requests even during delivery failures.
-func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *slog.Logger, reputationConfig *config.ReputationConfig) *Deliverer {
+// destination throttle, ARC signing (if enabled), and SRS rewriting (if enabled).
+// The circuit breaker can be disabled via configuration, which means the service will
+// continue accepting requests even during delivery failures.
+func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *slog.Logger, reputationConfig *config.ReputationConfig, arcConfig *config.ARCConfig, srsConfig *config.SRSConfig) *Deliverer {
 	// Create circuit breaker with configured values
 	var circuitBreaker *CircuitBreaker
 	if !config.CircuitBreakerEnabled {
@@ -172,14 +180,73 @@ func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *slo
 	// Create reputation tracker
 	reputationTracker := NewIPReputationTracker(reputationConfig, logger)
 
+	// Load ARC private key if enabled
+	var arcPrivateKey string
+	if arcConfig != nil && arcConfig.Enabled {
+		if arcConfig.PrivateKeyPath != "" {
+			keyData, err := os.ReadFile(arcConfig.PrivateKeyPath)
+			if err != nil {
+				logger.Error("failed to read ARC private key, ARC signing disabled",
+					"path", arcConfig.PrivateKeyPath,
+					"error", err)
+			} else {
+				// Validate the key
+				keySize, err := arc.ValidatePrivateKey(string(keyData))
+				if err != nil {
+					logger.Error("invalid ARC private key, ARC signing disabled",
+						"path", arcConfig.PrivateKeyPath,
+						"error", err)
+				} else {
+					arcPrivateKey = string(keyData)
+					logger.Info("ARC signing enabled",
+						"selector", arcConfig.Selector,
+						"domain", arcConfig.Domain,
+						"key_size", keySize,
+						"header_canon", arcConfig.HeaderCanon,
+						"body_canon", arcConfig.BodyCanon)
+				}
+			}
+		} else {
+			logger.Warn("ARC enabled but no private_key_path specified, ARC signing disabled")
+		}
+	}
+
+	// Initialize SRS if enabled
+	var srsInstance *srs.SRS
+	if srsConfig != nil && srsConfig.Enabled {
+		var err error
+		srsInstance, err = srs.NewSRS(
+			srsConfig.Domain,
+			srsConfig.Secret,
+			srsConfig.MaxAge,
+			srsConfig.HashLength,
+			srsConfig.Separator,
+			srsConfig.AlwaysRewrite,
+		)
+		if err != nil {
+			logger.Error("failed to initialize SRS, envelope rewriting disabled",
+				"error", err)
+			srsInstance = nil
+		} else {
+			logger.Info("SRS envelope rewriting enabled",
+				"domain", srsConfig.Domain,
+				"max_age", srsConfig.MaxAge,
+				"hash_length", srsConfig.HashLength,
+				"always_rewrite", srsConfig.AlwaysRewrite)
+		}
+	}
+
 	return &Deliverer{
 		config:            config,
+		arcConfig:         arcConfig,
 		mxLookup:          mxLookup,
 		logger:            logger,
 		ipRotator:         NewIPRotator(config.SourceIPs, config.SourceIPSelection),
 		throttle:          NewDestinationThrottle(config.PerDomainIntervalSeconds),
 		circuitBreaker:    circuitBreaker,
 		reputationTracker: reputationTracker,
+		arcPrivateKey:     arcPrivateKey,
+		srs:               srsInstance,
 	}
 }
 
@@ -559,8 +626,25 @@ func (d *Deliverer) tryDeliveryToIP(ctx context.Context, msg *queue.QueuedMessag
 	}
 	defer client.Close()
 
-	// MAIL FROM
-	if err := client.Mail(msg.FromAddr, nil); err != nil {
+	// MAIL FROM - apply SRS rewriting if enabled
+	mailFrom := msg.FromAddr
+	if d.srs != nil {
+		rewritten, err := d.srs.Forward(msg.FromAddr)
+		if err != nil {
+			d.logger.Warn("SRS rewriting failed, using original sender",
+				"message_id", msg.MessageID,
+				"original_from", msg.FromAddr,
+				"error", err)
+		} else {
+			mailFrom = rewritten
+			d.logger.Debug("SRS envelope rewriting applied",
+				"message_id", msg.MessageID,
+				"original_from", msg.FromAddr,
+				"rewritten_from", mailFrom)
+		}
+	}
+
+	if err := client.Mail(mailFrom, nil); err != nil {
 		smtpCode, smtpResp := extractSMTPError(err)
 		return &DeliveryResult{
 			Success:      false,
@@ -625,6 +709,42 @@ func (d *Deliverer) tryDeliveryToIP(ctx context.Context, msg *queue.QueuedMessag
 		}
 		messageToSend = signedMessage
 		d.logger.Debug("DKIM signature added successfully",
+			"message_id", msg.MessageID)
+	}
+
+	// Apply ARC signing if enabled (after DKIM)
+	if d.arcPrivateKey != "" && d.arcConfig != nil && d.arcConfig.Enabled {
+		d.logger.Debug("signing message with ARC",
+			"message_id", msg.MessageID,
+			"arc_selector", d.arcConfig.Selector,
+			"arc_domain", d.arcConfig.Domain)
+
+		arcSignConfig := &arc.SignConfig{
+			Selector:    d.arcConfig.Selector,
+			Domain:      d.arcConfig.Domain,
+			PrivateKey:  d.arcPrivateKey,
+			HeaderCanon: d.arcConfig.HeaderCanon,
+			BodyCanon:   d.arcConfig.BodyCanon,
+		}
+
+		signedMessage, err := arc.SignMessage(messageToSend, arcSignConfig)
+		if err != nil {
+			dataWriter.Close()
+			d.logger.Error("ARC signing failed",
+				"message_id", msg.MessageID,
+				"error", err)
+			return &DeliveryResult{
+				Success:  false,
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error: &DeliveryError{
+					Category: ErrorPermanent,
+					Message:  fmt.Sprintf("ARC signing failed: %v", err),
+				},
+			}
+		}
+		messageToSend = signedMessage
+		d.logger.Debug("ARC headers added successfully",
 			"message_id", msg.MessageID)
 	}
 

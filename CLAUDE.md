@@ -122,10 +122,13 @@ HTTP POST → Handler → Queue (SQLite) → Worker Pool → Delivery Engine →
 
 #### `tls/`
 - TLS certificate management (file-based or Let's Encrypt)
-- Auto-renewal with S3 storage for multi-node clusters
+- Let's Encrypt supports two storage backends:
+  - File storage (`autocert.DirCache`) for single-node deployments
+  - S3 storage for multi-node clusters with leader-based coordination
+- Auto-renewal with configurable storage
 - **Key files**:
   - `manager.go`: Certificate loading and monitoring
-  - `storage/s3_cache.go`: S3-based certificate storage
+  - `storage/s3_cache.go`: S3-based certificate storage for clusters
 
 #### `metrics/`
 - Prometheus metrics exposition
@@ -140,7 +143,7 @@ HTTP POST → Handler → Queue (SQLite) → Worker Pool → Delivery Engine →
 - `[queue]` → `QueueConfig`
 - `[dns]` → `DNSConfig`
 - `[callbacks]` → `CallbacksConfig`
-- `[tls]` → `TLSConfig`
+- `[tls]` → `TLSConfig` (includes `[tls.letsencrypt]` with `storage_provider`, `cache_dir`, and `[tls.letsencrypt.s3]` subsections)
 - `[cluster]` → `ClusterConfig` (gossip protocol)
 - `[metrics]` → `MetricsConfig`
 - `[health]` → `HealthConfig`
@@ -184,7 +187,7 @@ cfg := &config.OutboundConfig{
 }
 
 // Logger setup
-logger, _ := zap.NewDevelopment()
+logger := slog.Default()
 ```
 
 ### Running Specific Tests
@@ -234,6 +237,37 @@ Two-level DNS caching in `internal/delivery/`:
    - UDP→TCP fallback on truncation
    - Supports IPv6 DNS servers
 
+## TLS Configuration
+
+Fune supports three TLS/HTTPS configurations (`tls.provider`):
+
+### 1. File-Based Certificates (`provider = "file"`)
+- Load certificates from disk paths specified in `cert_file` and `key_file`
+- Supports hot reload: certificates automatically reloaded when files change
+- Suitable for: Manual certificate management, existing PKI infrastructure
+- Example: `cert_file = "/etc/ssl/certs/mail.pem"`, `key_file = "/etc/ssl/private/mail.key"`
+
+### 2. Let's Encrypt with File Storage (`provider = "letsencrypt"`, `storage_provider = "file"`)
+- Automatic certificate provisioning via ACME HTTP-01 challenges
+- Certificates cached locally using `autocert.DirCache`
+- Directory created with 0700 permissions if it doesn't exist
+- **Does NOT require** `gossip.enabled = true`
+- Suitable for: Single-node deployments
+- Config: `cache_dir = "/var/lib/fune/letsencrypt"` (default: `./letsencrypt-cache`)
+- Requires: Ports 80 and 443 accessible for ACME challenges
+
+### 3. Let's Encrypt with S3 Storage (`provider = "letsencrypt"`, `storage_provider = "s3"`)
+- Automatic certificate provisioning with multi-node coordination
+- Certificates stored in S3 bucket, shared across all cluster nodes
+- Leader node (via gossip) handles ACME challenges and renewals
+- Non-leader nodes read certificates from S3
+- **Requires** `gossip.enabled = true` for leader election
+- Suitable for: Multi-node cluster deployments
+- Config: `[tls.letsencrypt.s3]` section with bucket, region, credentials
+- Requires: Ports 80 and 443 accessible, S3 bucket with proper IAM permissions
+
+**Key files**: `internal/tls/manager.go`, `internal/tls/storage/s3_cache.go`
+
 ## Retry Logic
 
 Implemented in `internal/delivery/retry_scheduler.go`:
@@ -251,7 +285,7 @@ Implemented in `internal/delivery/retry_scheduler.go`:
 - Database errors are logged but don't crash the server
 
 ### Logging
-- Use structured logging with `zap`
+- Use structured logging with `log/slog` (Go standard library)
 - Log levels: DEBUG (DNS queries), INFO (delivery success), WARN (retries), ERROR (permanent failures)
 - Include relevant context: `message_id`, `to_domain`, `attempt`, etc.
 
@@ -302,8 +336,8 @@ Major dependencies (see `go.mod`):
 - `github.com/mattn/go-sqlite3`: SQLite driver (CGO required)
 - `github.com/emersion/go-message`: Email message parsing/construction
 - `github.com/hashicorp/memberlist`: Gossip protocol for clustering
-- `go.uber.org/zap`: Structured logging
 - `github.com/prometheus/client_golang`: Metrics
+- `log/slog`: Structured logging (Go standard library)
 
 ## Documentation Files
 

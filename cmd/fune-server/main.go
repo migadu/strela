@@ -316,8 +316,8 @@ func main() {
 	// Initialize MX lookup with DNS resolver configuration
 	mxLookup := delivery.NewMXLookup(q, &cfg.DNS, &cfg.Outbound, logger)
 
-	// Initialize deliverer
-	deliverer := delivery.NewDeliverer(&cfg.Outbound, mxLookup, logger, &cfg.Reputation)
+	// Initialize deliverer with ARC and SRS config
+	deliverer := delivery.NewDeliverer(&cfg.Outbound, mxLookup, logger, &cfg.Reputation, &cfg.ARC, &cfg.SRS)
 
 	// Wire metrics to deliverer
 	if m != nil {

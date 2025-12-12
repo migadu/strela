@@ -135,7 +135,7 @@ backend fune_servers
 ### Evidence
 ```go
 // internal/recovery/recovery.go
-func SafeGo(logger *zap.Logger, context string, fn func()) {
+func SafeGo(logger *slog.Logger, context string, fn func()) {
     go func() {
         defer RecoverPanic(logger, context)
         fn()
@@ -167,7 +167,7 @@ func SafeGo(logger *zap.Logger, context string, fn func()) {
   - HTTP request latency
   - IP reputation tracking
 
-- **Structured Logging**: zap logger with proper levels
+- **Structured Logging**: slog (Go standard library) with proper levels
   - DEBUG: DNS queries, cache hits/misses
   - INFO: Successful deliveries, config changes
   - WARN: Retries, circuit breaker opens

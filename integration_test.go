@@ -195,7 +195,7 @@ func TestFullMessageFlow(t *testing.T) {
 	}
 	mxLookup := delivery.NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
-	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
+	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	callbackCfg := &config.CallbacksConfig{
 		WebhookURL:               "http://localhost:9999/webhook",
@@ -468,7 +468,7 @@ func TestWorkerLifecycle(t *testing.T) {
 	}
 	mxLookup := delivery.NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
-	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
+	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg, nil, nil)
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackCfg, logger)
 
@@ -832,7 +832,7 @@ func TestConcurrentWorkers(t *testing.T) {
 	}
 	mxLookup := delivery.NewMXLookup(q, dnsCfg, deliveryCfg, logger)
 	reputationCfg := &config.ReputationConfig{EnableIPTracking: false}
-	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg)
+	deliverer := delivery.NewDeliverer(deliveryCfg, mxLookup, logger, reputationCfg, nil, nil)
 	retryScheduler := delivery.NewRetryScheduler(deliveryCfg)
 	callbackHandler := callback.NewCallbackHandler(q, callbackCfg, logger)
 

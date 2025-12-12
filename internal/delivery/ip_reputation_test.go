@@ -801,7 +801,7 @@ func TestDelivery_Integration_ReputationTracking(t *testing.T) {
 
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	// Test 1: All IPs should be healthy initially
 	allIPs := deliverer.ipRotator.GetAllIPs()
@@ -891,7 +891,7 @@ func TestDelivery_Integration_AllIPsDegraded(t *testing.T) {
 
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	deliveryInfo := DeliveryInfo{
 		From:    "sender@example.com",
@@ -948,7 +948,7 @@ func TestDelivery_Integration_NonReputationError(t *testing.T) {
 
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	deliveryInfo := DeliveryInfo{
 		From:    "sender@example.com",
@@ -1000,7 +1000,7 @@ func TestDelivery_Integration_ReputationTrackingDisabled(t *testing.T) {
 
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	deliveryInfo := DeliveryInfo{
 		From:    "sender@example.com",

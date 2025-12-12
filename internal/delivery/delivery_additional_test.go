@@ -27,7 +27,7 @@ func TestDeliverer_GetCircuitBreaker(t *testing.T) {
 	q := &queue.Queue{}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	cb := deliverer.GetCircuitBreaker()
 	if cb == nil {
@@ -52,7 +52,7 @@ func TestDeliverer_GetCircuitBreaker_Disabled(t *testing.T) {
 	q := &queue.Queue{}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	cb := deliverer.GetCircuitBreaker()
 	if cb != nil {
@@ -77,7 +77,7 @@ func TestDeliverer_GetReputationTracker(t *testing.T) {
 	q := &queue.Queue{}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	tracker := deliverer.GetReputationTracker()
 	if tracker == nil {
@@ -152,7 +152,7 @@ func TestAttemptDelivery_NetworkMismatch(t *testing.T) {
 	q := &queue.Queue{}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	msg := &queue.QueuedMessage{
 		MessageID: "test_msg",
@@ -197,7 +197,7 @@ func TestAttemptDelivery_IPv6SourceIPv4Target(t *testing.T) {
 	q := &queue.Queue{}
 	dnsCfg := &config.DNSConfig{}
 	mxLookup := NewMXLookup(q, dnsCfg, cfg, logger)
-	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg)
+	deliverer := NewDeliverer(cfg, mxLookup, logger, reputationCfg, nil, nil)
 
 	msg := &queue.QueuedMessage{
 		MessageID: "test_msg",
