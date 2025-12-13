@@ -126,25 +126,6 @@ func (rc *ReloadableConfig) GetOutbound() OutboundConfig {
 	return rc.config.Outbound
 }
 
-// GetQueue returns a copy of the Queue configuration section.
-//
-// Convenience method for accessing queue and worker pool settings without
-// retrieving the entire configuration. Thread-safe for concurrent access.
-func (rc *ReloadableConfig) GetQueue() QueueConfig {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	return rc.config.Queue
-}
-
-// GetCallbacks returns a copy of the Callbacks configuration section.
-//
-// Convenience method for accessing webhook settings without retrieving
-// the entire configuration. Thread-safe for concurrent access.
-func (rc *ReloadableConfig) GetCallbacks() CallbacksConfig {
-	rc.mu.RLock()
-	defer rc.mu.RUnlock()
-	return rc.config.Callbacks
-}
 
 // RegisterReloadCallback registers a callback function to be invoked during reload.
 //
@@ -254,10 +235,10 @@ func (rc *ReloadableConfig) Reload() error {
 	rc.mu.Unlock()
 
 	rc.logger.Info("configuration reloaded successfully",
-		"source_ips", len(newConfig.Outbound.SourceIPs),
+		"source_ips_v4", len(newConfig.Outbound.SourceIPsV4),
+		"source_ips_v6", len(newConfig.Outbound.SourceIPsV6),
 		"tls_enabled", newConfig.TLS.Enabled,
-		"metrics_enabled", newConfig.Metrics.Enabled,
-		"circuit_breaker_enabled", newConfig.Outbound.CircuitBreakerEnabled)
+		"metrics_enabled", newConfig.Metrics.Enabled)
 
 	return nil
 }
@@ -268,10 +249,7 @@ func (rc *ReloadableConfig) Reload() error {
 // changes that would require service restart or could cause data loss.
 //
 // Validated fields:
-//   - database_path: Changing would abandon the current database file
 //   - Inbound.Listen: Changing requires stopping and restarting HTTP server
-//   - Queue.WorkerCount: Changing requires stopping and restarting worker pool
-//   - Callbacks.WebhookURL: Changing would lose in-flight callbacks
 //
 // If validation fails, the reload is aborted and a descriptive error is returned
 // indicating which field changed and what the old/new values were.
@@ -279,28 +257,10 @@ func (rc *ReloadableConfig) Reload() error {
 // This validation ensures the service maintains consistency and prevents
 // configuration mistakes from causing production issues.
 func (rc *ReloadableConfig) validateReload(oldCfg, newCfg *Config) error {
-	// Database path cannot change (would require migration)
-	if oldCfg.Server.DatabasePath != newCfg.Server.DatabasePath {
-		return fmt.Errorf("database_path cannot be changed during reload (old: %s, new: %s)",
-			oldCfg.Server.DatabasePath, newCfg.Server.DatabasePath)
-	}
-
 	// HTTP listen address cannot change (would require server restart)
 	if oldCfg.Inbound.Listen != newCfg.Inbound.Listen {
 		return fmt.Errorf("http.listen cannot be changed during reload (old: %s, new: %s)",
 			oldCfg.Inbound.Listen, newCfg.Inbound.Listen)
-	}
-
-	// Worker count cannot change (would require worker pool restart)
-	if oldCfg.Queue.WorkerCount != newCfg.Queue.WorkerCount {
-		return fmt.Errorf("worker_count cannot be changed during reload (old: %d, new: %d)",
-			oldCfg.Queue.WorkerCount, newCfg.Queue.WorkerCount)
-	}
-
-	// Webhook URL cannot change (would require callback handler restart)
-	if oldCfg.Callbacks.WebhookURL != newCfg.Callbacks.WebhookURL {
-		return fmt.Errorf("webhook_url cannot be changed during reload (old: %s, new: %s)",
-			oldCfg.Callbacks.WebhookURL, newCfg.Callbacks.WebhookURL)
 	}
 
 	return nil

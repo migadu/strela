@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"fune/internal/config"
+	"fune/internal/recovery"
 )
 
 // IPState represents the health state of a source IP address.
@@ -339,8 +340,8 @@ func (rt *IPReputationTracker) sendAlert(alert ReputationAlert) {
 		return // No webhook configured
 	}
 
-	// Send in background to not block delivery
-	go func() {
+	// Send in background to not block delivery with panic recovery
+	recovery.SafeGo(rt.logger, "reputation-alert", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rt.config.AlertTimeoutSeconds)*time.Second)
 		defer cancel()
 
@@ -386,7 +387,7 @@ func (rt *IPReputationTracker) sendAlert(alert ReputationAlert) {
 				"event_type", alert.EventType,
 				"status_code", resp.StatusCode)
 		}
-	}()
+	})
 }
 
 // DeliveryInfo contains contextual information about a delivery attempt,

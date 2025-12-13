@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -20,22 +21,13 @@ func TestReloadableConfig_Reload(t *testing.T) {
 listen = ":8080"
 auth_token = "initial-token"
 max_body_size_bytes = 10485760
-
-[queue]
-database_path = "./queue.db"
-worker_count = 10
-batch_size = 5
+max_concurrent_requests = 100
 
 [outbound]
-source_ips = ["192.168.1.100"]
+source_ips_v4 = ["192.168.1.100"]
 source_ip_selection = "round-robin"
 mx_cache_ttl_seconds = 3600
-circuit_breaker_enabled = true
-circuit_breaker_failure_threshold = 5
-
-[callbacks]
-webhook_url = "https://example.com/webhook"
-timeout_seconds = 10
+delivery_timeout_seconds = 30
 `
 	if err := os.WriteFile(configPath, []byte(initialConfig), 0644); err != nil {
 		t.Fatalf("failed to write initial config: %v", err)
@@ -52,11 +44,11 @@ timeout_seconds = 10
 	if cfg.Inbound.AuthToken != "initial-token" {
 		t.Errorf("expected auth_token 'initial-token', got '%s'", cfg.Inbound.AuthToken)
 	}
-	if len(cfg.Outbound.SourceIPs) != 1 {
-		t.Errorf("expected 1 source IP, got %d", len(cfg.Outbound.SourceIPs))
+	if len(cfg.Outbound.SourceIPsV4) != 1 {
+		t.Errorf("expected 1 source IPv4, got %d", len(cfg.Outbound.SourceIPsV4))
 	}
-	if cfg.Outbound.CircuitBreakerFailureThreshold != 5 {
-		t.Errorf("expected threshold 5, got %d", cfg.Outbound.CircuitBreakerFailureThreshold)
+	if cfg.Inbound.MaxConcurrentRequests != 100 {
+		t.Errorf("expected max_concurrent_requests 100, got %d", cfg.Inbound.MaxConcurrentRequests)
 	}
 
 	// Write updated config (valid changes)
@@ -65,22 +57,13 @@ timeout_seconds = 10
 listen = ":8080"
 auth_token = "updated-token"
 max_body_size_bytes = 20971520
-
-[queue]
-database_path = "./queue.db"
-worker_count = 10
-batch_size = 5
+max_concurrent_requests = 200
 
 [outbound]
-source_ips = ["192.168.1.100", "192.168.1.101", "192.168.1.102"]
+source_ips_v4 = ["192.168.1.100", "192.168.1.101", "192.168.1.102"]
 source_ip_selection = "random"
 mx_cache_ttl_seconds = 7200
-circuit_breaker_enabled = true
-circuit_breaker_failure_threshold = 10
-
-[callbacks]
-webhook_url = "https://example.com/webhook"
-timeout_seconds = 10
+delivery_timeout_seconds = 60
 `
 	if err := os.WriteFile(configPath, []byte(updatedConfig), 0644); err != nil {
 		t.Fatalf("failed to write updated config: %v", err)
@@ -96,17 +79,20 @@ timeout_seconds = 10
 	if cfg.Inbound.AuthToken != "updated-token" {
 		t.Errorf("expected auth_token 'updated-token', got '%s'", cfg.Inbound.AuthToken)
 	}
-	if len(cfg.Outbound.SourceIPs) != 3 {
-		t.Errorf("expected 3 source IPs, got %d", len(cfg.Outbound.SourceIPs))
+	if len(cfg.Outbound.SourceIPsV4) != 3 {
+		t.Errorf("expected 3 source IPv4s, got %d", len(cfg.Outbound.SourceIPsV4))
 	}
 	if cfg.Outbound.SourceIPSelection != "random" {
 		t.Errorf("expected source_ip_selection 'random', got '%s'", cfg.Outbound.SourceIPSelection)
 	}
-	if cfg.Outbound.CircuitBreakerFailureThreshold != 10 {
-		t.Errorf("expected threshold 10, got %d", cfg.Outbound.CircuitBreakerFailureThreshold)
-	}
 	if cfg.Inbound.MaxBodySizeBytes != 20971520 {
 		t.Errorf("expected max_body_size 20971520, got %d", cfg.Inbound.MaxBodySizeBytes)
+	}
+	if cfg.Inbound.MaxConcurrentRequests != 200 {
+		t.Errorf("expected max_concurrent_requests 200, got %d", cfg.Inbound.MaxConcurrentRequests)
+	}
+	if cfg.Outbound.DeliveryTimeoutSeconds != 60 {
+		t.Errorf("expected delivery_timeout_seconds 60, got %d", cfg.Outbound.DeliveryTimeoutSeconds)
 	}
 }
 
@@ -121,114 +107,55 @@ func TestReloadableConfig_ReloadValidation(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "database_path changed (should fail)",
-			initialConfig: `
-[server]
-database_path = "./queue.db"
-[inbound]
-listen = ":8080"
-[queue]
-worker_count = 10
-[outbound]
-source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
-`,
-			updatedConfig: `
-[server]
-database_path = "./queue-new.db"
-[inbound]
-listen = ":8080"
-[queue]
-worker_count = 10
-[outbound]
-source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
-`,
-			expectError:   true,
-			errorContains: "database_path cannot be changed",
-		},
-		{
 			name: "listen address changed (should fail)",
 			initialConfig: `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
 source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
 `,
 			updatedConfig: `
 [inbound]
 listen = ":9090"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
 source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
 `,
 			expectError:   true,
 			errorContains: "http.listen cannot be changed",
 		},
 		{
-			name: "worker_count changed (should fail)",
+			name: "source IPs changed (should succeed)",
 			initialConfig: `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
-source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
+source_ips = ["192.168.1.100"]
 `,
 			updatedConfig: `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 20
 [outbound]
-source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
+source_ips = ["192.168.1.100", "192.168.1.101"]
 `,
-			expectError:   true,
-			errorContains: "worker_count cannot be changed",
+			expectError: false,
 		},
 		{
-			name: "webhook_url changed (should fail)",
+			name: "delivery timeout changed (should succeed)",
 			initialConfig: `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
 source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
+delivery_timeout_seconds = 30
 `,
 			updatedConfig: `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
 source_ips = []
-[callbacks]
-webhook_url = "https://different.com/webhook"
+delivery_timeout_seconds = 60
 `,
-			expectError:   true,
-			errorContains: "webhook_url cannot be changed",
+			expectError: false,
 		},
 	}
 
@@ -259,7 +186,7 @@ webhook_url = "https://different.com/webhook"
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing '%s', got nil", tt.errorContains)
-				} else if tt.errorContains != "" && !contains(err.Error(), tt.errorContains) {
+				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
 					t.Errorf("expected error containing '%s', got '%s'", tt.errorContains, err.Error())
 				}
 			} else {
@@ -280,13 +207,8 @@ func TestReloadableConfig_ReloadCallback(t *testing.T) {
 	initialConfig := `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
-source_ips = ["192.168.1.100"]
-[callbacks]
-webhook_url = "https://example.com/webhook"
+source_ips_v4 = ["192.168.1.100"]
 `
 	if err := os.WriteFile(configPath, []byte(initialConfig), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -310,13 +232,8 @@ webhook_url = "https://example.com/webhook"
 	updatedConfig := `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
-source_ips = ["192.168.1.100", "192.168.1.101"]
-[callbacks]
-webhook_url = "https://example.com/webhook"
+source_ips_v4 = ["192.168.1.100", "192.168.1.101"]
 `
 	if err := os.WriteFile(configPath, []byte(updatedConfig), 0644); err != nil {
 		t.Fatalf("failed to write updated config: %v", err)
@@ -335,8 +252,8 @@ webhook_url = "https://example.com/webhook"
 	// Verify callback received new config
 	if callbackConfig == nil {
 		t.Error("callback config is nil")
-	} else if len(callbackConfig.Outbound.SourceIPs) != 2 {
-		t.Errorf("expected 2 source IPs in callback, got %d", len(callbackConfig.Outbound.SourceIPs))
+	} else if len(callbackConfig.Outbound.SourceIPsV4) != 2 {
+		t.Errorf("expected 2 source IPv4s in callback, got %d", len(callbackConfig.Outbound.SourceIPsV4))
 	}
 }
 
@@ -349,13 +266,8 @@ func TestReloadableConfig_InvalidSyntax(t *testing.T) {
 	validConfig := `
 [inbound]
 listen = ":8080"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
 [outbound]
 source_ips = []
-[callbacks]
-webhook_url = "https://example.com/webhook"
 `
 	if err := os.WriteFile(configPath, []byte(validConfig), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -371,7 +283,6 @@ webhook_url = "https://example.com/webhook"
 [inbound]
 listen = ":8080"
 invalid syntax here!
-[queue]
 `
 	if err := os.WriteFile(configPath, []byte(invalidConfig), 0644); err != nil {
 		t.Fatalf("failed to write invalid config: %v", err)
@@ -400,16 +311,11 @@ func TestReloadableConfig_GetMethods(t *testing.T) {
 [inbound]
 listen = ":8080"
 auth_token = "test-token"
-[queue]
-database_path = "./queue.db"
-worker_count = 10
-batch_size = 5
+max_concurrent_requests = 100
 [outbound]
 source_ips = ["192.168.1.100"]
 source_ip_selection = "round-robin"
-[callbacks]
-webhook_url = "https://example.com/webhook"
-timeout_seconds = 10
+delivery_timeout_seconds = 30
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -425,24 +331,15 @@ timeout_seconds = 10
 	if inboundCfg.Listen != ":8080" {
 		t.Errorf("GetInbound: expected listen ':8080', got '%s'", inboundCfg.Listen)
 	}
+	if inboundCfg.MaxConcurrentRequests != 100 {
+		t.Errorf("GetInbound: expected max_concurrent_requests 100, got %d", inboundCfg.MaxConcurrentRequests)
+	}
 
 	outboundCfg := rc.GetOutbound()
 	if outboundCfg.SourceIPSelection != "round-robin" {
 		t.Errorf("GetOutbound: expected source_ip_selection 'round-robin', got '%s'", outboundCfg.SourceIPSelection)
 	}
-
-	queueCfg := rc.GetQueue()
-	if queueCfg.BatchSize != 5 {
-		t.Errorf("GetQueue: expected batch_size 5, got %d", queueCfg.BatchSize)
+	if outboundCfg.DeliveryTimeoutSeconds != 30 {
+		t.Errorf("GetOutbound: expected delivery_timeout_seconds 30, got %d", outboundCfg.DeliveryTimeoutSeconds)
 	}
-
-	callbacksCfg := rc.GetCallbacks()
-	if callbacksCfg.TimeoutSeconds != 10 {
-		t.Errorf("GetCallbacks: expected timeout 10, got %d", callbacksCfg.TimeoutSeconds)
-	}
-}
-
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && s[0:len(substr)] == substr || len(s) > len(substr) && contains(s[1:], substr)
 }

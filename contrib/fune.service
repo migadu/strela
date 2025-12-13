@@ -1,6 +1,7 @@
 [Unit]
-Description=Fune SMTP Delivery Service
-After=network.target
+Description=Fune v2.0 SMTP Delivery Gateway (Synchronous)
+After=network-online.target
+Wants=network-online.target
 Documentation=https://github.com/migadu/fune
 
 [Service]
@@ -8,22 +9,46 @@ Type=simple
 User=fune
 Group=fune
 WorkingDirectory=/opt/fune
-ExecStart=/opt/fune/bin/fune-server -config /etc/fune/config.toml
+ExecStart=/opt/fune/bin/fune-server --config /etc/fune/config.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10s
+
+# v2.0: High file descriptor limits for concurrent connections
+# Each concurrent request may open: socket to caller + socket to MX + DNS
+# Recommended: 2-3x max_concurrent_requests
+LimitNOFILE=65536
+
+# v2.0: Memory limits (adjust based on load testing)
+# Estimated: ~10-50MB base + ~1-5MB per concurrent request
+# For 200 concurrent: ~1GB should be safe
+# MemoryMax=2G
+# MemoryHigh=1500M
+
+# Graceful shutdown timeout (allow in-flight deliveries to complete)
+# Should be > delivery_timeout_seconds from config
+TimeoutStopSec=90s
 
 # Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/fune /var/log/fune
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+
+# v2.0: Only need write access for Let's Encrypt cache (if using file storage)
+ReadWritePaths=/var/lib/fune
 
 # Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=fune
+
+# Watchdog (optional - requires systemd notify support in code)
+# WatchdogSec=30s
 
 [Install]
 WantedBy=multi-user.target

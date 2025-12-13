@@ -1,13 +1,15 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 )
 
 func TestRateLimiter_Allow(t *testing.T) {
-	rl := NewRateLimiter(3, 10) // 3 requests per 10 seconds
+	rl := NewRateLimiter(3, 10, slog.New(slog.NewTextHandler(os.Stdout, nil))) // 3 requests per 10 seconds
 	defer rl.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/messages", nil)
@@ -32,7 +34,7 @@ func TestRateLimiter_Allow(t *testing.T) {
 }
 
 func TestRateLimiter_WindowRefill(t *testing.T) {
-	rl := NewRateLimiter(2, 1) // 2 requests per 1 second
+	rl := NewRateLimiter(2, 1, slog.New(slog.NewTextHandler(os.Stdout, nil))) // 2 requests per 1 second
 	defer rl.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/messages", nil)
@@ -64,7 +66,7 @@ func TestRateLimiter_WindowRefill(t *testing.T) {
 }
 
 func TestRateLimiter_DifferentIPs(t *testing.T) {
-	rl := NewRateLimiter(2, 10) // 2 requests per 10 seconds
+	rl := NewRateLimiter(2, 10, slog.New(slog.NewTextHandler(os.Stdout, nil))) // 2 requests per 10 seconds
 	defer rl.Stop()
 
 	req1 := httptest.NewRequest("POST", "/v1/messages", nil)
@@ -158,7 +160,7 @@ func TestExtractIP(t *testing.T) {
 
 func TestRateLimiter_Cleanup(t *testing.T) {
 	// Use 1 second window, cleanup runs every 2 seconds by default
-	rl := NewRateLimiter(10, 1) // 10 requests per 1 second
+	rl := NewRateLimiter(10, 1, slog.New(slog.NewTextHandler(os.Stdout, nil))) // 10 requests per 1 second
 	defer rl.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/messages", nil)
@@ -190,7 +192,7 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 }
 
 func TestRateLimiter_XForwardedForWithSpaces(t *testing.T) {
-	rl := NewRateLimiter(2, 10)
+	rl := NewRateLimiter(2, 10, slog.New(slog.NewTextHandler(os.Stdout, nil)))
 	defer rl.Stop()
 
 	req := httptest.NewRequest("POST", "/v1/messages", nil)

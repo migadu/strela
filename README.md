@@ -1,147 +1,75 @@
-# Fune - High-Performance SMTP Delivery Service
+# Fune - Synchronous SMTP Delivery Gateway
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/migadu/fune/master/assets/fune-logo.png" alt="Fune Logo" width="200"/>
-</p>
+Fune is a high-performance, stateless SMTP delivery service written in Go.
+It accepts email messages via HTTP API and delivers them synchronously to
+recipient MX servers with intelligent source IP rotation and reputation management.
 
-<p align="center">
-  <strong>A production-ready, queue-based SMTP delivery service with direct MX delivery, intelligent retry logic, IP reputation management, and comprehensive monitoring.</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/migadu/fune/actions"><img src="https://github.com/migadu/fune/workflows/Go/badge.svg" alt="Build Status"></a>
-  <a href="https://goreportcard.com/report/github.com/migadu/fune"><img src="https://goreportcard.com/badge/github.com/migadu/fune" alt="Go Report Card"></a>
-  <a href="https://godoc.org/github.com/migadu/fune"><img src="https://godoc.org/github.com/migadu/fune?status.svg" alt="GoDoc"></a>
-</p>
-
----
-
-Fune is a modern, reliable, and high-performance email delivery service built in Go. It accepts messages via a simple HTTP API, queues them persistently, and delivers them directly to recipient MX servers. It's designed for developers and businesses who need a robust, self-hosted email sending solution without the complexity of traditional mail servers.
-
-## Features
-
-- **Queue-Based Architecture**: Asynchronously processes messages for high throughput and reliability.
-- **Direct MX Delivery**: Delivers email directly to the recipient's mail server, bypassing relays.
-- **Intelligent Retries**: Exponential backoff and greylisting handling ensure your emails get delivered.
-- **IP Reputation Management**: Automatically detects and manages degraded IPs to protect your deliverability.
-- **Webhook Callbacks**: Get real-time notifications for delivery events (delivered, bounced, failed).
-- **DKIM Signing**: Sign your emails with DKIM for better security and deliverability.
-- **Clustering Support**: Scale horizontally with optional clustering for high availability.
-- **Prometheus Metrics**: In-depth monitoring of queues, deliveries, and performance.
-- **Hot Reload**: Update configuration without downtime.
-
-For a full list of features and detailed technical information, please see our [**Technical Documentation**](docs/README.md).
+## Key Features
+- **Synchronous delivery** - Immediate SMTP results via JSON response
+- **Stateless** - No database, no queue, no persistence
+- **Concurrent** - Handles hundreds of simultaneous deliveries
+- **Production-ready** - Timeout handling, rate limiting, circuit protection, Prometheus metrics
 
 ## Quick Start
 
-1.  **Build the binaries:**
-    ```bash
-    make all
-    ```
+### Build and Run
+```bash
+go build -o fune-server cmd/fune-server/main.go
+./fune-server
+```
 
-2.  **Configure Fune:**
-    Copy the example configuration and edit it to your needs.
-    ```bash
-    cp config.toml.example config.toml
-    nano config.toml
-    ```
+### Send Email
+```bash
+curl -X POST http://localhost:8025/v1/deliver \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": "sender@example.com",
+    "to": "recipient@example.com",
+    "subject": "Hello Fune",
+    "text": "This is a test email sent via Fune."
+  }'
+```
 
-3.  **Run the server:**
-    ```bash
-    ./bin/fune-server
-    ```
-
-4.  **Send a test message:**
-    ```bash
-    curl -X POST http://localhost:8080/v1/messages \
-      -H "Authorization: Bearer your-secret-token" \
-      -H "Content-Type: application/json" \
-      -d 
-      {
-        "from": "sender@example.com",
-        "to": "recipient@example.com",
-        "subject": "Hello from Fune!",
-        "text": "This is a test message."
-      }
-    ```
+Response (200 OK):
+```json
+{
+  "status": "delivered",
+  "smtp_code": 250,
+  "smtp_message": "2.0.0 OK",
+  "mx_host": "mx1.recipient.com",
+  "source_ip": "192.168.1.100",
+  "attempt_duration_ms": 1234
+}
+```
 
 ## Configuration
 
-Fune is configured using a `config.toml` file. A minimal configuration looks like this:
+Configuration is handled via `config.toml`. See `config.toml.example` for all options.
 
 ```toml
-[server]
-database_path = "./queue.db"
+[inbound]
+listen = ":8025"
+max_concurrent_requests = 200
 
-[http]
-listen = ":8080"
-auth_token = "your-secret-token"
-
-[queue]
-worker_count = 10
-
-[delivery]
-source_ips = ["192.168.1.100"]
-max_message_age_hours = 48
-
-[callbacks]
-webhook_url = "https://your-app.com/webhooks/delivery"
-auth_token = "webhook-secret"
+[outbound]
+delivery_timeout_seconds = 30
+per_domain_interval_seconds = 2
 ```
 
-For a complete list of all configuration options, please see the [**`config.toml.example`**](config.toml.example) file.
+## Architecture
 
-## API
+Fune acts as a gateway between your application and external SMTP servers.
 
-Submit a message for delivery by making a POST request to the `/v1/messages` endpoint.
-
-**Request:**
-```http
-POST /v1/messages
-Host: localhost:8080
-Authorization: Bearer your-secret-token
-Content-Type: application/json
-
-{
-  "from": "sender@example.com",
-  "to": "recipient@example.com",
-  "subject": "Test Subject",
-  "text": "Plain text body",
-  "html": "<p>HTML body</p>"
-}
+```
+HTTP Request -> Fune -> MX Lookup -> SMTP Delivery -> HTTP Response
 ```
 
-**Response (200 OK):**
-```json
-{
-  "message_id": "msg_679d8a4c2f4h3k9d2j",
-  "status": "queued",
-  "queued_at": "2025-01-15T10:30:00Z"
-}
-```
-
-For more details on the API, including DKIM signing and idempotency, see the [**Component Details**](docs/components.md) section in our documentation.
-
-## Documentation
-
-Comprehensive documentation is available in the [`docs/`](docs/) directory:
-
-- **[Documentation Index](docs/README.md)** - Start here for an overview
-- **[Architecture Overview](docs/architecture.md)** - System design and philosophy
-- **[Deployment Guide](docs/deployment.md)** - Production deployment instructions
-- **[Monitoring Guide](docs/monitoring.md)** - Metrics, logging, and health checks
-- **[Security Features](docs/security.md)** - Authentication, TLS, and security best practices
-- **[Error Handling](docs/error-handling.md)** - Retry logic and error classification
-- **[Circuit Breaker](docs/circuit-breaker.md)** - Failover and circuit breaker pattern
-- **[IP Reputation](docs/ip-reputation.md)** - IP reputation tracking and management
-- **[Backup & Restore](docs/backups.md)** - Backup strategies and procedures
-- **[Disaster Recovery](docs/disaster-recovery.md)** - Emergency runbooks and incident response
-- **[Testing Guide](docs/testing.md)** - How to run and write tests
-
-## Contributing
-
-We welcome contributions! Please see our [contributing guidelines](CONTRIBUTING.md) for more information.
+It handles:
+- **DNS Resolution**: Caching MX lookups
+- **IP Rotation**: Rotating source IPs for better deliverability
+- **Rate Limiting**: Protecting destination domains from flood
+- **IP Reputation**: Monitoring and avoiding degraded source IPs
 
 ## License
 
-Fune is licensed under the [MIT License](LICENSE).
+MIT

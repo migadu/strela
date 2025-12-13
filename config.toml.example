@@ -1,272 +1,132 @@
-# Fune SMTP Delivery Service Configuration
+# Fune v2.0 Configuration Example
+# Synchronous SMTP Delivery Gateway
+# Copy to config.toml and adjust as needed.
 #
-# Hot Reload: Send SIGHUP signal to reload configuration without downtime
-#   kill -HUP <pid>  OR  systemctl reload fune  OR  fune-admin reload
-#
-# Reloadable: source_ips, source_ip_selection, rate limits, circuit breaker, DNS, TLS certs, HTTP timeouts
-# Non-reloadable: database_path, listen address, worker_count, webhook_url (require restart)
+# IMPORTANT: v2.0 is a synchronous delivery model
+# - HTTP requests block until SMTP delivery completes (or times out)
+# - Caller MUST implement queue + retry logic
+# - No database/queue managed by Fune
 
-# ============================================================================
-# Server Configuration
-# Core server settings including database location and process management
-# ============================================================================
-[server]
-database_path = "./queue.db"                    # SQLite database path (shared by server and admin tools)
-pid_file = "fune.pid"                           # PID file location for process management
-
-# ============================================================================
-# Logging Configuration
-# Configure log output level and format
-# See DOCUMENTATION.md for systemd integration and best practices
-# ============================================================================
 [logging]
-level = "info"                                  # Log level: debug, info, warn, error
-format = "console"                              # Output format: console (human-readable) or json (structured)
+output = "stderr"    # stderr, stdout, syslog, or /path/to/file.log
+format = "console"   # console (human-readable), json (structured)
+level = "info"       # debug, info, warn, error
 
-# ============================================================================
-# Inbound Configuration
-# HTTP API server settings for message submission
-# ============================================================================
 [inbound]
-listen = ":8080"                                # Listen address (port or host:port)
-auth_token = "your-secret-token-here"           # API authentication token (empty = no auth)
-max_body_size_bytes = 36700160                  # Max request body size (35MB default) - prevents DoS
-read_timeout_seconds = 30                       # Request read timeout [HOT RELOAD]
-write_timeout_seconds = 30                      # Response write timeout [HOT RELOAD]
-idle_timeout_seconds = 120                      # Keep-alive idle timeout [HOT RELOAD]
+listen = ":443"
+auth_token = "change-me-in-production"  # Bearer token for API authentication
+max_body_size_bytes = 36700160          # 35MB (maximum message size)
 
-# Rate limiting per IP address (token bucket algorithm)
-rate_limit_enabled = false                      # Enable HTTP rate limiting (recommended for production)
-rate_limit_requests_per_ip = 100                # Maximum requests per IP address per window
-rate_limit_window_seconds = 60                  # Time window in seconds (default: 60s = 100 req/min)
+# Timeouts - IMPORTANT for synchronous model
+read_timeout_seconds = 30               # Time to read request body
+write_timeout_seconds = 90              # MUST be > delivery_timeout_seconds + margin
+idle_timeout_seconds = 120              # Keep-alive timeout
 
-# Idempotency prevents duplicate message delivery
-idempotency_enabled = false                     # Enable idempotency key support
-idempotency_header = "X-Idempotency-Key"        # HTTP header name for idempotency key
-idempotency_ttl_hours = 24                      # How long to remember idempotency keys
+# Rate limiting (per source IP)
+rate_limit_enabled = false
+rate_limit_requests_per_ip = 100
+rate_limit_window_seconds = 60
 
-# ============================================================================
-# TLS/HTTPS Configuration
-# Enable HTTPS with either file-based certificates or automatic Let's Encrypt
-# See DOCUMENTATION.md for detailed TLS setup instructions
-# ============================================================================
+# Concurrency limiting - CRITICAL for preventing overload
+max_concurrent_requests = 200           # Maximum concurrent HTTP requests (0 = unlimited)
+                                        # When limit reached: returns 503 Service Unavailable
+                                        # Recommended: 100-500 depending on available resources
+                                        # Each request holds a goroutine + network connections
+
 [tls]
-enabled = false                                 # Enable HTTPS/TLS
-provider = "file"                               # TLS provider: "file" or "letsencrypt"
+enabled = false
+# provider = "file"                      # "file" or "letsencrypt"
+# cert_file = "/etc/ssl/certs/mail.pem"  # For provider = "file"
+# key_file = "/etc/ssl/private/mail.key" # For provider = "file"
 
-# File-based certificates (for provider="file")
-# Certificate and key files are loaded from the specified paths
-# Supports hot reload: certificates are automatically reloaded when files change
-cert_file = "/path/to/cert.pem"                 # Full path to PEM-encoded certificate file
-key_file = "/path/to/key.pem"                   # Full path to PEM-encoded private key file
-
-# Let's Encrypt automatic certificate management
-# Supports two storage backends: "file" (single-node) or "s3" (multi-node cluster)
-# Requires: ports 80 and 443 accessible for ACME HTTP-01 challenges
 [tls.letsencrypt]
-email = "admin@example.com"                     # Email for Let's Encrypt notifications
-domains = ["mail.example.com"]                  # Domains for certificate (supports multiple)
-storage_provider = "s3"                         # Certificate storage: "file" or "s3" (default: s3)
+# email = "admin@example.com"
+# domains = ["mail.example.com"]
+# storage_provider = "file"              # "file" (single node) or "s3" (cluster)
+# cache_dir = "/var/lib/fune/letsencrypt" # For storage_provider = "file"
 
-# File storage backend (for single-node deployments)
-# Certificates stored locally on filesystem using autocert.DirCache
-# Directory created automatically with 0700 permissions if it doesn't exist
-# Does NOT require gossip.enabled = true
-cache_dir = "./letsencrypt-cache"               # Local directory for certificate cache (default: ./letsencrypt-cache)
-
-# S3 storage backend (for multi-node cluster deployments)
-# Requires: gossip.enabled = true for leader-based coordination
-# All cluster nodes read from S3; leader node handles ACME challenges and renewals
 [tls.letsencrypt.s3]
-bucket = "fune-tls-certificates"                # S3 bucket for certificate storage
-region = "us-east-1"                            # AWS region (optional)
-# access_key_id = ""                            # AWS credentials (optional, uses default chain)
-# secret_access_key = ""                        # AWS secret (optional)
+# Required for storage_provider = "s3"
+# bucket = "fune-letsencrypt"
+# region = "us-east-1"
+# access_key_id = "AKIAIOSFODNN7EXAMPLE"
+# secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
-# ============================================================================
-# Metrics Configuration
-# Prometheus metrics endpoint for monitoring
-# ============================================================================
-[metrics]
-enabled = true                                  # Enable Prometheus metrics endpoint
-path = "/metrics"                               # Metrics endpoint path
-username = "admin"                              # HTTP Basic Auth username (recommended for production)
-password = "secure-random-password"             # HTTP Basic Auth password (use strong password)
-
-# ============================================================================
-# Health Check Configuration
-# Health endpoint for cluster status, queue stats, and system health
-# ============================================================================
-[health]
-enabled = true                                  # Enable health check endpoint
-listen_addr = ":8080"                           # Health endpoint listen address
-username = ""                                   # HTTP Basic Auth username (optional)
-password = ""                                   # HTTP Basic Auth password (optional)
-
-# ============================================================================
-# Queue Configuration
-# Message queue processing and worker settings
-# ============================================================================
-[queue]
-worker_count = 10                               # Concurrent delivery workers per instance
-batch_size = 5                                  # Messages to process per worker iteration
-cleanup_interval_seconds = 60                   # How often to cleanup expired messages
-poll_interval_seconds = 30                      # Fallback poll interval (uses notifications when available)
-
-# ============================================================================
-# DNS Configuration
-# DNS resolver settings for MX record lookups
-# ============================================================================
 [dns]
-resolvers = ["8.8.8.8:53", "[2001:4860:4860::8888]:53"]  # DNS servers (empty = system default)
-timeout_seconds = 5                             # DNS query timeout
-cache_ttl_seconds = 3600                        # Cache successful lookups (1 hour) [HOT RELOAD]
-cache_negative_ttl_seconds = 60                 # Cache failed lookups (1 minute) [HOT RELOAD]
+# Custom DNS resolvers (optional - uses system default if not specified)
+# resolvers = ["8.8.8.8:53", "1.1.1.1:53"]  # Supports IPv6: ["2001:4860:4860::8888:53"]
+timeout_seconds = 5                         # DNS query timeout
+cache_ttl_seconds = 3600                    # Cache successful MX lookups (1 hour)
+cache_negative_ttl_seconds = 60             # Cache failed MX lookups (1 minute)
 
-# ============================================================================
-# Outbound Configuration
-# SMTP delivery settings including source IPs, timeouts, and retry logic
-# ============================================================================
+[metrics]
+enabled = true
+path = "/metrics"                           # Prometheus metrics endpoint
+# username = "admin"                        # Optional basic auth
+# password = "secure-password"
+
+[health]
+enabled = true
+listen_addr = ":8080"                       # Health check endpoint (separate from main API)
+
 [outbound]
-# Source IP configuration [HOT RELOAD]
-source_ips = ["192.168.1.100", "192.168.1.101", "2001:db8::1"]  # Outbound IPs (supports IPv4/IPv6)
-source_ip_selection = "round-robin"             # IP selection: "round-robin", "random", "hash-domain" [HOT RELOAD]
+# Source IP configuration - supports individual IPs and CIDR subnets
+# Examples: "192.0.2.1", "192.0.2.0/28" (16 IPs), "2001:db8::1", "2001:db8::/124" (16 IPs)
+# Subnets are expanded on startup. Limits: IPv4 max /22 (1024 IPs), IPv6 max /120 (256 IPs)
 
-# Connection settings
-mx_cache_ttl_seconds = 3600                     # Cache MX records (1 hour)
-connection_timeout_seconds = 30                 # TCP connection timeout
-smtp_timeout_seconds = 60                       # SMTP command timeout
-max_ips_per_mx = 5                              # Max IPs to try per MX host (anti-abuse)
+# IPv6-first delivery (recommended for better deliverability and modern infrastructure)
+prefer_ipv6 = true                          # Try IPv6 first, fall back to IPv4 if unavailable
 
-# Rate limiting [HOT RELOAD]
-per_domain_interval_seconds = 2                 # Minimum seconds between deliveries to same domain
-per_domain_retry_seconds = 5                    # Delay before retrying rate-limited delivery
+# Separate IPv4 and IPv6 source IP pools
+source_ips_v4 = ["192.0.2.1", "192.0.2.2"]  # IPv4 source IPs/subnets
+source_ips_v6 = ["2001:db8::1"]             # IPv6 source IPs/subnets
 
-# Circuit breaker [HOT RELOAD]
-circuit_breaker_enabled = true                  # Enable circuit breaker (stops accepting requests during failures)
-circuit_breaker_failure_threshold = 5           # Consecutive failures before opening circuit
-circuit_breaker_success_threshold = 2           # Consecutive successes to close circuit
-circuit_breaker_open_timeout_seconds = 60       # Seconds to wait before trying half-open state
+source_ip_selection = "round-robin"         # "round-robin", "random", or "hash-domain"
+mx_cache_ttl_seconds = 3600                 # In-memory MX record cache TTL
+max_ips_per_mx = 5                          # Max IP addresses to try per MX host
 
-# Retry configuration
-max_message_age_hours = 48                      # Maximum message age before giving up
-initial_retry_delay_seconds = 300               # Initial retry delay (5 minutes)
-max_retry_delay_seconds = 43200                 # Maximum retry delay (12 hours)
-backoff_multiplier = 2.0                        # Exponential backoff multiplier
-greylist_retry_delay_seconds = 120              # Retry delay for 421 greylist responses (2 minutes)
+# SMTP connection settings
+connection_timeout_seconds = 30             # TCP connection timeout to MX server
+connection_pool_ttl_seconds = 5             # Max time to keep idle connection for reuse
+smtp_timeout_seconds = 60                   # SMTP command/response timeout
 
-# ============================================================================
-# Callback Configuration
-# Webhook callbacks for delivery status notifications
-# ============================================================================
-[callbacks]
-webhook_url = "https://worker.example.com/api/delivery-event"  # Webhook URL for delivery events
-auth_token = "webhook-secret-token"             # Webhook authentication token
-timeout_seconds = 10                            # Webhook request timeout
-max_callback_age_hours = 48                     # Maximum age before giving up on callback
-initial_retry_delay_seconds = 30                # Initial retry delay
-max_retry_delay_seconds = 3600                  # Maximum retry delay (1 hour)
-backoff_multiplier = 2.0                        # Exponential backoff multiplier
-batch_size = 10                                 # Callbacks to process per iteration
+# v2.0 SYNCHRONOUS DELIVERY TIMEOUT - CRITICAL SETTING
+delivery_timeout_seconds = 30               # Maximum time for entire delivery attempt
+                                            # Includes: DNS lookup + TCP connect + SMTP handshake + delivery
+                                            # HTTP response will block for up to this duration
+                                            # Recommended: 30-60s for production
+                                            # NOTE: inbound.write_timeout_seconds must be > this value
 
-# Circuit breaker for webhook failures
-circuit_breaker_enabled = true                  # Enable circuit breaker for webhook
-circuit_breaker_failure_threshold = 5           # Consecutive network failures before opening
-circuit_breaker_success_threshold = 2           # Consecutive successes to close
-circuit_breaker_open_timeout_seconds = 60       # Seconds to wait before trying half-open
+# Per-domain rate limiting - CRITICAL for preventing MX server abuse
+per_domain_interval_seconds = 2             # Minimum seconds between deliveries to same domain
+                                            # Prevents hammering recipient MX servers
+per_domain_burst = 10                       # Burst size (allow X concurrent starts before rate limiting)
+                                            # "Fail Fast": If exceeded, returns 429 Too Many Requests
+per_domain_retry_seconds = 5                # Delay before retrying rate-limited delivery (deprecated in v2.0)
 
-# ============================================================================
-# IP Reputation Configuration
-# Track and manage IP reputation to avoid blacklisting
-# See DOCUMENTATION.md for reputation alert payload schema
-# ============================================================================
 [reputation]
-enable_ip_tracking = true                       # Enable IP reputation tracking
-alert_webhook_url = "https://worker.example.com/api/reputation-alert"  # Reputation alert webhook
-alert_auth_token = "alert-secret-token"         # Alert webhook auth token
-alert_timeout_seconds = 10                      # Alert request timeout
-degraded_retry_hours = 48                       # Hours before retrying degraded IP
-degraded_ip_cleanup_hours = 168                 # Hours to keep degraded IP history (7 days)
+enable_ip_tracking = false                  # Track and rotate out degraded source IPs
+# alert_webhook_url = "https://hooks.slack.com/..."  # Webhook for IP degradation alerts
+degraded_retry_hours = 48                   # Hours before retrying degraded IP
+degraded_ip_cleanup_hours = 168             # Hours before removing from degraded list (7 days)
 
-# ============================================================================
-# Cluster Configuration
-# Distributed coordination using gossip protocol (HashiCorp memberlist)
-# See DOCUMENTATION.md for multi-node setup examples and features
-# ============================================================================
 [cluster]
-enabled = false                                 # Enable cluster mode
-bind_addr = "0.0.0.0"                           # Gossip protocol bind address
-bind_port = 7946                                # Gossip protocol port
-node_id = ""                                    # Unique node ID (defaults to hostname)
-peers = ["fune-1", "fune-2"]                    # Initial seed nodes (only need 1-2, gossip discovers others)
-secret_key = "your-base64-encoded-32-byte-secret-key-here"  # Cluster encryption key (required for production)
+# Optional - only needed for Let's Encrypt with S3 storage
+enabled = false
+# bind_addr = "0.0.0.0"
+# bind_port = 7946
+# secret_key = "base64-encoded-32-byte-key"    # Generate: openssl rand -base64 32
+# peers = ["node2:7946", "node3:7946"]
 
-# ============================================================================
-# ARC Configuration
-# Authenticated Received Chain (RFC 8617) for email forwarding
-# Preserves authentication results across forwarding hops to prevent DMARC failures
-# See DOCUMENTATION.md for ARC setup, key generation, and DNS record configuration
-# ============================================================================
 [arc]
-enabled = false                                 # Enable ARC signing (essential for email forwarding)
-selector = "arc-2024"                           # DNS selector for ARC public key (e.g., arc-2024._domainkey.example.com)
-domain = "example.com"                          # Domain for ARC signing (must match your mail server domain)
-private_key_path = "/etc/fune/keys/arc-private.pem"  # Path to RSA private key (1024 or 2048 bits, PEM format)
-header_canon = "relaxed"                        # Header canonicalization: "relaxed" or "simple" (default: relaxed) [HOT RELOAD]
-body_canon = "relaxed"                          # Body canonicalization: "relaxed" or "simple" (default: relaxed) [HOT RELOAD]
+# Authenticated Received Chain (ARC) signing
+enabled = false
+# selector = "arc"
+# domain = "example.com"
+# private_key_path = "/etc/fune/arc-private.key"
 
-# Generate RSA key pair for ARC:
-#   openssl genrsa -out arc-private.pem 2048
-#   openssl rsa -in arc-private.pem -pubout -out arc-public.pem
-#
-# Extract public key for DNS TXT record:
-#   openssl rsa -in arc-private.pem -pubout -outform PEM | grep -v "PUBLIC KEY" | tr -d '\n'
-#
-# DNS TXT record (add to your domain's DNS):
-#   arc-2024._domainkey.example.com. IN TXT "v=DKIM1; k=rsa; p=MIIBIjANBgkq..."
-#
-# Why use ARC:
-#   - Prevents SPF/DKIM failures when forwarding authenticated emails
-#   - Essential for mailing lists, email forwarding services, and mail relays
-#   - Records authentication results from previous hops in the chain
-#   - Without ARC, forwarded messages may fail DMARC checks at destination
-
-# ============================================================================
-# SRS Configuration
-# Sender Rewriting Scheme (SRS) for envelope sender rewriting
-# Prevents SPF failures when forwarding email by rewriting MAIL FROM addresses
-# See DOCUMENTATION.md for SRS setup, bounce handling, and security considerations
-# ============================================================================
 [srs]
-enabled = false                                 # Enable SRS envelope rewriting (essential for email forwarding)
-domain = "mail.example.com"                     # Domain for rewritten addresses (use your mail server domain)
-secret = "your-secure-random-secret-min-16-chars"  # Secret for HMAC hash (KEEP SECURE, min 16 chars)
-max_age = 21                                    # Maximum age in days for SRS addresses (default: 21) [HOT RELOAD]
-hash_length = 4                                 # Length of hash in SRS address (2-8, default: 4) [HOT RELOAD]
-separator = "="                                 # Separator character (default: "=") [HOT RELOAD]
-always_rewrite = false                          # Always rewrite all senders, not just when forwarding (default: false) [HOT RELOAD]
-
-# How SRS works:
-#   Original MAIL FROM:  user@example.com
-#   Rewritten:           SRS0=HASH=TT=example.com=user@mail.example.com
-#
-# The rewritten address:
-#   - Uses your domain (passes SPF checks with your IPs)
-#   - Encodes original sender (for bounce routing)
-#   - Includes timestamp (prevents replay attacks)
-#   - Has HMAC hash (prevents forgery)
-#
-# Generate a strong secret:
-#   openssl rand -base64 32
-#
-# Why use SRS:
-#   - Prevents SPF failures when forwarding email
-#   - Essential for mail forwarding, mailing lists, and relay services
-#   - Without SRS, forwarded messages fail SPF at destination
-#   - Enables proper bounce handling back to original sender
-#
-# Security considerations:
-#   - Use a strong random secret (min 16 chars, recommended 32+)
-#   - Keep the secret secure and rotate periodically
-#   - Set appropriate max_age to limit address validity
-#   - SRS addresses are meant for temporary use (bounces)
+# Sender Rewriting Scheme (SRS) for forwarding
+enabled = false
+# domain = "mail.example.com"
+# secret = "change-me-to-something-secure"

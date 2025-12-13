@@ -1,31 +1,3 @@
-/*
-Package delivery handles direct SMTP delivery to recipient MX servers.
-
-The delivery engine establishes direct connections to recipient mail servers,
-performs SMTP transactions, and applies intelligent retry logic with exponential
-backoff. It supports IPv6-first delivery, source IP rotation, DKIM signing,
-and destination throttling.
-
-Key Components:
-  - Engine: Main delivery orchestration with context-aware SMTP sessions
-  - MXLookup: DNS MX record resolution with caching
-  - DNSResolver: Custom DNS resolver with round-robin and UDP→TCP fallback
-  - IPRotator: Source IP selection (round-robin, random, hash-domain strategies)
-  - IPReputation: Tracks and removes degraded IPs from rotation
-  - RetryScheduler: Exponential backoff with greylist fast-retry
-  - ErrorClassifier: Categorizes SMTP errors (temporary, permanent, greylist, network)
-  - CircuitBreaker: Prevents accepting messages during delivery failures
-  - DestinationThrottle: Per-domain rate limiting to prevent spam-like behavior
-
-Delivery Flow:
- 1. Resolve MX records (with caching)
- 2. Select source IP based on configured strategy
- 3. Attempt IPv6 connection, fallback to IPv4
- 4. Establish SMTP session with STARTTLS
- 5. Send message (with optional DKIM signing)
- 6. Classify result and schedule retry if needed
- 7. Update IP reputation on permanent failures
-*/
 package delivery
 
 import (
@@ -33,181 +5,73 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"hash/fnv"
-	"io"
 	"log/slog"
 	"math/rand"
 	"net"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"fune/internal/arc"
 	"fune/internal/config"
-	"fune/internal/dkim"
-	"fune/internal/queue"
+	"fune/internal/recovery"
 	"fune/internal/srs"
 
 	"github.com/emersion/go-smtp"
 )
 
-// DestinationThrottle tracks last delivery attempt per domain to prevent spam-like behavior.
-// It enforces a minimum interval between consecutive delivery attempts to the same domain,
-// preventing the delivery engine from appearing as a spam source to recipient servers.
-type DestinationThrottle struct {
-	mu           sync.RWMutex
-	lastAttempts map[string]time.Time
-	minInterval  time.Duration
+// ErrDomainRateLimitExceeded is returned when the domain rate limit is exceeded (Fail Fast).
+var ErrDomainRateLimitExceeded = fmt.Errorf("domain rate limit exceeded")
+
+// DeliveryResult contains the complete result of a delivery attempt.
+type DeliveryResult struct {
+	Status            string `json:"status"`              // "delivered", "temp_fail", "hard_bounce", "timeout", "error"
+	SMTPCode          int    `json:"smtp_code"`           // SMTP response code or 0
+	SMTPMessage       string `json:"smtp_message"`        // SMTP response text
+	MXHost            string `json:"mx_host"`             // MX server hostname
+	SourceIP          string `json:"source_ip"`           // Source IP used
+	AttemptDurationMs int64  `json:"attempt_duration_ms"` // Delivery duration
+	Error             string `json:"error,omitempty"`     // Error details
 }
 
-// NewDestinationThrottle creates a new destination throttle with the specified minimum interval.
-// The minIntervalSeconds parameter defines the minimum seconds between delivery attempts
-// to the same recipient domain.
-func NewDestinationThrottle(minIntervalSeconds int) *DestinationThrottle {
-	return &DestinationThrottle{
-		lastAttempts: make(map[string]time.Time),
-		minInterval:  time.Duration(minIntervalSeconds) * time.Second,
-	}
-}
-
-// ShouldThrottle checks if we should throttle delivery to this domain
-// Returns true if last attempt was too recent, along with time until next allowed attempt
-func (dt *DestinationThrottle) ShouldThrottle(domain string) (bool, time.Duration) {
-	dt.mu.RLock()
-	lastAttempt, exists := dt.lastAttempts[domain]
-	dt.mu.RUnlock()
-
-	if !exists {
-		return false, 0
-	}
-
-	elapsed := time.Since(lastAttempt)
-	if elapsed < dt.minInterval {
-		waitTime := dt.minInterval - elapsed
-		return true, waitTime
-	}
-
-	return false, 0
-}
-
-// RecordAttempt records a delivery attempt to a domain
-func (dt *DestinationThrottle) RecordAttempt(domain string) {
-	dt.mu.Lock()
-	dt.lastAttempts[domain] = time.Now()
-	dt.mu.Unlock()
-}
-
-// Cleanup removes old entries to prevent unbounded memory growth
-func (dt *DestinationThrottle) Cleanup(maxAge time.Duration) {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
-	cutoff := time.Now().Add(-maxAge)
-	for domain, lastAttempt := range dt.lastAttempts {
-		if lastAttempt.Before(cutoff) {
-			delete(dt.lastAttempts, domain)
-		}
-	}
-}
-
-// DeliveryMetrics defines the interface for recording delivery metrics to Prometheus or other
-// monitoring systems. It tracks delivery outcomes, durations, and circuit breaker state changes.
-type DeliveryMetrics interface {
-	RecordDeliveryAttempt(outcome string, duration float64)
-	SetCircuitBreakerState(state int)
-	RecordCircuitBreakerTransition(fromState, toState string)
-}
-
-// Deliverer is the main delivery engine that handles direct SMTP delivery to recipient MX servers.
-// It coordinates MX lookups, source IP rotation, SMTP session management, delivery attempts,
-// error classification, retry scheduling, and IP reputation tracking. The engine attempts IPv6
-// first before falling back to IPv4, and supports DKIM signing, ARC signing, SRS rewriting, and
-// STARTTLS encryption.
+// Deliverer is the main delivery engine that handles direct SMTP delivery.
 type Deliverer struct {
-	mu                sync.RWMutex
 	config            *config.OutboundConfig
 	arcConfig         *config.ARCConfig
 	mxLookup          *MXLookup
 	logger            *slog.Logger
 	ipRotator         *IPRotator
-	throttle          *DestinationThrottle
-	circuitBreaker    *CircuitBreaker
-	metrics           DeliveryMetrics
 	reputationTracker *IPReputationTracker
-	arcPrivateKey     string   // Cached ARC private key
-	srs               *srs.SRS // SRS instance for envelope rewriting
+	arcPrivateKey     string
+	srs               *srs.SRS
+	domainLimiters    sync.Map // map[string]*domainRateLimiter
+	metrics           DeliveryMetrics
+	pool              *ConnectionPool
 }
 
-// DeliveryResult contains the complete result of a delivery attempt, including success status,
-// SMTP response codes, the MX host used, the source IP used, any errors encountered, and
-// the duration of the attempt in milliseconds.
-type DeliveryResult struct {
-	Success      bool
-	SMTPCode     int
-	SMTPResponse string
-	MXHost       string
-	SourceIP     string
-	Error        *DeliveryError
-	DurationMs   int64
+type domainRateLimiter struct {
+	mu         sync.Mutex
+	tokens     float64
+	lastUpdate time.Time
 }
 
-// NewDeliverer creates a new delivery engine with the specified configuration.
-// It initializes the circuit breaker (if enabled), IP reputation tracker, IP rotator,
-// destination throttle, ARC signing (if enabled), and SRS rewriting (if enabled).
-// The circuit breaker can be disabled via configuration, which means the service will
-// continue accepting requests even during delivery failures.
-func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *slog.Logger, reputationConfig *config.ReputationConfig, arcConfig *config.ARCConfig, srsConfig *config.SRSConfig) *Deliverer {
-	// Create circuit breaker with configured values
-	var circuitBreaker *CircuitBreaker
-	if !config.CircuitBreakerEnabled {
-		logger.Warn("circuit breaker is DISABLED - service will accept requests even during delivery failures")
-		circuitBreaker = nil // Disabled
-	} else {
-		openTimeout := time.Duration(config.CircuitBreakerOpenTimeoutSecs) * time.Second
-		circuitBreaker = NewCircuitBreaker(
-			config.CircuitBreakerFailureThreshold,
-			config.CircuitBreakerSuccessThreshold,
-			openTimeout,
-			logger,
-		)
-		logger.Info("circuit breaker enabled",
-			"failure_threshold", config.CircuitBreakerFailureThreshold,
-			"success_threshold", config.CircuitBreakerSuccessThreshold,
-			"open_timeout", openTimeout)
-	}
+// DeliveryMetrics defines the interface for recording delivery metrics.
+type DeliveryMetrics interface {
+	RecordDeliveryAttempt(outcome string, duration float64)
+}
 
+// NewDeliverer creates a new delivery engine.
+func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSourceIPs, mxLookup *MXLookup, logger *slog.Logger, reputationConfig *config.ReputationConfig, arcConfig *config.ARCConfig, srsConfig *config.SRSConfig) *Deliverer {
 	// Create reputation tracker
 	reputationTracker := NewIPReputationTracker(reputationConfig, logger)
 
 	// Load ARC private key if enabled
 	var arcPrivateKey string
-	if arcConfig != nil && arcConfig.Enabled {
-		if arcConfig.PrivateKeyPath != "" {
-			keyData, err := os.ReadFile(arcConfig.PrivateKeyPath)
-			if err != nil {
-				logger.Error("failed to read ARC private key, ARC signing disabled",
-					"path", arcConfig.PrivateKeyPath,
-					"error", err)
-			} else {
-				// Validate the key
-				keySize, err := arc.ValidatePrivateKey(string(keyData))
-				if err != nil {
-					logger.Error("invalid ARC private key, ARC signing disabled",
-						"path", arcConfig.PrivateKeyPath,
-						"error", err)
-				} else {
-					arcPrivateKey = string(keyData)
-					logger.Info("ARC signing enabled",
-						"selector", arcConfig.Selector,
-						"domain", arcConfig.Domain,
-						"key_size", keySize,
-						"header_canon", arcConfig.HeaderCanon,
-						"body_canon", arcConfig.BodyCanon)
-				}
-			}
+	if arcConfig != nil && arcConfig.Enabled && arcConfig.PrivateKeyPath != "" {
+		keyData, err := os.ReadFile(arcConfig.PrivateKeyPath)
+		if err != nil {
+			logger.Error("failed to read ARC private key", "error", err)
 		} else {
-			logger.Warn("ARC enabled but no private_key_path specified, ARC signing disabled")
+			arcPrivateKey = string(keyData)
 		}
 	}
 
@@ -224,753 +88,622 @@ func NewDeliverer(config *config.OutboundConfig, mxLookup *MXLookup, logger *slo
 			srsConfig.AlwaysRewrite,
 		)
 		if err != nil {
-			logger.Error("failed to initialize SRS, envelope rewriting disabled",
-				"error", err)
+			logger.Error("failed to initialize SRS", "error", err)
 			srsInstance = nil
-		} else {
-			logger.Info("SRS envelope rewriting enabled",
-				"domain", srsConfig.Domain,
-				"max_age", srsConfig.MaxAge,
-				"hash_length", srsConfig.HashLength,
-				"always_rewrite", srsConfig.AlwaysRewrite)
 		}
 	}
+
+	ipsV4 := expandedIPs.IPv4
+	ipsV6 := expandedIPs.IPv6
 
 	return &Deliverer{
 		config:            config,
 		arcConfig:         arcConfig,
 		mxLookup:          mxLookup,
 		logger:            logger,
-		ipRotator:         NewIPRotator(config.SourceIPs, config.SourceIPSelection),
-		throttle:          NewDestinationThrottle(config.PerDomainIntervalSeconds),
-		circuitBreaker:    circuitBreaker,
+		ipRotator:         NewIPRotator(ipsV4, ipsV6, config.SourceIPSelection, config.PreferIPv6),
 		reputationTracker: reputationTracker,
 		arcPrivateKey:     arcPrivateKey,
 		srs:               srsInstance,
+		pool:              NewConnectionPool(config.ConnectionPoolTTLSeconds),
 	}
 }
 
-// DeliverMessage attempts to deliver a message directly to the recipient's MX servers.
-// It performs domain throttling, MX lookups, filters out degraded IPs, and tries each MX
-// server in priority order with source IP rotation on local failures. The method returns
-// a DeliveryResult containing the outcome, SMTP codes, and any errors encountered.
-// On success, the circuit breaker is notified. On failure, appropriate retry scheduling
-// and IP reputation updates occur.
-func (d *Deliverer) DeliverMessage(ctx context.Context, msg *queue.QueuedMessage) *DeliveryResult {
-	startTime := time.Now()
+// DeliverMessage attempts to deliver a message synchronously.
+func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message []byte) DeliveryResult {
+	start := time.Now()
 
-	d.logger.Info("starting delivery attempt",
-		"message_id", msg.MessageID,
-		"to", msg.ToAddr,
-		"to_domain", msg.ToDomain,
-		"attempt", msg.Attempts+1)
-
-	// Check if we should throttle delivery to this domain
-	if shouldThrottle, waitTime := d.throttle.ShouldThrottle(msg.ToDomain); shouldThrottle {
-		d.logger.Info("throttling delivery to domain",
-			"message_id", msg.MessageID,
-			"domain", msg.ToDomain,
-			"wait_time", waitTime,
-			"min_interval_seconds", d.config.PerDomainIntervalSeconds)
-
-		result := &DeliveryResult{
-			Success: false,
-			Error: &DeliveryError{
-				Category: ErrorThrottled,
-				Message:  fmt.Sprintf("rate limiting active for domain %s, retry in %v", msg.ToDomain, waitTime.Round(time.Second)),
-			},
-			DurationMs: time.Since(startTime).Milliseconds(),
+	// Extract domain from recipient
+	_, domain := splitEmail(to)
+	if domain == "" {
+		return DeliveryResult{
+			Status: "hard_bounce",
+			Error:  "Invalid recipient address",
 		}
-		d.recordDeliveryMetrics(result)
-		return result
 	}
 
-	// Record this delivery attempt
-	d.throttle.RecordAttempt(msg.ToDomain)
+	// 1. Wait for per-domain rate limit
+	if err := d.waitForDomainRateLimit(ctx, domain); err != nil {
+		if err == ErrDomainRateLimitExceeded {
+			return DeliveryResult{
+				Status: "rate_limit", // Fail Fast status
+				Error:  "Domain rate limit exceeded",
+			}
+		}
+		return DeliveryResult{
+			Status: "timeout",
+			Error:  "Rate limit check failed",
+		}
+	}
 
-	// Lookup MX records
-	mxRecords, err := d.mxLookup.Lookup(ctx, msg.ToDomain)
+	// 2. Lookup MX records
+	mxRecords, err := d.mxLookup.Lookup(ctx, domain)
 	if err != nil {
-		d.logger.Error("MX lookup failed",
-			"message_id", msg.MessageID,
-			"domain", msg.ToDomain,
-			"error", err)
-
-		result := &DeliveryResult{
-			Success:    false,
-			Error:      ClassifyError(0, "", err),
-			DurationMs: time.Since(startTime).Milliseconds(),
+		return DeliveryResult{
+			Status: "temp_fail",
+			Error:  fmt.Sprintf("MX lookup failed: %v", err),
 		}
-		d.recordDeliveryMetrics(result)
-		return result
+	}
+	if len(mxRecords) == 0 {
+		return DeliveryResult{
+			Status: "hard_bounce",
+			Error:  "No MX records found",
+		}
 	}
 
-	d.logger.Debug("MX records found",
-		"domain", msg.ToDomain,
-		"mx_count", len(mxRecords))
+	// 3. Try each MX with IPv6/IPv4 preference
+	var lastResult DeliveryResult
 
-	// Try each MX in priority order with source IP rotation on local failures
-	var lastResult *DeliveryResult
-	allSourceIPs := d.ipRotator.GetAllIPs() // Get all available source IPs
+	// Determine delivery order: IPv6 first or IPv4 first
+	tryIPv6First := d.ipRotator.PreferIPv6() && d.ipRotator.HasIPv6()
+	tryIPv4 := d.ipRotator.HasIPv4()
+	tryIPv6 := d.ipRotator.HasIPv6()
 
-	// Filter out degraded IPs
-	sourceIPs := d.reputationTracker.GetHealthyIPs(allSourceIPs)
-
-	if len(sourceIPs) == 0 {
-		if len(allSourceIPs) > 0 {
-			// All IPs are degraded, log warning
-			d.logger.Warn("all source IPs are degraded, using default",
-				"message_id", msg.MessageID,
-				"total_ips", len(allSourceIPs))
+	for _, mx := range mxRecords {
+		// Check context
+		if ctx.Err() != nil {
+			return DeliveryResult{Status: "timeout", Error: "Context canceled"}
 		}
-		sourceIPs = []string{""} // Empty string means use default source IP
-	} else if len(sourceIPs) < len(allSourceIPs) {
-		d.logger.Info("some source IPs are degraded",
-			"message_id", msg.MessageID,
-			"healthy_ips", len(sourceIPs),
-			"total_ips", len(allSourceIPs))
-	}
 
-	for i, mx := range mxRecords {
-		// Try delivery with source IP rotation on local failures
-		for ipIdx, sourceIP := range sourceIPs {
-			d.logger.Debug("attempting MX server",
-				"message_id", msg.MessageID,
-				"mx_host", mx.Host,
-				"priority", int(mx.Priority),
-				"mx_index", i+1,
-				"total_mx", len(mxRecords),
-				"source_ip", sourceIP,
-				"source_ip_index", ipIdx+1,
-				"total_source_ips", len(sourceIPs))
-
-			result := d.attemptDelivery(ctx, msg, mx.Host, sourceIP)
-			result.DurationMs = time.Since(startTime).Milliseconds()
+		// Try IPv6 first if preferred
+		if tryIPv6First {
+			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
+			if result.Status == "delivered" || result.Status == "hard_bounce" {
+				return result
+			}
 			lastResult = result
 
-			// Track reputation for this IP
-			deliveryInfo := DeliveryInfo{
-				From:           msg.FromAddr,
-				To:             msg.ToAddr,
-				Subject:        msg.Subject,
-				IdempotencyKey: msg.IdempotencyKey,
-				MXHost:         mx.Host,
-			}
-			d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Success, result.Error, deliveryInfo)
-
-			// Record circuit breaker metrics (if enabled)
-			if result.Success {
-				if d.circuitBreaker != nil {
-					d.circuitBreaker.RecordSuccess()
+			// Fall back to IPv4 if IPv6 failed and IPv4 is available
+			if tryIPv4 {
+				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
+				if result.Status == "delivered" || result.Status == "hard_bounce" {
+					return result
 				}
-
-				d.logger.Info("delivery successful",
-					"message_id", msg.MessageID,
-					"mx_host", mx.Host,
-					"source_ip", sourceIP,
-					"duration_ms", result.DurationMs)
-				d.recordDeliveryMetrics(result)
+				lastResult = result
+			}
+		} else if tryIPv4 {
+			// Try IPv4 first (or only)
+			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
+			if result.Status == "delivered" || result.Status == "hard_bounce" {
 				return result
 			}
+			lastResult = result
 
-			// Record failure (if circuit breaker enabled)
-			isLocalError := IsLocalError(result.Error)
-			if d.circuitBreaker != nil {
-				d.circuitBreaker.RecordFailure(isLocalError)
-			}
-
-			d.logger.Warn("MX delivery failed",
-				"message_id", msg.MessageID,
-				"mx_host", mx.Host,
-				"source_ip", sourceIP,
-				"smtp_code", result.SMTPCode,
-				"error", result.Error.Message,
-				"is_local_error", isLocalError)
-
-			// If permanent error, don't try other IPs or MX servers
-			if result.Error != nil && result.Error.Category == ErrorPermanent {
-				d.logger.Info("permanent error, not trying other MX servers",
-					"message_id", msg.MessageID,
-					"error_category", string(result.Error.Category))
-				d.recordDeliveryMetrics(result)
-				return result
-			}
-
-			// If local network error or reputation error, try next source IP
-			if (isLocalError || result.Error.Category == ErrorReputation) && ipIdx < len(sourceIPs)-1 {
-				d.logger.Info("local network or reputation error, trying next source IP",
-					"message_id", msg.MessageID,
-					"failed_source_ip", sourceIP,
-					"next_source_ip", sourceIPs[ipIdx+1],
-					"error_category", string(result.Error.Category))
-				continue
-			}
-
-			// Non-local error or last source IP, try next MX
-			break
-		}
-
-		// If we got a permanent error, already returned above
-		// If last MX, will return below
-	}
-
-	// All MX servers failed
-	d.logger.Error("all MX servers failed",
-		"message_id", msg.MessageID,
-		"domain", msg.ToDomain,
-		"mx_count", len(mxRecords))
-
-	// Return last result if available
-	if lastResult != nil {
-		d.recordDeliveryMetrics(lastResult)
-		return lastResult
-	}
-
-	result := &DeliveryResult{
-		Success: false,
-		Error: &DeliveryError{
-			Category: ErrorTemporary,
-			Message:  "All MX servers failed",
-		},
-		DurationMs: time.Since(startTime).Milliseconds(),
-	}
-	d.recordDeliveryMetrics(result)
-	return result
-}
-
-// attemptDelivery tries to deliver to a specific MX server
-// Properly handles multihomed MX servers by trying all resolved IPs
-func (d *Deliverer) attemptDelivery(ctx context.Context, msg *queue.QueuedMessage, mxHost string, sourceIP string) *DeliveryResult {
-	// Resolve MX hostname to all IP addresses
-	resolver := net.DefaultResolver
-	addrs, err := resolver.LookupHost(ctx, mxHost)
-	if err != nil {
-		d.logger.Error("failed to resolve MX hostname",
-			"message_id", msg.MessageID,
-			"mx_host", mxHost,
-			"error", err)
-		return &DeliveryResult{
-			Success: false,
-			MXHost:  mxHost,
-			Error:   ClassifyError(0, "", err),
-		}
-	}
-
-	d.logger.Debug("resolved MX hostname",
-		"mx_host", mxHost,
-		"addresses", addrs,
-		"ip_count", len(addrs))
-
-	// Separate IPv6 and IPv4 addresses
-	var ipv6Addrs, ipv4Addrs []string
-	for _, addr := range addrs {
-		ip := net.ParseIP(addr)
-		if ip != nil {
-			if ip.To4() == nil {
-				// IPv6 address
-				ipv6Addrs = append(ipv6Addrs, addr)
-			} else {
-				// IPv4 address
-				ipv4Addrs = append(ipv4Addrs, addr)
-			}
-		}
-	}
-
-	// Limit total number of IPs to try (protect against malicious multihomed hosts)
-	maxIPs := d.config.MaxIPsPerMX
-	totalAttempts := 0
-
-	// Try IPv6 addresses first (up to limit)
-	for _, ipAddr := range ipv6Addrs {
-		if totalAttempts >= maxIPs {
-			d.logger.Warn("reached max IP limit for MX host",
-				"mx_host", mxHost,
-				"max_ips", maxIPs,
-				"skipped_ipv6", len(ipv6Addrs)-totalAttempts)
-			break
-		}
-
-		d.logger.Debug("attempting IPv6 address",
-			"message_id", msg.MessageID,
-			"mx_host", mxHost,
-			"ip_address", ipAddr,
-			"attempt", totalAttempts+1,
-			"max_attempts", maxIPs)
-
-		result := d.tryDeliveryToIP(ctx, msg, mxHost, ipAddr, sourceIP, "tcp6")
-		totalAttempts++
-
-		if result.Success || (result.Error != nil && result.Error.Category == ErrorPermanent) {
-			return result
-		}
-	}
-
-	// Try IPv4 addresses (up to remaining limit)
-	for _, ipAddr := range ipv4Addrs {
-		if totalAttempts >= maxIPs {
-			d.logger.Warn("reached max IP limit for MX host",
-				"mx_host", mxHost,
-				"max_ips", maxIPs,
-				"total_ips", len(ipv6Addrs)+len(ipv4Addrs),
-				"tried", totalAttempts)
-			break
-		}
-
-		d.logger.Debug("attempting IPv4 address",
-			"message_id", msg.MessageID,
-			"mx_host", mxHost,
-			"ip_address", ipAddr,
-			"attempt", totalAttempts+1,
-			"max_attempts", maxIPs)
-
-		result := d.tryDeliveryToIP(ctx, msg, mxHost, ipAddr, sourceIP, "tcp4")
-		totalAttempts++
-
-		if result.Success || (result.Error != nil && result.Error.Category == ErrorPermanent) {
-			return result
-		}
-	}
-
-	// All IPs failed
-	return &DeliveryResult{
-		Success: false,
-		MXHost:  mxHost,
-		Error: &DeliveryError{
-			Category: ErrorTemporary,
-			Message:  fmt.Sprintf("all IP addresses failed for %s (%d IPv6, %d IPv4)", mxHost, len(ipv6Addrs), len(ipv4Addrs)),
-		},
-	}
-}
-
-// tryDeliveryToIP attempts delivery to a specific IP address
-func (d *Deliverer) tryDeliveryToIP(ctx context.Context, msg *queue.QueuedMessage, mxHost string, targetIP string, sourceIP string, network string) *DeliveryResult {
-	// Create dialer with source IP binding
-	dialer := &net.Dialer{
-		Timeout: time.Duration(d.config.ConnectionTimeoutSeconds) * time.Second,
-	}
-
-	// Bind to source IP if specified
-	if sourceIP != "" {
-		ip := net.ParseIP(sourceIP)
-		if ip != nil {
-			// Determine if source IP is IPv4 or IPv6
-			if ip.To4() != nil {
-				// IPv4 source
-				if network == "tcp6" {
-					// Skip IPv6 attempt with IPv4 source
-					return &DeliveryResult{
-						Success:  false,
-						MXHost:   mxHost,
-						SourceIP: sourceIP,
-						Error: &DeliveryError{
-							Category: ErrorTemporary,
-							Message:  "IPv4 source IP cannot be used for IPv6 connection",
-						},
-					}
+			// Fall back to IPv6 if IPv4 failed and IPv6 is available
+			if tryIPv6 {
+				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
+				if result.Status == "delivered" || result.Status == "hard_bounce" {
+					return result
 				}
-				dialer.LocalAddr = &net.TCPAddr{IP: ip}
-			} else {
-				// IPv6 source
-				if network == "tcp4" {
-					// Skip IPv4 attempt with IPv6 source
-					return &DeliveryResult{
-						Success:  false,
-						MXHost:   mxHost,
-						SourceIP: sourceIP,
-						Error: &DeliveryError{
-							Category: ErrorTemporary,
-							Message:  "IPv6 source IP cannot be used for IPv4 connection",
-						},
-					}
-				}
-				dialer.LocalAddr = &net.TCPAddr{IP: ip}
+				lastResult = result
 			}
-		}
-	}
-
-	// Try port 25 (standard SMTP) - connect to specific IP
-	addr := net.JoinHostPort(targetIP, "25")
-
-	// Connect with context awareness and specified network (tcp4/tcp6)
-	conn, err := dialer.DialContext(ctx, network, addr)
-	if err != nil {
-		return &DeliveryResult{
-			Success:  false,
-			MXHost:   mxHost,
-			SourceIP: sourceIP,
-			Error:    ClassifyError(0, "", err),
-		}
-	}
-	defer conn.Close()
-
-	// Set overall SMTP timeout
-	conn.SetDeadline(time.Now().Add(time.Duration(d.config.SMTPTimeoutSeconds) * time.Second))
-
-	// Create SMTP client with STARTTLS
-	tlsConfig := &tls.Config{
-		ServerName:         mxHost,
-		InsecureSkipVerify: false,
-	}
-
-	client, err := smtp.NewClientStartTLS(conn, tlsConfig)
-	if err != nil {
-		// STARTTLS failed, try without TLS
-		d.logger.Warn("STARTTLS failed, trying without TLS",
-			"mx_host", mxHost,
-			"error", err)
-
-		client = smtp.NewClient(conn)
-	} else {
-		d.logger.Debug("STARTTLS successful",
-			"mx_host", mxHost)
-	}
-	defer client.Close()
-
-	// MAIL FROM - apply SRS rewriting if enabled
-	mailFrom := msg.FromAddr
-	if d.srs != nil {
-		rewritten, err := d.srs.Forward(msg.FromAddr)
-		if err != nil {
-			d.logger.Warn("SRS rewriting failed, using original sender",
-				"message_id", msg.MessageID,
-				"original_from", msg.FromAddr,
-				"error", err)
 		} else {
-			mailFrom = rewritten
-			d.logger.Debug("SRS envelope rewriting applied",
-				"message_id", msg.MessageID,
-				"original_from", msg.FromAddr,
-				"rewritten_from", mailFrom)
+			// No source IPs configured - use system default
+			result := d.attemptDelivery(ctx, from, to, message, mx.Host, "", true)
+			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
+			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
+			if result.Status == "delivered" || result.Status == "hard_bounce" {
+				result.AttemptDurationMs = time.Since(start).Milliseconds()
+				d.recordMetrics(result)
+				return result
+			}
+			lastResult = result
 		}
 	}
 
-	if err := client.Mail(mailFrom, nil); err != nil {
-		smtpCode, smtpResp := extractSMTPError(err)
-		return &DeliveryResult{
-			Success:      false,
-			MXHost:       mxHost,
-			SourceIP:     sourceIP,
-			SMTPCode:     smtpCode,
-			SMTPResponse: smtpResp,
-			Error:        ClassifyError(smtpCode, smtpResp, err),
+	lastResult.AttemptDurationMs = time.Since(start).Milliseconds()
+	d.recordMetrics(lastResult)
+	return lastResult
+}
+
+// tryDeliveryWithIPVersion attempts delivery using either IPv6 or IPv4 source IPs and matching MX host IPs.
+func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to string, message []byte, mxHost string, useIPv6 bool, startTime time.Time) DeliveryResult {
+	// Get source IPs for this version
+	var sourceIPs []string
+	if useIPv6 {
+		sourceIPs = d.ipRotator.GetAllIPsV6()
+	} else {
+		sourceIPs = d.ipRotator.GetAllIPsV4()
+	}
+
+	// Filter by reputation
+	healthyIPs := d.reputationTracker.GetHealthyIPs(sourceIPs)
+	if len(healthyIPs) == 0 && len(sourceIPs) > 0 {
+		d.logger.Warn("all source IPs degraded for IP version",
+			"ipv6", useIPv6,
+			"domain", to)
+		// Use degraded IPs as last resort
+		healthyIPs = sourceIPs
+	}
+
+	// Try each healthy source IP
+	var lastResult DeliveryResult
+	for _, sourceIP := range healthyIPs {
+		// Check context
+		if ctx.Err() != nil {
+			return DeliveryResult{Status: "timeout", Error: "Context canceled"}
 		}
+
+		result := d.attemptDelivery(ctx, from, to, message, mxHost, sourceIP, useIPv6)
+		lastResult = result
+
+		// Track reputation
+		deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mxHost}
+		d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Status == "delivered", nil, deliveryInfo)
+
+		if result.Status == "delivered" || result.Status == "hard_bounce" {
+			return result
+		}
+
+		// If temp fail, try next source IP
+		d.logger.Debug("delivery attempt failed",
+			"mx", mxHost,
+			"source_ip", sourceIP,
+			"ipv6", useIPv6,
+			"status", result.Status,
+			"error", result.Error)
+	}
+
+	return lastResult
+}
+
+func (d *Deliverer) waitForDomainRateLimit(ctx context.Context, domain string) error {
+	initialTokens := float64(d.config.PerDomainBurst)
+	if initialTokens <= 0 {
+		initialTokens = 1
+	}
+
+	limiterI, _ := d.domainLimiters.LoadOrStore(domain, &domainRateLimiter{
+		tokens:     initialTokens,
+		lastUpdate: time.Now(),
+	})
+	limiter, ok := limiterI.(*domainRateLimiter)
+	if !ok {
+		d.logger.Error("type assertion failed for domain rate limiter",
+			"domain", domain,
+			"type", fmt.Sprintf("%T", limiterI))
+		return fmt.Errorf("internal error: invalid rate limiter type")
+	}
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+
+	now := time.Now()
+	interval := time.Duration(d.config.PerDomainIntervalSeconds) * time.Second
+	burst := float64(d.config.PerDomainBurst)
+	if burst <= 0 {
+		burst = 1
+	}
+
+	// Calculate refill rate (tokens per second)
+	var rate float64
+	if interval > 0 {
+		rate = 1.0 / interval.Seconds()
+	} else {
+		rate = 1000000.0 // Effective infinity
+	}
+
+	// Refill tokens based on elapsed time
+	elapsed := now.Sub(limiter.lastUpdate).Seconds()
+	// Initialize lastUpdate if this is a fresh limiter (though LoadOrStore init handles it, race conditions might create one with zero time)
+	if limiter.lastUpdate.IsZero() {
+		limiter.tokens = burst
+	} else {
+		limiter.tokens += elapsed * rate
+		if limiter.tokens > burst {
+			limiter.tokens = burst
+		}
+	}
+	limiter.lastUpdate = now
+
+	// Consume token
+	if limiter.tokens >= 1.0 {
+		limiter.tokens -= 1.0
+		return nil
+	}
+
+	// Fail Fast - No tokens available
+	return ErrDomainRateLimitExceeded
+}
+
+func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []byte, mxHost, sourceIP string, preferIPv6 bool) DeliveryResult {
+	// 1. Try to get a pooled connection
+	var client *smtp.Client
+	var reused bool
+	if d.pool != nil {
+		client = d.pool.Get(mxHost, sourceIP)
+		if client != nil {
+			reused = true
+			d.logger.Debug("using pooled connection", "mx", mxHost)
+		}
+	}
+
+	// 2. If no pooled connection, dial a new one
+	if client == nil {
+		var err error
+		var result DeliveryResult
+		client, result, err = d.dialAndHello(ctx, mxHost, sourceIP, preferIPv6)
+		if err != nil {
+			return result
+		}
+	}
+
+	// 3. Deliver message logic
+	// Note: We need to handle Close() manually if we want to reuse the client
+	// So we don't defer client.Close() here if we intend to pool it.
+	// But if dialAndHello returned a client, we own it.
+
+	return d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, reused)
+}
+
+func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool) DeliveryResult {
+	// Safety cleanup in case of panic or non-pooled exit
+	// We wrap this logic deeply. To properly manage pooling, we handle close/reset manually.
+	// But defer Close() is safe because calling Close() on closed client is fine,
+	// and if we reuse, we won't Close() it.
+	// Wait, if we put back in pool, we must NOT Close().
+	// So we can't defer Close() blindly.
+
+	err := d.deliverPayload(client, from, to, msg)
+	if err != nil {
+		// If error occurred on a reused connection, it might be stale.
+		// We could retry? For now, we fail and let client retry.
+		client.Close()
+
+		// If reused and error is network/EOF, we might want to suggest retry.
+		return d.mapSMTPError(err, mxHost, sourceIP)
+	}
+
+	// Success!
+	// Reset and put back in pool
+	if err := client.Reset(); err == nil && d.pool != nil {
+		d.pool.Put(client, mxHost, sourceIP)
+	} else {
+		// If Reset failed, connection is dirty/dead.
+		client.Quit()
+	}
+
+	return DeliveryResult{
+		Status:      "delivered",
+		SMTPCode:    250,
+		SMTPMessage: "OK",
+		MXHost:      mxHost,
+		SourceIP:    sourceIP,
+	}
+}
+
+func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []byte) error {
+	// MAIL FROM
+	mailFrom := from
+	if d.srs != nil {
+		if rewritten, err := d.srs.Forward(from); err == nil {
+			mailFrom = rewritten
+		}
+	}
+	if err := client.Mail(mailFrom, nil); err != nil {
+		return err
 	}
 
 	// RCPT TO
-	if err := client.Rcpt(msg.ToAddr, nil); err != nil {
-		smtpCode, smtpResp := extractSMTPError(err)
-		return &DeliveryResult{
-			Success:      false,
-			MXHost:       mxHost,
-			SourceIP:     sourceIP,
-			SMTPCode:     smtpCode,
-			SMTPResponse: smtpResp,
-			Error:        ClassifyError(smtpCode, smtpResp, err),
-		}
+	if err := client.Rcpt(to, nil); err != nil {
+		return err
 	}
 
 	// DATA
-	dataWriter, err := client.Data()
+	w, err := client.Data()
 	if err != nil {
-		smtpCode, smtpResp := extractSMTPError(err)
-		return &DeliveryResult{
-			Success:      false,
-			MXHost:       mxHost,
-			SourceIP:     sourceIP,
-			SMTPCode:     smtpCode,
-			SMTPResponse: smtpResp,
-			Error:        ClassifyError(smtpCode, smtpResp, err),
-		}
+		return err
+	}
+	if w == nil {
+		return fmt.Errorf("DATA command returned nil writer")
 	}
 
-	// Prepare message - sign with DKIM if credentials provided
-	messageToSend := msg.RawMessage
-	if msg.DKIMPrivateKey != "" {
-		d.logger.Debug("signing message with DKIM",
-			"message_id", msg.MessageID,
-			"dkim_selector", msg.DKIMSelector,
-			"dkim_domain", msg.DKIMDomain)
-
-		signedMessage, err := dkim.SignMessage(msg.RawMessage, msg.DKIMPrivateKey, msg.DKIMSelector, msg.DKIMDomain)
-		if err != nil {
-			dataWriter.Close()
-			d.logger.Error("DKIM signing failed",
-				"message_id", msg.MessageID,
-				"error", err)
-			return &DeliveryResult{
-				Success:  false,
-				MXHost:   mxHost,
-				SourceIP: sourceIP,
-				Error: &DeliveryError{
-					Category: ErrorPermanent,
-					Message:  fmt.Sprintf("DKIM signing failed: %v", err),
-				},
-			}
-		}
-		messageToSend = signedMessage
-		d.logger.Debug("DKIM signature added successfully",
-			"message_id", msg.MessageID)
+	if _, err := w.Write(msg); err != nil {
+		return err
 	}
 
-	// Apply ARC signing if enabled (after DKIM)
-	if d.arcPrivateKey != "" && d.arcConfig != nil && d.arcConfig.Enabled {
-		d.logger.Debug("signing message with ARC",
-			"message_id", msg.MessageID,
-			"arc_selector", d.arcConfig.Selector,
-			"arc_domain", d.arcConfig.Domain)
-
-		arcSignConfig := &arc.SignConfig{
-			Selector:    d.arcConfig.Selector,
-			Domain:      d.arcConfig.Domain,
-			PrivateKey:  d.arcPrivateKey,
-			HeaderCanon: d.arcConfig.HeaderCanon,
-			BodyCanon:   d.arcConfig.BodyCanon,
-		}
-
-		signedMessage, err := arc.SignMessage(messageToSend, arcSignConfig)
-		if err != nil {
-			dataWriter.Close()
-			d.logger.Error("ARC signing failed",
-				"message_id", msg.MessageID,
-				"error", err)
-			return &DeliveryResult{
-				Success:  false,
-				MXHost:   mxHost,
-				SourceIP: sourceIP,
-				Error: &DeliveryError{
-					Category: ErrorPermanent,
-					Message:  fmt.Sprintf("ARC signing failed: %v", err),
-				},
-			}
-		}
-		messageToSend = signedMessage
-		d.logger.Debug("ARC headers added successfully",
-			"message_id", msg.MessageID)
+	if err := w.Close(); err != nil {
+		return err
 	}
 
-	// Write message data
-	if _, err := io.Copy(dataWriter, bytes.NewReader(messageToSend)); err != nil {
-		dataWriter.Close()
-		return &DeliveryResult{
-			Success:  false,
-			MXHost:   mxHost,
-			SourceIP: sourceIP,
-			Error:    ClassifyError(0, "", err),
-		}
-	}
-
-	// Close data writer (sends final .)
-	if err := dataWriter.Close(); err != nil {
-		smtpCode, smtpResp := extractSMTPError(err)
-		return &DeliveryResult{
-			Success:      false,
-			MXHost:       mxHost,
-			SourceIP:     sourceIP,
-			SMTPCode:     smtpCode,
-			SMTPResponse: smtpResp,
-			Error:        ClassifyError(smtpCode, smtpResp, err),
-		}
-	}
-
-	// QUIT
-	client.Quit()
-
-	// Success!
-	return &DeliveryResult{
-		Success:      true,
-		SMTPCode:     250,
-		SMTPResponse: "OK",
-		MXHost:       mxHost,
-		SourceIP:     sourceIP,
-	}
-}
-
-// extractSMTPError extracts SMTP code and response from error
-func extractSMTPError(err error) (int, string) {
-	if smtpErr, ok := err.(*smtp.SMTPError); ok {
-		return smtpErr.Code, smtpErr.Message
-	}
-	return 0, err.Error()
-}
-
-// IPRotator handles source IP selection using configurable strategies.
-// It supports three selection strategies: round-robin (balanced distribution),
-// random (unpredictable selection), and hash-domain (consistent IP per domain).
-// The rotator is thread-safe and uses atomic operations for the round-robin counter.
-type IPRotator struct {
-	ips      []string
-	strategy string
-	counter  uint32 // atomic counter for round-robin
-	random   *rand.Rand
-}
-
-// NewIPRotator creates a new IP rotator with the specified IPs and selection strategy.
-// Valid strategies are "round-robin", "random", and "hash-domain". If an invalid strategy
-// is provided, round-robin is used as the default.
-func NewIPRotator(ips []string, strategy string) *IPRotator {
-	return &IPRotator{
-		ips:      ips,
-		strategy: strategy,
-		counter:  0,
-		random:   rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
-}
-
-// SelectIP chooses a source IP based on the configured strategy.
-// For round-robin, it cycles through IPs in order using an atomic counter.
-// For random, it selects a random IP from the pool.
-// For hash-domain, it uses FNV-1a hashing to consistently map domains to IPs.
-// Returns an empty string if no IPs are configured, indicating no source binding.
-func (r *IPRotator) SelectIP(domain string) string {
-	if len(r.ips) == 0 {
-		return "" // No source IP binding
-	}
-
-	if len(r.ips) == 1 {
-		return r.ips[0]
-	}
-
-	switch r.strategy {
-	case "round-robin":
-		// Use atomic operations for thread-safe counter
-		count := atomic.AddUint32(&r.counter, 1) - 1
-		ip := r.ips[int(count)%len(r.ips)]
-		return ip
-
-	case "random":
-		return r.ips[r.random.Intn(len(r.ips))]
-
-	case "hash-domain":
-		// Consistent hashing based on domain
-		h := fnv.New32a()
-		h.Write([]byte(domain))
-		idx := int(h.Sum32()) % len(r.ips)
-		return r.ips[idx]
-
-	default:
-		// Default to round-robin
-		count := atomic.AddUint32(&r.counter, 1) - 1
-		ip := r.ips[int(count)%len(r.ips)]
-		return ip
-	}
-}
-
-// GetAllIPs returns all configured source IPs for failover scenarios.
-// It returns a copy of the IP list to prevent external modification.
-// Returns nil if no IPs are configured.
-func (r *IPRotator) GetAllIPs() []string {
-	if len(r.ips) == 0 {
-		return nil
-	}
-	// Return copy to prevent modification
-	ips := make([]string, len(r.ips))
-	copy(ips, r.ips)
-	return ips
-}
-
-// GetCircuitBreaker returns the circuit breaker instance for health checking and monitoring.
-// Returns nil if the circuit breaker is disabled via configuration.
-func (d *Deliverer) GetCircuitBreaker() *CircuitBreaker {
-	return d.circuitBreaker
-}
-
-// GetReputationTracker returns the IP reputation tracker instance for monitoring
-// degraded IPs and reputation events.
-func (d *Deliverer) GetReputationTracker() *IPReputationTracker {
-	return d.reputationTracker
-}
-
-// SetMetrics sets the metrics recorder for delivery, enabling Prometheus metrics
-// for delivery attempts, circuit breaker state, and other delivery statistics.
-func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
-	d.metrics = metrics
-}
-
-// ReloadConfig updates the delivery configuration during a hot reload (triggered by SIGHUP).
-// It updates source IPs, IP selection strategy, throttle settings, and circuit breaker thresholds.
-// The circuit breaker can be enabled or disabled dynamically. This method is thread-safe.
-func (d *Deliverer) ReloadConfig(newConfig *config.OutboundConfig) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.logger.Info("reloading delivery configuration",
-		"old_source_ips", len(d.config.SourceIPs),
-		"new_source_ips", len(newConfig.SourceIPs),
-		"old_ip_selection", d.config.SourceIPSelection,
-		"new_ip_selection", newConfig.SourceIPSelection)
-
-	// Update config
-	d.config = newConfig
-
-	// Recreate IP rotator with new IPs and selection strategy
-	d.ipRotator = NewIPRotator(newConfig.SourceIPs, newConfig.SourceIPSelection)
-
-	// Update throttle settings
-	d.throttle = NewDestinationThrottle(newConfig.PerDomainIntervalSeconds)
-
-	// Update circuit breaker settings if enabled
-	if newConfig.CircuitBreakerEnabled {
-		if d.circuitBreaker == nil {
-			// Circuit breaker was disabled, now enabled - create it
-			openTimeout := time.Duration(newConfig.CircuitBreakerOpenTimeoutSecs) * time.Second
-			d.circuitBreaker = NewCircuitBreaker(
-				newConfig.CircuitBreakerFailureThreshold,
-				newConfig.CircuitBreakerSuccessThreshold,
-				openTimeout,
-				d.logger,
-			)
-			if d.metrics != nil {
-				d.circuitBreaker.SetMetrics(d.metrics)
-			}
-			d.logger.Info("circuit breaker enabled via config reload")
-		} else {
-			// Circuit breaker exists, update thresholds
-			openTimeout := time.Duration(newConfig.CircuitBreakerOpenTimeoutSecs) * time.Second
-			d.circuitBreaker.mu.Lock()
-			d.circuitBreaker.failureThreshold = newConfig.CircuitBreakerFailureThreshold
-			d.circuitBreaker.successThreshold = newConfig.CircuitBreakerSuccessThreshold
-			d.circuitBreaker.openTimeout = openTimeout
-			d.circuitBreaker.mu.Unlock()
-			d.logger.Info("circuit breaker settings updated")
-		}
-	} else if d.circuitBreaker != nil {
-		// Circuit breaker was enabled, now disabled
-		d.circuitBreaker = nil
-		d.logger.Warn("circuit breaker DISABLED via config reload")
-	}
-
-	d.logger.Info("delivery configuration reloaded successfully")
 	return nil
 }
 
-// recordDeliveryMetrics records metrics for a delivery result
-func (d *Deliverer) recordDeliveryMetrics(result *DeliveryResult) {
-	if d.metrics == nil {
-		return
+func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, preferIPv6 bool) (*smtp.Client, DeliveryResult, error) {
+	// Resolve MX host to IP addresses
+	mxIPs, err := d.mxLookup.dnsResolver.LookupHost(ctx, mxHost)
+	if err != nil {
+		return nil, DeliveryResult{
+			Status:   "temp_fail",
+			MXHost:   mxHost,
+			SourceIP: sourceIP,
+			Error:    fmt.Sprintf("Failed to resolve MX host: %v", err),
+		}, err
 	}
 
-	var outcome string
-	if result.Success {
-		outcome = "success"
-	} else if result.Error != nil {
-		switch result.Error.Category {
-		case ErrorPermanent:
-			outcome = "permanent_error"
-		case ErrorTemporary, ErrorGreylist:
-			outcome = "temporary_error"
-		case ErrorNetwork:
-			outcome = "network_error"
-		case ErrorThrottled:
-			outcome = "throttled"
-		case ErrorReputation:
-			outcome = "reputation_error"
-		default:
-			outcome = "unknown_error"
+	// Filter MX IPs by version (IPv6 or IPv4)
+	var targetIP string
+	for _, ip := range mxIPs {
+		parsedIP := net.ParseIP(ip)
+		if parsedIP == nil {
+			continue
+		}
+
+		isV4 := parsedIP.To4() != nil
+		if preferIPv6 && !isV4 {
+			targetIP = ip
+			break
+		} else if !preferIPv6 && isV4 {
+			targetIP = ip
+			break
+		}
+	}
+
+	// Fallback if no matching IP version found
+	if targetIP == "" {
+		if len(mxIPs) > 0 {
+			targetIP = mxIPs[0]
+			d.logger.Debug("no matching IP version for MX, using first available",
+				"mx", mxHost,
+				"prefer_ipv6", preferIPv6,
+				"target_ip", targetIP)
+		} else {
+			return nil, DeliveryResult{
+				Status:   "temp_fail",
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error:    "No IP addresses resolved for MX host",
+			}, fmt.Errorf("no IP")
+		}
+	}
+
+	// TCP connection to port 25 (SMTP)
+	dialer := &net.Dialer{
+		Timeout: time.Duration(d.config.ConnectionTimeoutSeconds) * time.Second,
+	}
+	if sourceIP != "" {
+		ip := net.ParseIP(sourceIP)
+		if ip == nil {
+			return nil, DeliveryResult{
+				Status:   "error",
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error:    fmt.Sprintf("Invalid source IP address: %s", sourceIP),
+			}, fmt.Errorf("invalid IP")
+		}
+		dialer.LocalAddr = &net.TCPAddr{IP: ip}
+	}
+
+	// Connect to the target IP
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, "25"))
+	if err != nil {
+		// Check if error is due to source IP binding failure
+		if sourceIP != "" && isBindError(err) {
+			d.logger.Error("failed to bind to source IP",
+				"source_ip", sourceIP,
+				"error", err)
+			return nil, DeliveryResult{
+				Status:   "error",
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error:    fmt.Sprintf("Cannot bind to source IP %s: %v", sourceIP, err),
+			}, err
+		}
+		return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
+	}
+
+	// Ensure connection is closed if setup fails
+	success := false
+	defer func() {
+		if !success {
+			conn.Close()
+		}
+	}()
+
+	// Extract hostname for TLS verification
+	host, _, _ := net.SplitHostPort(mxHost)
+	if host == "" {
+		host = mxHost
+	}
+
+	// Create initial SMTP client (plaintext)
+	client := smtp.NewClient(conn)
+	// Do not defer client.Close() here, we return it.
+
+	// Send EHLO
+	if err := client.Hello("localhost"); err != nil {
+		client.Close()
+		return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
+	}
+
+	// STARTTLS
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		d.logger.Debug("STARTTLS supported, upgrading connection", "mx", mxHost)
+
+		tlsConfig := &tls.Config{
+			ServerName: host,
+			MinVersion: tls.VersionTLS12,
+		}
+
+		// Manual STARTTLS upgrade logic
+		// We avoid closing 'client' here if it closes the underlying connection.
+		// Instead, we just stop using it and write directly to 'conn'.
+		// Since we just did Hello(), buffer should be empty.
+
+		if _, err := conn.Write([]byte("STARTTLS\r\n")); err != nil {
+			client.Close()
+			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS send failed: %v", err)}, err
+		}
+
+		// Read 220 response
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			client.Close() // Best effort
+			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS response failed: %v", err)}, err
+		}
+
+		response := string(buf[:n])
+		if len(response) < 3 || response[:3] != "220" {
+			client.Close()
+			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS rejected: %s", response)}, fmt.Errorf("bad response")
+		}
+
+		// Wrap connection in TLS
+		tlsConn := tls.Client(conn, tlsConfig)
+
+		// Perform TLS handshake with context timeout and panic recovery
+		handshakeDone := make(chan error, 1)
+		recovery.SafeGo(d.logger, "tls-handshake", func() {
+			handshakeDone <- tlsConn.Handshake()
+		})
+
+		select {
+		case err := <-handshakeDone:
+			if err != nil {
+				// Don't close tlsConn yet if we want to return specific error?
+				// But we are returning nil client.
+				client.Close()
+				return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("TLS handshake failed: %v", err)}, err
+			}
+		case <-ctx.Done():
+			client.Close()
+			return nil, DeliveryResult{Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "TLS handshake timed out"}, ctx.Err()
+		}
+
+		// Create new SMTP client using the TLS connection
+		// Note: The old 'client' is abandoned. We invoke quit/close on it later?
+		// No, we can't because it would close the underlying conn which we just upgraded.
+		// We rely on GC to clean up the struct, and we manage the 'tlsConn' now.
+		client = smtp.NewClient(tlsConn)
+
+		// Send EHLO again
+		if err := client.Hello("localhost"); err != nil {
+			client.Close()
+			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
+		}
+
+		d.logger.Debug("STARTTLS upgrade successful", "mx", mxHost)
+	} else {
+		d.logger.Warn("STARTTLS not supported", "mx", mxHost)
+	}
+
+	success = true // Prevent deferred close
+	return client, DeliveryResult{}, nil
+}
+
+func (d *Deliverer) mapSMTPError(err error, mxHost, sourceIP string) DeliveryResult {
+	res := DeliveryResult{MXHost: mxHost, SourceIP: sourceIP}
+	if smtpErr, ok := err.(*smtp.SMTPError); ok {
+		res.SMTPCode = smtpErr.Code
+		res.SMTPMessage = smtpErr.Message
+		if smtpErr.Code >= 500 {
+			res.Status = "hard_bounce"
+		} else {
+			res.Status = "temp_fail"
 		}
 	} else {
-		outcome = "unknown"
+		res.Status = "error"
+		res.Error = err.Error()
 	}
+	return res
+}
 
-	duration := float64(result.DurationMs) / 1000.0 // Convert to seconds
-	d.metrics.RecordDeliveryAttempt(outcome, duration)
+func (d *Deliverer) recordMetrics(result DeliveryResult) {
+	if d.metrics != nil {
+		d.metrics.RecordDeliveryAttempt(result.Status, float64(result.AttemptDurationMs)/1000.0)
+	}
+}
+
+// IPRotator logic - supports IPv4/IPv6 separation and selection
+type IPRotator struct {
+	ipsV4      []string
+	ipsV6      []string
+	strategy   string
+	counterV4  uint32
+	counterV6  uint32
+	random     *rand.Rand
+	preferIPv6 bool
+}
+
+// NewIPRotator creates a new IP rotator with separate IPv4 and IPv6 pools.
+func NewIPRotator(ipsV4, ipsV6 []string, strategy string, preferIPv6 bool) *IPRotator {
+	return &IPRotator{
+		ipsV4:      ipsV4,
+		ipsV6:      ipsV6,
+		strategy:   strategy,
+		random:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		preferIPv6: preferIPv6,
+	}
+}
+
+// GetAllIPsV4 returns all IPv4 addresses.
+func (r *IPRotator) GetAllIPsV4() []string {
+	return r.ipsV4
+}
+
+// GetAllIPsV6 returns all IPv6 addresses.
+func (r *IPRotator) GetAllIPsV6() []string {
+	return r.ipsV6
+}
+
+// HasIPv4 returns true if IPv4 addresses are available.
+func (r *IPRotator) HasIPv4() bool {
+	return len(r.ipsV4) > 0
+}
+
+// HasIPv6 returns true if IPv6 addresses are available.
+func (r *IPRotator) HasIPv6() bool {
+	return len(r.ipsV6) > 0
+}
+
+// PreferIPv6 returns whether IPv6 is preferred.
+func (r *IPRotator) PreferIPv6() bool {
+	return r.preferIPv6
+}
+
+func splitEmail(email string) (string, string) {
+	i := bytes.LastIndexByte([]byte(email), '@')
+	if i < 0 {
+		return "", ""
+	}
+	return email[:i], email[i+1:]
+}
+
+// isBindError checks if an error is related to binding to a local address.
+// This typically indicates misconfiguration (IP not assigned to interface).
+func isBindError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for common bind-related error messages
+	errStr := err.Error()
+	return bytes.Contains([]byte(errStr), []byte("bind")) ||
+		bytes.Contains([]byte(errStr), []byte("cannot assign requested address")) ||
+		bytes.Contains([]byte(errStr), []byte("EADDRNOTAVAIL"))
+}
+
+// SetMetrics sets the metrics recorder
+func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
+	d.metrics = metrics
 }
