@@ -86,6 +86,7 @@ type LetsEncryptConfig struct {
 type S3Config struct {
 	Bucket    string `toml:"bucket"`
 	Region    string `toml:"region"`
+	Endpoint  string `toml:"endpoint"` // Custom S3 endpoint (e.g., for Backblaze B2)
 	AccessKey string `toml:"access_key"`
 	SecretKey string `toml:"secret_key"`
 }

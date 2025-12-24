@@ -49,6 +49,7 @@ enabled = false
 # Required for storage_provider = "s3"
 # bucket = "fune-letsencrypt"
 # region = "us-east-1"
+# endpoint = ""                                  # Optional: Custom S3 endpoint (e.g., "s3.us-west-004.backblazeb2.com" for Backblaze B2)
 # access_key = "AKIAIOSFODNN7EXAMPLE"
 # secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 

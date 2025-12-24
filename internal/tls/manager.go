@@ -199,7 +199,17 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 		)
 	}
 
-	s3Client := s3.NewFromConfig(awsCfg)
+	// Configure S3 client with custom endpoint if specified (e.g., Backblaze B2)
+	var s3Client *s3.Client
+	if cfg.S3.Endpoint != "" {
+		s3Client = s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+			o.BaseEndpoint = &cfg.S3.Endpoint
+			o.UsePathStyle = true // Required for non-AWS S3-compatible services
+		})
+		logger.Info("using custom S3 endpoint", "endpoint", cfg.S3.Endpoint)
+	} else {
+		s3Client = s3.NewFromConfig(awsCfg)
+	}
 
 	logger.Info("validating S3 bucket access", "bucket", cfg.S3.Bucket)
 	_, err = s3Client.HeadBucket(initCtx, &s3.HeadBucketInput{
