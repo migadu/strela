@@ -84,10 +84,10 @@ type LetsEncryptConfig struct {
 
 // S3Config provides AWS S3 credentials for Let's Encrypt certificate storage.
 type S3Config struct {
-	Bucket          string `toml:"bucket"`
-	Region          string `toml:"region"`
-	AccessKeyID     string `toml:"access_key_id"`
-	SecretAccessKey string `toml:"secret_access_key"`
+	Bucket    string `toml:"bucket"`
+	Region    string `toml:"region"`
+	AccessKey string `toml:"access_key"`
+	SecretKey string `toml:"secret_key"`
 }
 
 // DNSConfig configures DNS resolution and caching behavior.

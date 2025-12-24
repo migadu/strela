@@ -191,10 +191,10 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 		awsCfg.Region = cfg.S3.Region
 	}
 
-	if cfg.S3.AccessKeyID != "" && cfg.S3.SecretAccessKey != "" {
+	if cfg.S3.AccessKey != "" && cfg.S3.SecretKey != "" {
 		awsCfg.Credentials = credentials.NewStaticCredentialsProvider(
-			cfg.S3.AccessKeyID,
-			cfg.S3.SecretAccessKey,
+			cfg.S3.AccessKey,
+			cfg.S3.SecretKey,
 			"",
 		)
 	}

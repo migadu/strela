@@ -256,7 +256,7 @@ func TestDNSTimeout(t *testing.T) {
 			SMTPTimeoutSeconds:       5,
 		},
 		DNS: config.DNSConfig{
-			TimeoutSeconds: 1, // Very short DNS timeout
+			TimeoutSeconds: 1,                        // Very short DNS timeout
 			Resolvers:      []string{"192.0.2.1:53"}, // Non-existent DNS server
 		},
 		Reputation: config.ReputationConfig{},

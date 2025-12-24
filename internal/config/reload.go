@@ -126,7 +126,6 @@ func (rc *ReloadableConfig) GetOutbound() OutboundConfig {
 	return rc.config.Outbound
 }
 
-
 // RegisterReloadCallback registers a callback function to be invoked during reload.
 //
 // Callbacks are called before the configuration is swapped, allowing components

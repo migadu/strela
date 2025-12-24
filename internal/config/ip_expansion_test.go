@@ -6,11 +6,11 @@ import (
 
 func TestExpandSourceIPs_IndividualIPs(t *testing.T) {
 	tests := []struct {
-		name       string
-		sourceIPs  []string
-		wantV4     []string
-		wantV6     []string
-		wantErr    bool
+		name        string
+		sourceIPs   []string
+		wantV4      []string
+		wantV6      []string
+		wantErr     bool
 		errContains string
 	}{
 		{
