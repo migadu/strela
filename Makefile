@@ -1,4 +1,4 @@
-.PHONY: all clean build fune-server install test coverage linux freebsd help
+.PHONY: all clean build fune-server install test coverage build-linux freebsd help
 
 # ====================================================================================
 # Variables
@@ -24,6 +24,7 @@ LDFLAGS_VARS = -X 'main.version=${VERSION}' -X 'main.commit=${COMMIT}' -X 'main.
 LDFLAGS = -ldflags="${LDFLAGS_VARS}"
 
 # Cross-compilation binaries
+BIN_DIR ?= bin
 FUNE_LINUX_BINARY ?= fune-linux-amd64
 FUNE_FREEBSD_BINARY ?= fune-freebsd-amd64
 
@@ -52,8 +53,8 @@ install:
 
 clean:
 	rm -f $(CMD_DIR)/$(FUNE_SERVER_BIN)
-	rm -f $(CMD_DIR)/$(FUNE_LINUX_BINARY)
-	rm -f $(CMD_DIR)/$(FUNE_FREEBSD_BINARY)
+	rm -f $(BIN_DIR)/$(FUNE_LINUX_BINARY)
+	rm -f $(BIN_DIR)/$(FUNE_FREEBSD_BINARY)
 	rm -f coverage.out
 
 # ====================================================================================
@@ -75,11 +76,13 @@ security-scan:
 # Cross-compilation
 # ====================================================================================
 
-linux:
-	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(CMD_DIR)/$(FUNE_LINUX_BINARY) $(FUNE_SERVER_SRC)
+build-linux:
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(FUNE_LINUX_BINARY) $(FUNE_SERVER_SRC)
 
 freebsd:
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(CMD_DIR)/$(FUNE_FREEBSD_BINARY) $(FUNE_SERVER_SRC)
+	@mkdir -p $(BIN_DIR)
+	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_FREEBSD_BINARY) $(FUNE_SERVER_SRC)
 
 # ====================================================================================
 # Help
@@ -96,6 +99,6 @@ help:
 	@echo "  clean              Remove build artifacts"
 	@echo "  test               Run tests"
 	@echo "  coverage           Run tests with coverage"
-	@echo "  linux              Cross-compile static binary for Linux"
+	@echo "  build-linux        Cross-compile static binary for Linux"
 	@echo "  freebsd            Cross-compile for FreeBSD"
 	@echo "  help               Show this help message"
