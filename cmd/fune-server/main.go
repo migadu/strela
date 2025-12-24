@@ -47,6 +47,7 @@ func basicAuthMiddleware(next http.Handler, username, password string, logger *s
 }
 
 func main() {
+	configPath := flag.String("config", "config.toml", "Path to configuration file")
 	showVersion := flag.Bool("version", false, "Show version information and exit")
 	flag.Parse()
 
@@ -56,7 +57,7 @@ func main() {
 	}
 
 	// Load config
-	tempCfg, err := config.LoadConfig("config.toml")
+	tempCfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
@@ -69,10 +70,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("starting fune SMTP delivery service", "version", version)
+	logger.Info("starting fune SMTP delivery service", "version", version, "config", *configPath)
 
 	// Load reloadable config
-	reloadableCfg, err := config.NewReloadableConfig("config.toml", logger)
+	reloadableCfg, err := config.NewReloadableConfig(*configPath, logger)
 	if err != nil {
 		logger.Error("failed to load reloadable config", "error", err)
 		os.Exit(1)
