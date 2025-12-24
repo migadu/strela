@@ -635,5 +635,44 @@ keepalive_timeout 90s;
 
 ---
 
-**Last Updated**: 2025-12-13 (v2.0.4 - IPv6/IPv4 dual-stack with CIDR expansion)
+## Resource Cleanup & Graceful Shutdown (v2.0.5)
+
+### Background Cleanup Goroutines
+All background cleanup goroutines use `recovery.SafeGo()` for panic protection:
+
+1. **Domain Rate Limiters** (`delivery.go`):
+   - Runs every 5 minutes
+   - Removes domain limiters unused for >10 minutes
+   - Prevents unbounded memory growth from unique domains
+
+2. **Connection Pool** (`pool.go`):
+   - Runs every TTL interval (default 5s)
+   - Closes expired idle connections
+   - Prevents stale connections from accumulating
+
+3. **MX Cache** (`delivery.go`):
+   - Runs every 5 minutes
+   - Removes expired DNS cache entries
+
+4. **IP Reputation Tracker** (`delivery.go`):
+   - Runs every hour
+   - Cleans up old degraded IP entries
+
+### Graceful Shutdown Sequence
+When receiving SIGINT/SIGTERM:
+
+```go
+1. server.Shutdown(ctx)   // Stop accepting HTTP requests, drain active
+2. rateLimiter.Stop()     // Stop rate limiter cleanup goroutine
+3. deliverer.Stop()       // Stop all cleanup goroutines, close pool
+```
+
+### Thread Safety Improvements
+- **IPRotator.random**: Protected with mutex via `RandomIntn()` method
+- **Connection Pool**: Cleanup goroutine uses stopCh for graceful termination
+- **All sync.Map type assertions**: Properly checked with ok pattern
+
+---
+
+**Last Updated**: 2025-12-14 (v2.0.5 - Production readiness: cleanup goroutines & graceful shutdown)
 **Next Review**: After load testing and operational documentation

@@ -117,9 +117,10 @@ func main() {
 	if cfg.Inbound.MaxConcurrentRequests > 0 {
 		apiHandler = handler.ConcurrencyLimitMiddleware(cfg.Inbound.MaxConcurrentRequests)(apiHandler)
 	}
+	var rateLimiter *handler.RateLimiter
 	if cfg.Inbound.RateLimitEnabled {
-		rl := handler.NewRateLimiter(cfg.Inbound.RateLimitRequestsPerIP, cfg.Inbound.RateLimitWindowSeconds, logger)
-		apiHandler = rl.Middleware(apiHandler)
+		rateLimiter = handler.NewRateLimiter(cfg.Inbound.RateLimitRequestsPerIP, cfg.Inbound.RateLimitWindowSeconds, logger)
+		apiHandler = rateLimiter.Middleware(apiHandler)
 	}
 	if m != nil {
 		apiHandler = handler.MetricsMiddleware(apiHandler, m)
@@ -203,13 +204,26 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
-	logger.Info("shutting down...")
+	logger.Info("shutting down gracefully...")
+
+	// 1. Stop accepting new HTTP requests
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("shutdown error", "error", err)
+		logger.Error("HTTP server shutdown error", "error", err)
 	}
-	logger.Info("shutdown complete")
+	logger.Info("HTTP server stopped")
+
+	// 2. Stop rate limiter cleanup goroutine
+	if rateLimiter != nil {
+		rateLimiter.Stop()
+		logger.Info("rate limiter stopped")
+	}
+
+	// 3. Stop deliverer (stops all background cleanup goroutines, closes connection pool)
+	deliverer.Stop()
+
+	logger.Info("graceful shutdown complete")
 }
 
 // expandSourceIPsFromConfig expands source IPs from config.

@@ -2,8 +2,11 @@ package delivery
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
+
+	"fune/internal/recovery"
 
 	"github.com/emersion/go-smtp"
 )
@@ -22,17 +25,80 @@ type ConnectionPool struct {
 	connections map[string][]*PooledConnection // Key: "mxHost|sourceIP"
 	ttl         time.Duration
 	maxIdle     int
+	logger      *slog.Logger
+	stopCh      chan struct{}
 }
 
-// NewConnectionPool creates a new connection pool.
-func NewConnectionPool(ttlSeconds int) *ConnectionPool {
+// NewConnectionPool creates a new connection pool with background cleanup.
+func NewConnectionPool(ttlSeconds int, logger *slog.Logger) *ConnectionPool {
 	if ttlSeconds <= 0 {
 		ttlSeconds = 5 // Default safe TTL
 	}
-	return &ConnectionPool{
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	p := &ConnectionPool{
 		connections: make(map[string][]*PooledConnection),
 		ttl:         time.Duration(ttlSeconds) * time.Second,
 		maxIdle:     10, // Per-key limit
+		logger:      logger,
+		stopCh:      make(chan struct{}),
+	}
+
+	// Start background cleanup goroutine
+	p.startCleanup()
+
+	return p
+}
+
+// startCleanup starts a background goroutine to periodically clean up expired connections.
+func (p *ConnectionPool) startCleanup() {
+	recovery.SafeGo(p.logger, "connection-pool-cleanup", func() {
+		// Run cleanup every TTL interval
+		ticker := time.NewTicker(p.ttl)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				p.cleanupExpired()
+			case <-p.stopCh:
+				return
+			}
+		}
+	})
+}
+
+// cleanupExpired removes all expired connections from the pool.
+func (p *ConnectionPool) cleanupExpired() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := time.Now()
+	removed := 0
+
+	for key, conns := range p.connections {
+		var active []*PooledConnection
+		for _, conn := range conns {
+			if now.Sub(conn.timestamp) > p.ttl {
+				// Expired, close it
+				conn.client.Close()
+				removed++
+			} else {
+				active = append(active, conn)
+			}
+		}
+
+		if len(active) == 0 {
+			delete(p.connections, key)
+		} else {
+			p.connections[key] = active
+		}
+	}
+
+	if removed > 0 {
+		p.logger.Debug("cleaned up expired pooled connections", "removed", removed)
 	}
 }
 
@@ -110,15 +176,36 @@ func (p *ConnectionPool) Put(client *smtp.Client, mxHost, sourceIP string) {
 	})
 }
 
-// CloseAll closes all idle connections in the pool.
+// CloseAll closes all idle connections in the pool and stops the cleanup goroutine.
 func (p *ConnectionPool) CloseAll() {
+	// Signal cleanup goroutine to stop
+	close(p.stopCh)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	count := 0
 	for key, conns := range p.connections {
 		for _, conn := range conns {
 			conn.client.Close()
+			count++
 		}
 		delete(p.connections, key)
 	}
+
+	if count > 0 {
+		p.logger.Info("closed all pooled connections", "count", count)
+	}
+}
+
+// Stats returns the current pool statistics.
+func (p *ConnectionPool) Stats() (totalConnections int, uniqueKeys int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, conns := range p.connections {
+		totalConnections += len(conns)
+	}
+	uniqueKeys = len(p.connections)
+	return
 }

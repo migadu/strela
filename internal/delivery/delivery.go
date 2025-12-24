@@ -46,6 +46,7 @@ type Deliverer struct {
 	domainLimiters    sync.Map // map[string]*domainRateLimiter
 	metrics           DeliveryMetrics
 	pool              *ConnectionPool
+	stopCh            chan struct{}
 }
 
 type domainRateLimiter struct {
@@ -96,7 +97,7 @@ func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSou
 	ipsV4 := expandedIPs.IPv4
 	ipsV6 := expandedIPs.IPv6
 
-	return &Deliverer{
+	d := &Deliverer{
 		config:            config,
 		arcConfig:         arcConfig,
 		mxLookup:          mxLookup,
@@ -105,8 +106,123 @@ func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSou
 		reputationTracker: reputationTracker,
 		arcPrivateKey:     arcPrivateKey,
 		srs:               srsInstance,
-		pool:              NewConnectionPool(config.ConnectionPoolTTLSeconds),
+		pool:              NewConnectionPool(config.ConnectionPoolTTLSeconds, logger),
+		stopCh:            make(chan struct{}),
 	}
+
+	// Start background cleanup goroutines
+	d.startCleanupRoutines()
+
+	return d
+}
+
+// startCleanupRoutines starts background goroutines for periodic cleanup of
+// domain rate limiters, connection pool, MX cache, and IP reputation tracker.
+func (d *Deliverer) startCleanupRoutines() {
+	// Domain rate limiter cleanup (every 5 minutes, remove entries older than 10 minutes)
+	recovery.SafeGo(d.logger, "domain-limiter-cleanup", func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				d.cleanupDomainLimiters()
+			case <-d.stopCh:
+				return
+			}
+		}
+	})
+
+	// MX cache cleanup (every 5 minutes)
+	recovery.SafeGo(d.logger, "mx-cache-cleanup", func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				d.mxLookup.CleanupExpiredCache()
+			case <-d.stopCh:
+				return
+			}
+		}
+	})
+
+	// IP reputation cleanup (every hour)
+	recovery.SafeGo(d.logger, "ip-reputation-cleanup", func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				d.reputationTracker.Cleanup()
+			case <-d.stopCh:
+				return
+			}
+		}
+	})
+}
+
+// cleanupDomainLimiters removes stale domain rate limiters that haven't been
+// used for more than 10 minutes to prevent unbounded memory growth.
+func (d *Deliverer) cleanupDomainLimiters() {
+	cutoff := time.Now().Add(-10 * time.Minute)
+	removed := 0
+
+	d.domainLimiters.Range(func(key, value any) bool {
+		limiter, ok := value.(*domainRateLimiter)
+		if !ok {
+			// Invalid type, remove it
+			d.domainLimiters.Delete(key)
+			removed++
+			return true
+		}
+
+		limiter.mu.Lock()
+		lastUpdate := limiter.lastUpdate
+		limiter.mu.Unlock()
+
+		if lastUpdate.Before(cutoff) {
+			d.domainLimiters.Delete(key)
+			removed++
+		}
+		return true
+	})
+
+	if removed > 0 {
+		d.logger.Info("cleaned up stale domain rate limiters", "removed", removed)
+	}
+}
+
+// Stop gracefully stops the deliverer and all background goroutines.
+// It also closes the connection pool and cleans up resources.
+func (d *Deliverer) Stop() {
+	d.logger.Info("stopping deliverer...")
+
+	// Signal all background goroutines to stop
+	close(d.stopCh)
+
+	// Close connection pool
+	if d.pool != nil {
+		d.pool.CloseAll()
+	}
+
+	// Final cleanup
+	d.reputationTracker.Cleanup()
+
+	d.logger.Info("deliverer stopped")
+}
+
+// GetConnectionPool returns the connection pool (for testing/inspection)
+func (d *Deliverer) GetConnectionPool() *ConnectionPool {
+	return d.pool
+}
+
+// GetReputationTracker returns the IP reputation tracker (for testing/inspection)
+func (d *Deliverer) GetReputationTracker() *IPReputationTracker {
+	return d.reputationTracker
 }
 
 // DeliverMessage attempts to deliver a message synchronously.
@@ -643,6 +759,7 @@ type IPRotator struct {
 	counterV4  uint32
 	counterV6  uint32
 	random     *rand.Rand
+	randomMu   sync.Mutex // Protects random for thread-safe access
 	preferIPv6 bool
 }
 
@@ -655,6 +772,13 @@ func NewIPRotator(ipsV4, ipsV6 []string, strategy string, preferIPv6 bool) *IPRo
 		random:     rand.New(rand.NewSource(time.Now().UnixNano())),
 		preferIPv6: preferIPv6,
 	}
+}
+
+// RandomIntn returns a random integer in [0, n) with thread-safe access.
+func (r *IPRotator) RandomIntn(n int) int {
+	r.randomMu.Lock()
+	defer r.randomMu.Unlock()
+	return r.random.Intn(n)
 }
 
 // GetAllIPsV4 returns all IPv4 addresses.

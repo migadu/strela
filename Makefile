@@ -1,4 +1,4 @@
-.PHONY: all clean build fune-server install test coverage linux-musl freebsd help
+.PHONY: all clean build fune-server install test coverage linux freebsd help
 
 # ====================================================================================
 # Variables
@@ -75,8 +75,8 @@ security-scan:
 # Cross-compilation
 # ====================================================================================
 
-linux-musl:
-	CC=x86_64-linux-musl-gcc CXX=x86_64-linux-musl-g++ GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS} -extldflags -static" -o $(CMD_DIR)/$(FUNE_LINUX_BINARY) $(FUNE_SERVER_SRC)
+linux:
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(CMD_DIR)/$(FUNE_LINUX_BINARY) $(FUNE_SERVER_SRC)
 
 freebsd:
 	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(CMD_DIR)/$(FUNE_FREEBSD_BINARY) $(FUNE_SERVER_SRC)
@@ -96,6 +96,6 @@ help:
 	@echo "  clean              Remove build artifacts"
 	@echo "  test               Run tests"
 	@echo "  coverage           Run tests with coverage"
-	@echo "  linux-musl         Cross-compile for Linux with musl"
+	@echo "  linux              Cross-compile static binary for Linux"
 	@echo "  freebsd            Cross-compile for FreeBSD"
 	@echo "  help               Show this help message"
