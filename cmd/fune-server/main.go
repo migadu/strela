@@ -46,13 +46,19 @@ func basicAuthMiddleware(next http.Handler, username, password string, logger *s
 	})
 }
 
+func cmdVersion() {
+	fmt.Printf("fune-server %s\n", version)
+	fmt.Printf("  commit: %s\n", commit)
+	fmt.Printf("  built:  %s\n", date)
+}
+
 func main() {
 	configPath := flag.String("config", "config.toml", "Path to configuration file")
 	showVersion := flag.Bool("version", false, "Show version information and exit")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("fune-server version %s\n", version)
+		cmdVersion()
 		os.Exit(0)
 	}
 
@@ -130,7 +136,7 @@ func main() {
 	// CRITICAL: Panic recovery must be the outermost middleware to catch all panics
 	apiHandler = handler.PanicRecoveryMiddleware(apiHandler, logger)
 
-	mux.Handle("/v1/deliver", apiHandler)
+	mux.Handle("/deliver", apiHandler)
 
 	// Metrics Endpoint
 	if m != nil && cfg.Metrics.Path != "" {
