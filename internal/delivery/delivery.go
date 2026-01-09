@@ -636,6 +636,11 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		}
 	}()
 
+	// Set connection deadline based on context
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+
 	// Extract hostname for TLS verification
 	host, _, _ := net.SplitHostPort(mxHost)
 	if host == "" {
@@ -666,12 +671,19 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		// Instead, we just stop using it and write directly to 'conn'.
 		// Since we just did Hello(), buffer should be empty.
 
+		// Set write deadline for STARTTLS command
+		if deadline, ok := ctx.Deadline(); ok {
+			conn.SetWriteDeadline(deadline)
+		}
 		if _, err := conn.Write([]byte("STARTTLS\r\n")); err != nil {
 			client.Close()
 			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS send failed: %v", err)}, err
 		}
 
-		// Read 220 response
+		// Read 220 response with timeout
+		if deadline, ok := ctx.Deadline(); ok {
+			conn.SetReadDeadline(deadline)
+		}
 		buf := make([]byte, 1024)
 		n, err := conn.Read(buf)
 		if err != nil {
