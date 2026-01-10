@@ -647,93 +647,32 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		host = mxHost
 	}
 
-	// Create initial SMTP client (plaintext)
-	client := smtp.NewClient(conn)
-	// Do not defer client.Close() here, we return it.
-
-	// Send EHLO
-	if err := client.Hello("localhost"); err != nil {
-		client.Close()
-		return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
+	// TLS configuration
+	tlsConfig := &tls.Config{
+		ServerName: host,
+		MinVersion: tls.VersionTLS12,
 	}
 
-	// STARTTLS
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		d.logger.Debug("STARTTLS supported, upgrading connection", "mx", mxHost)
-
-		tlsConfig := &tls.Config{
-			ServerName: host,
-			MinVersion: tls.VersionTLS12,
-		}
-
-		// Manual STARTTLS upgrade logic
-		// We avoid closing 'client' here if it closes the underlying connection.
-		// Instead, we just stop using it and write directly to 'conn'.
-		// Since we just did Hello(), buffer should be empty.
-
-		// Set write deadline for STARTTLS command
-		if deadline, ok := ctx.Deadline(); ok {
-			conn.SetWriteDeadline(deadline)
-		}
-		if _, err := conn.Write([]byte("STARTTLS\r\n")); err != nil {
-			client.Close()
-			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS send failed: %v", err)}, err
-		}
-
-		// Read 220 response with timeout
-		if deadline, ok := ctx.Deadline(); ok {
-			conn.SetReadDeadline(deadline)
-		}
-		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
-		if err != nil {
-			client.Close() // Best effort
-			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS response failed: %v", err)}, err
-		}
-
-		response := string(buf[:n])
-		if len(response) < 3 || response[:3] != "220" {
-			client.Close()
-			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS rejected: %s", response)}, fmt.Errorf("bad response")
-		}
-
-		// Wrap connection in TLS
-		tlsConn := tls.Client(conn, tlsConfig)
-
-		// Perform TLS handshake with context timeout and panic recovery
-		handshakeDone := make(chan error, 1)
-		recovery.SafeGo(d.logger, "tls-handshake", func() {
-			handshakeDone <- tlsConn.Handshake()
-		})
-
-		select {
-		case err := <-handshakeDone:
-			if err != nil {
-				// Don't close tlsConn yet if we want to return specific error?
-				// But we are returning nil client.
+	// Use NewClientStartTLS which handles EHLO + STARTTLS + TLS handshake
+	// This is the proper way to do STARTTLS with go-smtp library
+	d.logger.Debug("attempting STARTTLS connection", "mx", mxHost)
+	client, err := smtp.NewClientStartTLS(conn, tlsConfig)
+	if err != nil {
+		// Check if STARTTLS is not supported
+		if err.Error() == "smtp: server doesn't support STARTTLS" {
+			d.logger.Warn("STARTTLS not supported, using plaintext", "mx", mxHost)
+			// Fall back to plaintext connection
+			client = smtp.NewClient(conn)
+			if err := client.Hello("localhost"); err != nil {
 				client.Close()
-				return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("TLS handshake failed: %v", err)}, err
+				return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
 			}
-		case <-ctx.Done():
-			client.Close()
-			return nil, DeliveryResult{Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "TLS handshake timed out"}, ctx.Err()
+		} else {
+			conn.Close()
+			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS failed: %v", err)}, err
 		}
-
-		// Create new SMTP client using the TLS connection
-		// Note: The old 'client' is abandoned. We invoke quit/close on it later?
-		// No, we can't because it would close the underlying conn which we just upgraded.
-		// We rely on GC to clean up the struct, and we manage the 'tlsConn' now.
-		client = smtp.NewClient(tlsConn)
-
-		// Send EHLO again
-		if err := client.Hello("localhost"); err != nil {
-			client.Close()
-			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
-		}
-
-		d.logger.Debug("STARTTLS upgrade successful", "mx", mxHost)
 	} else {
-		d.logger.Warn("STARTTLS not supported", "mx", mxHost)
+		d.logger.Debug("STARTTLS upgrade successful", "mx", mxHost)
 	}
 
 	success = true // Prevent deferred close
