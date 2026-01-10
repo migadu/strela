@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"math/rand"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fune/internal/config"
@@ -337,13 +339,11 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 
 // tryDeliveryWithIPVersion attempts delivery using either IPv6 or IPv4 source IPs and matching MX host IPs.
 func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to string, message []byte, mxHost string, useIPv6 bool, startTime time.Time) DeliveryResult {
-	// Get source IPs for this version
-	var sourceIPs []string
-	if useIPv6 {
-		sourceIPs = d.ipRotator.GetAllIPsV6()
-	} else {
-		sourceIPs = d.ipRotator.GetAllIPsV4()
-	}
+	// Extract domain from recipient for hash-domain strategy
+	_, domain := splitEmail(to)
+
+	// Get ordered source IPs for this version based on rotation strategy
+	sourceIPs := d.ipRotator.SelectIPs(useIPv6, domain)
 
 	// Filter by reputation
 	healthyIPs := d.reputationTracker.GetHealthyIPs(sourceIPs)
@@ -549,6 +549,8 @@ func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []b
 }
 
 func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, preferIPv6 bool) (*smtp.Client, DeliveryResult, error) {
+	d.logger.Debug("resolving MX host", "mx", mxHost)
+
 	// Resolve MX host to IP addresses
 	mxIPs, err := d.mxLookup.dnsResolver.LookupHost(ctx, mxHost)
 	if err != nil {
@@ -560,19 +562,29 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		}, err
 	}
 
-	// Filter MX IPs by version (IPv6 or IPv4)
+	// Filter MX IPs by version matching sourceIP if provided, or preferIPv6
 	var targetIP string
+	isSourceIPv6 := false
+	if sourceIP != "" {
+		parsedSource := net.ParseIP(sourceIP)
+		isSourceIPv6 = parsedSource != nil && parsedSource.To4() == nil
+	} else {
+		isSourceIPv6 = preferIPv6
+	}
+
+	d.logger.Debug("selecting target MX IP", "mx", mxHost, "source_ip", sourceIP, "require_ipv6", isSourceIPv6)
+
 	for _, ip := range mxIPs {
 		parsedIP := net.ParseIP(ip)
 		if parsedIP == nil {
 			continue
 		}
 
-		isV4 := parsedIP.To4() != nil
-		if preferIPv6 && !isV4 {
+		isTargetV4 := parsedIP.To4() != nil
+		if isSourceIPv6 && !isTargetV4 {
 			targetIP = ip
 			break
-		} else if !preferIPv6 && isV4 {
+		} else if !isSourceIPv6 && isTargetV4 {
 			targetIP = ip
 			break
 		}
@@ -584,7 +596,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 			targetIP = mxIPs[0]
 			d.logger.Debug("no matching IP version for MX, using first available",
 				"mx", mxHost,
-				"prefer_ipv6", preferIPv6,
+				"require_ipv6", isSourceIPv6,
 				"target_ip", targetIP)
 		} else {
 			return nil, DeliveryResult{
@@ -600,6 +612,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 	dialer := &net.Dialer{
 		Timeout: time.Duration(d.config.ConnectionTimeoutSeconds) * time.Second,
 	}
+
 	if sourceIP != "" {
 		ip := net.ParseIP(sourceIP)
 		if ip == nil {
@@ -610,8 +623,22 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 				Error:    fmt.Sprintf("Invalid source IP address: %s", sourceIP),
 			}, fmt.Errorf("invalid IP")
 		}
+
+		// Ensure target IP version matches source IP version to avoid bind errors
+		isTargetIPv6 := net.ParseIP(targetIP).To4() == nil
+		if isSourceIPv6 != isTargetIPv6 {
+			return nil, DeliveryResult{
+				Status:   "error",
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error:    fmt.Sprintf("IP version mismatch: source %s (v6=%v) cannot connect to target %s (v6=%v)", sourceIP, isSourceIPv6, targetIP, isTargetIPv6),
+			}, fmt.Errorf("IP version mismatch")
+		}
+
 		dialer.LocalAddr = &net.TCPAddr{IP: ip}
 	}
+
+	d.logger.Debug("connecting to MX", "mx", mxHost, "target_ip", targetIP, "source_ip", sourceIP)
 
 	// Connect to the target IP
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, "25"))
@@ -620,12 +647,13 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		if sourceIP != "" && isBindError(err) {
 			d.logger.Error("failed to bind to source IP",
 				"source_ip", sourceIP,
+				"target_ip", targetIP,
 				"error", err)
 			return nil, DeliveryResult{
 				Status:   "error",
 				MXHost:   mxHost,
 				SourceIP: sourceIP,
-				Error:    fmt.Sprintf("Cannot bind to source IP %s: %v", sourceIP, err),
+				Error:    fmt.Sprintf("Cannot bind to source IP %s for target %s: %v", sourceIP, targetIP, err),
 			}, err
 		}
 		return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
@@ -685,28 +713,36 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		reader := textproto.NewReader(bufio.NewReader(conn))
 
 		// 1. Read greeting banner
-		if _, _, err := reader.ReadResponse(220); err != nil {
+		code, msg, err := reader.ReadResponse(220)
+		if err != nil {
 			resultCh <- clientResult{err: fmt.Errorf("failed to read banner: %w", err)}
 			return
 		}
+		d.logger.Debug("received SMTP banner", "mx", mxHost, "code", code, "msg", msg)
 
 		// 2. Send EHLO with configured hostname
+		d.logger.Debug("sending EHLO", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
 		fmt.Fprintf(conn, "EHLO %s\r\n", d.config.HelloHostname)
-		_, msg, err := reader.ReadResponse(250)
+		code, msg, err = reader.ReadResponse(250)
 		if err != nil {
 			resultCh <- clientResult{err: fmt.Errorf("EHLO failed: %w", err)}
 			return
 		}
+		d.logger.Debug("received EHLO response", "mx", mxHost, "code", code, "msg", msg)
 
 		// 3. Check for STARTTLS support and upgrade if available
 		if strings.Contains(strings.ToUpper(msg), "STARTTLS") {
+			d.logger.Debug("sending STARTTLS", "mx", mxHost)
 			fmt.Fprintf(conn, "STARTTLS\r\n")
-			if _, _, err := reader.ReadResponse(220); err != nil {
+			code, msg, err = reader.ReadResponse(220)
+			if err != nil {
 				resultCh <- clientResult{err: fmt.Errorf("STARTTLS command failed: %w", err)}
 				return
 			}
+			d.logger.Debug("received STARTTLS response", "mx", mxHost, "code", code, "msg", msg)
 
 			// Upgrade connection to TLS
+			d.logger.Debug("starting TLS handshake", "mx", mxHost, "server_name", tlsConfig.ServerName)
 			tlsConn := tls.Client(conn, tlsConfig)
 			if err := tlsConn.Handshake(); err != nil {
 				resultCh <- clientResult{err: fmt.Errorf("TLS handshake failed: %w", err)}
@@ -757,6 +793,11 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 
 func (d *Deliverer) mapSMTPError(err error, mxHost, sourceIP string) DeliveryResult {
 	res := DeliveryResult{MXHost: mxHost, SourceIP: sourceIP}
+
+	// First classify using our error classifier for better category assignment
+	classified := ClassifyError(0, "", err)
+	res.Error = classified.Message
+
 	if smtpErr, ok := err.(*smtp.SMTPError); ok {
 		res.SMTPCode = smtpErr.Code
 		res.SMTPMessage = smtpErr.Message
@@ -766,8 +807,24 @@ func (d *Deliverer) mapSMTPError(err error, mxHost, sourceIP string) DeliveryRes
 			res.Status = "temp_fail"
 		}
 	} else {
-		res.Status = "error"
-		res.Error = err.Error()
+		// Category-based mapping
+		switch classified.Category {
+		case ErrorPermanent:
+			res.Status = "hard_bounce"
+		case ErrorTemporary, ErrorGreylist, ErrorThrottled:
+			res.Status = "temp_fail"
+		case ErrorNetwork:
+			res.Status = "timeout"
+		case ErrorReputation:
+			res.Status = "temp_fail" // Let reputation tracker handle degradation
+		default:
+			res.Status = "error"
+		}
+
+		// Specific check for bind errors which should be "error" status
+		if isBindError(err) {
+			res.Status = "error"
+		}
 	}
 	return res
 }
@@ -799,6 +856,48 @@ func NewIPRotator(ipsV4, ipsV6 []string, strategy string, preferIPv6 bool) *IPRo
 		random:     rand.New(rand.NewSource(time.Now().UnixNano())),
 		preferIPv6: preferIPv6,
 	}
+}
+
+// SelectIPs returns an ordered list of IPs to try based on the rotation strategy.
+func (r *IPRotator) SelectIPs(useIPv6 bool, domain string) []string {
+	ips := r.ipsV4
+	counter := &r.counterV4
+	if useIPv6 {
+		ips = r.ipsV6
+		counter = &r.counterV6
+	}
+
+	if len(ips) == 0 {
+		return nil
+	}
+
+	if len(ips) == 1 {
+		return []string{ips[0]}
+	}
+
+	var startIndex int
+	switch r.strategy {
+	case "random":
+		r.randomMu.Lock()
+		startIndex = r.random.Intn(len(ips))
+		r.randomMu.Unlock()
+	case "hash-domain":
+		h := fnv.New32a()
+		h.Write([]byte(domain))
+		startIndex = int(h.Sum32() % uint32(len(ips)))
+	case "round-robin":
+		fallthrough
+	default:
+		c := atomic.AddUint32(counter, 1)
+		startIndex = int((c - 1) % uint32(len(ips)))
+	}
+
+	// Create a rotated copy starting from startIndex
+	result := make([]string, len(ips))
+	for i := 0; i < len(ips); i++ {
+		result[i] = ips[(startIndex+i)%len(ips)]
+	}
+	return result
 }
 
 // RandomIntn returns a random integer in [0, n) with thread-safe access.

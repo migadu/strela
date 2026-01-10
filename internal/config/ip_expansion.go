@@ -94,16 +94,17 @@ func expandCIDR(ipNet *net.IPNet) ([]string, error) {
 		nextIP := make(net.IP, len(ip))
 		copy(nextIP, ip)
 
-		// Increment IP address
-		for j := len(nextIP) - 1; j >= 0; j-- {
-			nextIP[j] += byte(i >> (8 * (len(nextIP) - 1 - j)))
-			if nextIP[j] != 0 {
-				break
-			}
+		// Increment IP address properly with carry
+		carry := uint32(i)
+		for j := len(nextIP) - 1; j >= 0 && carry > 0; j-- {
+			val := uint32(nextIP[j]) + (carry & 0xFF)
+			nextIP[j] = byte(val)
+			carry = (carry >> 8) + (val >> 8)
 		}
 
 		// Skip network address (first) and broadcast address (last) for IPv4
-		if bits == 32 {
+		// unless it's a /31 or /32 subnet which don't have them in the traditional sense
+		if bits == 32 && ones < 31 {
 			if i == 0 || i == numHosts-1 {
 				continue
 			}
