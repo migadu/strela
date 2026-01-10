@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -8,7 +9,9 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"net/textproto"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -636,15 +639,25 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		}
 	}()
 
-	// Set connection deadline based on context
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-	}
-
 	// Extract hostname for TLS verification
 	host, _, _ := net.SplitHostPort(mxHost)
 	if host == "" {
 		host = mxHost
+	}
+	// Trim trailing dot for TLS verification (MX records often have them)
+	host = strings.TrimSuffix(host, ".")
+
+	// Calculate remaining timeout from context
+	var commandTimeout time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		commandTimeout = time.Until(deadline)
+		if commandTimeout <= 0 {
+			conn.Close()
+			return nil, DeliveryResult{Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "context deadline exceeded"}, ctx.Err()
+		}
+	} else {
+		// Default timeout if no context deadline
+		commandTimeout = time.Duration(d.config.SMTPTimeoutSeconds) * time.Second
 	}
 
 	// TLS configuration
@@ -653,26 +666,89 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		MinVersion: tls.VersionTLS12,
 	}
 
-	// Use NewClientStartTLS which handles EHLO + STARTTLS + TLS handshake
-	// This is the proper way to do STARTTLS with go-smtp library
-	d.logger.Debug("attempting STARTTLS connection", "mx", mxHost)
-	client, err := smtp.NewClientStartTLS(conn, tlsConfig)
-	if err != nil {
-		// Check if STARTTLS is not supported
-		if err.Error() == "smtp: server doesn't support STARTTLS" {
-			d.logger.Warn("STARTTLS not supported, using plaintext", "mx", mxHost)
-			// Fall back to plaintext connection
-			client = smtp.NewClient(conn)
-			if err := client.Hello("localhost"); err != nil {
-				client.Close()
-				return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
-			}
-		} else {
-			conn.Close()
-			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("STARTTLS failed: %v", err)}, err
+	d.logger.Debug("attempting STARTTLS connection", "mx", mxHost, "timeout", commandTimeout)
+
+	// Perform STARTTLS with timeout enforcement using goroutine
+	type clientResult struct {
+		client *smtp.Client
+		err    error
+	}
+	resultCh := make(chan clientResult, 1)
+
+	recovery.SafeGo(d.logger, "starttls-handshake", func() {
+		// Set deadline for the handshake
+		conn.SetDeadline(time.Now().Add(commandTimeout))
+
+		// Manual handshake to allow custom Hello hostname and handle STARTTLS upgrade.
+		// go-smtp doesn't easily expose StartTLS upgrade on an existing client session
+		// without using its internal logic which is hardcoded to "localhost".
+		reader := textproto.NewReader(bufio.NewReader(conn))
+
+		// 1. Read greeting banner
+		if _, _, err := reader.ReadResponse(220); err != nil {
+			resultCh <- clientResult{err: fmt.Errorf("failed to read banner: %w", err)}
+			return
 		}
-	} else {
-		d.logger.Debug("STARTTLS upgrade successful", "mx", mxHost)
+
+		// 2. Send EHLO with configured hostname
+		fmt.Fprintf(conn, "EHLO %s\r\n", d.config.HelloHostname)
+		_, msg, err := reader.ReadResponse(250)
+		if err != nil {
+			resultCh <- clientResult{err: fmt.Errorf("EHLO failed: %w", err)}
+			return
+		}
+
+		// 3. Check for STARTTLS support and upgrade if available
+		if strings.Contains(strings.ToUpper(msg), "STARTTLS") {
+			fmt.Fprintf(conn, "STARTTLS\r\n")
+			if _, _, err := reader.ReadResponse(220); err != nil {
+				resultCh <- clientResult{err: fmt.Errorf("STARTTLS command failed: %w", err)}
+				return
+			}
+
+			// Upgrade connection to TLS
+			tlsConn := tls.Client(conn, tlsConfig)
+			if err := tlsConn.Handshake(); err != nil {
+				resultCh <- clientResult{err: fmt.Errorf("TLS handshake failed: %w", err)}
+				return
+			}
+			conn = tlsConn
+			d.logger.Debug("STARTTLS upgrade successful", "mx", mxHost)
+		} else {
+			d.logger.Warn("STARTTLS not supported by server, using plaintext", "mx", mxHost)
+		}
+
+		// 4. Wrap the (possibly upgraded) connection in go-smtp client
+		c := smtp.NewClient(conn)
+		c.CommandTimeout = commandTimeout
+		c.SubmissionTimeout = commandTimeout
+
+		// 5. Send EHLO again after TLS upgrade (required by SMTP)
+		if err := c.Hello(d.config.HelloHostname); err != nil {
+			c.Close()
+			resultCh <- clientResult{err: fmt.Errorf("EHLO after STARTTLS failed: %w", err)}
+			return
+		}
+
+		resultCh <- clientResult{client: c, err: nil}
+	})
+
+	var client *smtp.Client
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			if result.client != nil {
+				result.client.Close()
+			} else {
+				conn.Close()
+			}
+			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("Handshake failed: %v", result.err)}, result.err
+		}
+		client = result.client
+	case <-ctx.Done():
+		// Timeout occurred
+		conn.Close()
+		return nil, DeliveryResult{Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "STARTTLS handshake timed out"}, ctx.Err()
 	}
 
 	success = true // Prevent deferred close

@@ -108,12 +108,13 @@ type OutboundConfig struct {
 	PreferIPv6        bool     `toml:"prefer_ipv6"`         // Try IPv6 first, fallback to IPv4 (default: true)
 	SourceIPSelection string   `toml:"source_ip_selection"` // "round-robin", "random", "hash-domain" (default: round-robin)
 
-	MXCacheTTLSeconds        int `toml:"mx_cache_ttl_seconds"`        // MX record cache TTL (default: 3600s)
-	ConnectionPoolTTLSeconds int `toml:"connection_pool_ttl_seconds"` // Max time to keep idle connection (default: 5s)
-	ConnectionTimeoutSeconds int `toml:"connection_timeout_seconds"`  // TCP connection timeout (default: 30s)
-	SMTPTimeoutSeconds       int `toml:"smtp_timeout_seconds"`        // SMTP command timeout (default: 60s)
-	DeliveryTimeoutSeconds   int `toml:"delivery_timeout_seconds"`    // Maximum time to wait for SMTP delivery (default: 30s)
-	MaxIPsPerMX              int `toml:"max_ips_per_mx"`              // Maximum number of IPs to try per MX host (default: 5)
+	MXCacheTTLSeconds        int    `toml:"mx_cache_ttl_seconds"`        // MX record cache TTL (default: 3600s)
+	ConnectionPoolTTLSeconds int    `toml:"connection_pool_ttl_seconds"` // Max time to keep idle connection (default: 5s)
+	ConnectionTimeoutSeconds int    `toml:"connection_timeout_seconds"`  // TCP connection timeout (default: 30s)
+	SMTPTimeoutSeconds       int    `toml:"smtp_timeout_seconds"`        // SMTP command timeout (default: 60s)
+	DeliveryTimeoutSeconds   int    `toml:"delivery_timeout_seconds"`    // Maximum time to wait for SMTP delivery (default: 30s)
+	MaxIPsPerMX              int    `toml:"max_ips_per_mx"`              // Maximum number of IPs to try per MX host (default: 5)
+	HelloHostname            string `toml:"hello_hostname"`              // Hostname for EHLO greeting (default: system hostname)
 
 	// Rate limiting per destination domain
 	PerDomainIntervalSeconds int `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
@@ -235,6 +236,13 @@ func (c *Config) SetDefaults() {
 	// Actually, let's not set a default - user must be explicit
 	if c.Outbound.MaxIPsPerMX == 0 {
 		c.Outbound.MaxIPsPerMX = 5
+	}
+	if c.Outbound.HelloHostname == "" {
+		hostname, _ := os.Hostname()
+		if hostname == "" {
+			hostname = "localhost"
+		}
+		c.Outbound.HelloHostname = hostname
 	}
 	if c.Outbound.PerDomainIntervalSeconds == 0 {
 		c.Outbound.PerDomainIntervalSeconds = 2

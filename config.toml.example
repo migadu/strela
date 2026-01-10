@@ -90,6 +90,7 @@ max_ips_per_mx = 5                          # Max IP addresses to try per MX hos
 connection_timeout_seconds = 30             # TCP connection timeout to MX server
 connection_pool_ttl_seconds = 5             # Max time to keep idle connection for reuse
 smtp_timeout_seconds = 60                   # SMTP command/response timeout
+hello_hostname = "mail.example.com"         # Hostname for EHLO greeting (default: system hostname)
 
 # v2.0 SYNCHRONOUS DELIVERY TIMEOUT - CRITICAL SETTING
 delivery_timeout_seconds = 30               # Maximum time for entire delivery attempt
