@@ -113,7 +113,7 @@ func TestExpandSourceIPs_CIDRSubnets(t *testing.T) {
 			name:        "IPv6 /126 subnet",
 			sourceIPs:   []string{"2001:db8::/126"},
 			wantV4Count: 0,
-			wantV6Count: 4, // All 4 IPs (no network/broadcast in IPv6)
+			wantV6Count: 3, // 4 IPs - 1 (skip ::)
 			wantErr:     false,
 		},
 		{
@@ -171,6 +171,38 @@ func TestExpandSourceIPs_EmptyInput(t *testing.T) {
 	}
 	if len(result.IPv6) != 0 {
 		t.Errorf("ExpandSourceIPs() IPv6 count = %d, want 0", len(result.IPv6))
+	}
+}
+
+func TestExpandSourceIPs_IPv6_SkipsAllZeros(t *testing.T) {
+	// Test that IPv6 /124 subnet skips :: (all-zeros address)
+	result, err := ExpandSourceIPs([]string{"2001:41d0:403:4716::/124"})
+	if err != nil {
+		t.Fatalf("ExpandSourceIPs() unexpected error: %v", err)
+	}
+
+	// /124 has 16 IPs, but we skip ::
+	expectedCount := 15
+	if len(result.IPv6) != expectedCount {
+		t.Errorf("ExpandSourceIPs() IPv6 count = %d, want %d", len(result.IPv6), expectedCount)
+	}
+
+	// Verify first IP is ::1, not ::
+	if len(result.IPv6) > 0 {
+		firstIP := result.IPv6[0]
+		if firstIP == "2001:41d0:403:4716::" {
+			t.Errorf("ExpandSourceIPs() first IPv6 should not be :: (all-zeros), got %s", firstIP)
+		}
+		if firstIP != "2001:41d0:403:4716::1" {
+			t.Errorf("ExpandSourceIPs() first IPv6 = %s, want 2001:41d0:403:4716::1", firstIP)
+		}
+	}
+
+	// Verify no :: address in the list
+	for _, ip := range result.IPv6 {
+		if ip == "2001:41d0:403:4716::" {
+			t.Errorf("ExpandSourceIPs() should not include :: address, but found %s", ip)
+		}
 	}
 }
 

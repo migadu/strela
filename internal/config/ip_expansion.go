@@ -110,6 +110,12 @@ func expandCIDR(ipNet *net.IPNet) ([]string, error) {
 			}
 		}
 
+		// Skip all-zeros IPv6 address (::) - it's unspecified/any address
+		// Cannot be bound as a source IP
+		if bits == 128 && i == 0 {
+			continue
+		}
+
 		ips = append(ips, nextIP.String())
 	}
 
