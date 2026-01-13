@@ -237,20 +237,25 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	// Extract domain from recipient
 	_, domain := splitEmail(to)
 	if domain == "" {
+		d.logger.Debug("invalid recipient address", "to", to)
 		return DeliveryResult{
 			Status: "hard_bounce",
 			Error:  "Invalid recipient address",
 		}
 	}
 
+	d.logger.Debug("starting delivery attempt", "from", from, "to", to, "domain", domain)
+
 	// 1. Wait for per-domain rate limit
 	if err := d.waitForDomainRateLimit(ctx, domain); err != nil {
 		if err == ErrDomainRateLimitExceeded {
+			d.logger.Debug("domain rate limit exceeded", "domain", domain)
 			return DeliveryResult{
 				Status: "rate_limit", // Fail Fast status
 				Error:  "Domain rate limit exceeded",
 			}
 		}
+		d.logger.Debug("rate limit check failed", "domain", domain, "error", err)
 		return DeliveryResult{
 			Status: "timeout",
 			Error:  "Rate limit check failed",
@@ -258,19 +263,24 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	}
 
 	// 2. Lookup MX records
+	d.logger.Debug("looking up MX records", "domain", domain)
 	mxRecords, err := d.mxLookup.Lookup(ctx, domain)
 	if err != nil {
+		d.logger.Debug("MX lookup failed", "domain", domain, "error", err)
 		return DeliveryResult{
 			Status: "temp_fail",
 			Error:  fmt.Sprintf("MX lookup failed: %v", err),
 		}
 	}
 	if len(mxRecords) == 0 {
+		d.logger.Debug("no MX records found", "domain", domain)
 		return DeliveryResult{
 			Status: "hard_bounce",
 			Error:  "No MX records found",
 		}
 	}
+
+	d.logger.Debug("found MX records", "domain", domain, "count", len(mxRecords))
 
 	// 3. Try each MX with IPv6/IPv4 preference
 	var lastResult DeliveryResult
@@ -280,14 +290,18 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	tryIPv4 := d.ipRotator.HasIPv4()
 	tryIPv6 := d.ipRotator.HasIPv6()
 
-	for _, mx := range mxRecords {
+	for i, mx := range mxRecords {
+		d.logger.Debug("trying MX", "host", mx.Host, "priority", mx.Priority, "index", i, "total", len(mxRecords))
+
 		// Check context
 		if ctx.Err() != nil {
+			d.logger.Debug("context canceled during MX attempts", "error", ctx.Err())
 			return DeliveryResult{Status: "timeout", Error: "Context canceled"}
 		}
 
 		// Try IPv6 first if preferred
 		if tryIPv6First {
+			d.logger.Debug("trying IPv6 first", "mx", mx.Host)
 			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
 			if result.Status == "delivered" || result.Status == "hard_bounce" {
 				return result
@@ -296,6 +310,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 
 			// Fall back to IPv4 if IPv6 failed and IPv4 is available
 			if tryIPv4 {
+				d.logger.Debug("falling back to IPv4", "mx", mx.Host)
 				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
 				if result.Status == "delivered" || result.Status == "hard_bounce" {
 					return result
@@ -304,6 +319,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			}
 		} else if tryIPv4 {
 			// Try IPv4 first (or only)
+			d.logger.Debug("trying IPv4", "mx", mx.Host)
 			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
 			if result.Status == "delivered" || result.Status == "hard_bounce" {
 				return result
@@ -312,6 +328,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 
 			// Fall back to IPv6 if IPv4 failed and IPv6 is available
 			if tryIPv6 {
+				d.logger.Debug("falling back to IPv6", "mx", mx.Host)
 				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
 				if result.Status == "delivered" || result.Status == "hard_bounce" {
 					return result
@@ -320,6 +337,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			}
 		} else {
 			// No source IPs configured - use system default
+			d.logger.Debug("no source IPs configured, using system default", "mx", mx.Host)
 			result := d.attemptDelivery(ctx, from, to, message, mx.Host, "", true)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
@@ -342,6 +360,8 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to strin
 	// Extract domain from recipient for hash-domain strategy
 	_, domain := splitEmail(to)
 
+	d.logger.Debug("selecting source IPs", "ipv6", useIPv6, "domain", domain)
+
 	// Get ordered source IPs for this version based on rotation strategy
 	sourceIPs := d.ipRotator.SelectIPs(useIPv6, domain)
 
@@ -357,9 +377,17 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to strin
 
 	// Try each healthy source IP
 	var lastResult DeliveryResult
-	for _, sourceIP := range healthyIPs {
+	for i, sourceIP := range healthyIPs {
+		d.logger.Debug("attempting delivery with source IP",
+			"mx", mxHost,
+			"source_ip", sourceIP,
+			"ipv6", useIPv6,
+			"index", i,
+			"total", len(healthyIPs))
+
 		// Check context
 		if ctx.Err() != nil {
+			d.logger.Debug("context canceled during source IP attempts", "error", ctx.Err())
 			return DeliveryResult{Status: "timeout", Error: "Context canceled"}
 		}
 
@@ -476,12 +504,10 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []
 }
 
 func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool) DeliveryResult {
-	// Safety cleanup in case of panic or non-pooled exit
-	// We wrap this logic deeply. To properly manage pooling, we handle close/reset manually.
-	// But defer Close() is safe because calling Close() on closed client is fine,
-	// and if we reuse, we won't Close() it.
-	// Wait, if we put back in pool, we must NOT Close().
-	// So we can't defer Close() blindly.
+	d.logger.Debug("starting delivery transaction",
+		"mx", mxHost,
+		"source_ip", sourceIP,
+		"reused", reused)
 
 	err := d.deliverPayload(client, from, to, msg)
 	if err != nil {
@@ -517,20 +543,28 @@ func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []b
 	if d.srs != nil {
 		if rewritten, err := d.srs.Forward(from); err == nil {
 			mailFrom = rewritten
+			d.logger.Debug("SRS rewrote sender", "original", from, "rewritten", rewritten)
 		}
 	}
+
+	d.logger.Debug("sending MAIL FROM", "from", mailFrom)
 	if err := client.Mail(mailFrom, nil); err != nil {
+		d.logger.Debug("MAIL FROM failed", "error", err)
 		return err
 	}
 
 	// RCPT TO
+	d.logger.Debug("sending RCPT TO", "to", to)
 	if err := client.Rcpt(to, nil); err != nil {
+		d.logger.Debug("RCPT TO failed", "error", err)
 		return err
 	}
 
 	// DATA
+	d.logger.Debug("sending DATA", "size", len(msg))
 	w, err := client.Data()
 	if err != nil {
+		d.logger.Debug("DATA command failed", "error", err)
 		return err
 	}
 	if w == nil {
@@ -538,13 +572,16 @@ func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []b
 	}
 
 	if _, err := w.Write(msg); err != nil {
+		d.logger.Debug("failed to write message data", "error", err)
 		return err
 	}
 
 	if err := w.Close(); err != nil {
+		d.logger.Debug("DATA close failed (message rejected)", "error", err)
 		return err
 	}
 
+	d.logger.Debug("delivery transaction successful")
 	return nil
 }
 
@@ -797,6 +834,12 @@ func (d *Deliverer) mapSMTPError(err error, mxHost, sourceIP string) DeliveryRes
 	// First classify using our error classifier for better category assignment
 	classified := ClassifyError(0, "", err)
 	res.Error = classified.Message
+
+	d.logger.Debug("classifying SMTP error",
+		"mx", mxHost,
+		"error", err,
+		"category", classified.Category,
+		"retryable", IsRetryable(classified.Category))
 
 	if smtpErr, ok := err.(*smtp.SMTPError); ok {
 		res.SMTPCode = smtpErr.Code

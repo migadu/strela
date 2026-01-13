@@ -49,7 +49,13 @@ type MessageRequest struct {
 
 // HandleDeliver handles synchronous message delivery requests.
 func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("received delivery request",
+		"remote_addr", r.RemoteAddr,
+		"method", r.Method,
+		"url", r.URL.String())
+
 	if r.Method != http.MethodPost {
+		h.logger.Debug("method not allowed", "method", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -59,31 +65,42 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(token), []byte(h.config.Inbound.AuthToken)) != 1 {
+			h.logger.Debug("authentication failed", "remote_addr", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+		h.logger.Debug("authentication successful", "remote_addr", r.RemoteAddr)
 	}
 
 	// 2. Parse request
 	var req MessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Debug("failed to decode JSON payload", "error", err, "remote_addr", r.RemoteAddr)
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
+	h.logger.Debug("parsed message request",
+		"from", req.From,
+		"to", req.To,
+		"subject", req.Subject,
+		"has_dkim_key", req.DKIMPrivateKey != "")
 
 	// 3. Validation
 	if req.From == "" || req.To == "" {
+		h.logger.Debug("missing required fields", "from", req.From, "to", req.To)
 		http.Error(w, "Missing 'from' or 'to' fields", http.StatusBadRequest)
 		return
 	}
 
 	// 4. Build MIME message
+	h.logger.Debug("building MIME message", "from", req.From, "to", req.To)
 	rawMessage, err := h.buildRawMessage(&req)
 	if err != nil {
 		h.logger.Error("failed to build MIME message", "error", err)
 		http.Error(w, "Failed to build message", http.StatusInternalServerError)
 		return
 	}
+	h.logger.Debug("MIME message built", "size", len(rawMessage))
 
 	// 5. Create context with timeout
 	timeout := time.Duration(h.config.Outbound.DeliveryTimeoutSeconds) * time.Second
@@ -91,7 +108,13 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// 6. Synchronous Delivery
+	h.logger.Debug("starting synchronous delivery", "from", req.From, "to", req.To)
 	result := h.deliveryEngine.DeliverMessage(ctx, req.From, req.To, rawMessage)
+	h.logger.Debug("delivery attempt finished",
+		"status", result.Status,
+		"mx", result.MXHost,
+		"source_ip", result.SourceIP,
+		"duration_ms", result.AttemptDurationMs)
 
 	// 7. Map result to HTTP status
 	statusCode := mapDeliveryStatusToHTTP(result.Status)

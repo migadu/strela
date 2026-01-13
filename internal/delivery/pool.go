@@ -116,6 +116,11 @@ func (p *ConnectionPool) Get(mxHost, sourceIP string) *smtp.Client {
 	key := poolKey(mxHost, sourceIP)
 	conns := p.connections[key]
 
+	if len(conns) == 0 {
+		p.logger.Debug("connection pool miss", "mx", mxHost, "source_ip", sourceIP)
+		return nil
+	}
+
 	// Iterate backwards to get most recent (LIFO) - actually standard slice pop is fine
 	// But we need to filter expired ones.
 	now := time.Now()
@@ -133,16 +138,19 @@ func (p *ConnectionPool) Get(mxHost, sourceIP string) *smtp.Client {
 		// Check expiry
 		if now.Sub(conn.timestamp) > p.ttl {
 			// Expired, close it and try next
+			p.logger.Debug("closing expired pooled connection", "mx", mxHost, "source_ip", sourceIP, "age", now.Sub(conn.timestamp))
 			conn.client.Close() // Best effort close
 			continue
 		}
 
 		// Verify connection is still alive with NOOP
 		if err := conn.client.Noop(); err != nil {
+			p.logger.Debug("pooled connection no longer alive", "mx", mxHost, "source_ip", sourceIP, "error", err)
 			conn.client.Close()
 			continue
 		}
 
+		p.logger.Debug("connection pool hit", "mx", mxHost, "source_ip", sourceIP)
 		return conn.client
 	}
 
@@ -160,6 +168,8 @@ func (p *ConnectionPool) Put(client *smtp.Client, mxHost, sourceIP string) {
 	defer p.mu.Unlock()
 
 	key := poolKey(mxHost, sourceIP)
+	p.logger.Debug("returning connection to pool", "mx", mxHost, "source_ip", sourceIP)
+
 	conns := p.connections[key]
 
 	// Enforce max idle limit

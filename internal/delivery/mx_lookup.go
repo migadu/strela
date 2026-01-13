@@ -63,7 +63,7 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 
 		records, err := m.lookupDNS(context.Background(), domain)
 		if err != nil {
-			m.logger.Error("MX lookup failed", "domain", domain, "error", err)
+			m.logger.Debug("MX lookup failed", "domain", domain, "error", err)
 			// Cache negative result
 			m.storeInCache(domain, nil, m.negativeTTL)
 			return nil, err

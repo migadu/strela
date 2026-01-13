@@ -125,6 +125,7 @@ func (rt *IPReputationTracker) IsIPHealthy(ip string) bool {
 		return true // Retry time reached, allow attempt
 	}
 
+	rt.logger.Debug("IP is currently degraded", "ip", ip, "retry_after", info.RetryAfter)
 	return false
 }
 
@@ -254,9 +255,11 @@ func (rt *IPReputationTracker) RecordDeliveryAttempt(ip string, success bool, er
 	rt.mu.RUnlock()
 
 	if success && wasDegraded {
+		rt.logger.Debug("successful delivery with degraded IP, marking as recovered", "ip", ip)
 		// IP was degraded but now succeeded - mark as recovered
 		rt.MarkIPRecovered(ip)
 	} else if !success && err != nil && err.Category == ErrorReputation {
+		rt.logger.Debug("delivery failed with reputation error, marking IP as degraded", "ip", ip, "error", err)
 		// Reputation error - mark IP as degraded
 		rt.MarkIPDegraded(ip, err.SMTPCode, err.SMTPResponse, deliveryInfo)
 	}
