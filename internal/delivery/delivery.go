@@ -476,16 +476,25 @@ func (d *Deliverer) waitForDomainRateLimit(ctx context.Context, domain string) e
 func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []byte, mxHost, sourceIP string, preferIPv6 bool) DeliveryResult {
 	// 1. Try to get a pooled connection
 	var client *smtp.Client
-	var reused bool
 	if d.pool != nil {
 		client = d.pool.Get(mxHost, sourceIP)
 		if client != nil {
-			reused = true
 			d.logger.Debug("using pooled connection", "mx", mxHost)
+
+			result := d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, true)
+			if result.Status == "delivered" || result.Status == "hard_bounce" {
+				return result
+			}
+
+			// If failed and was reused, try once more with a fresh connection
+			d.logger.Debug("pooled connection failed, attempting with fresh connection",
+				"mx", mxHost,
+				"error", result.Error)
+			client = nil
 		}
 	}
 
-	// 2. If no pooled connection, dial a new one
+	// 2. If no pooled connection (or reused failed), dial a new one
 	if client == nil {
 		var err error
 		var result DeliveryResult
@@ -496,11 +505,7 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []
 	}
 
 	// 3. Deliver message logic
-	// Note: We need to handle Close() manually if we want to reuse the client
-	// So we don't defer client.Close() here if we intend to pool it.
-	// But if dialAndHello returned a client, we own it.
-
-	return d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, reused)
+	return d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, false)
 }
 
 func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool) DeliveryResult {
@@ -727,59 +732,76 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 
 	// TLS configuration
 	tlsConfig := &tls.Config{
-		ServerName: host,
-		MinVersion: tls.VersionTLS12,
+		ServerName:         host,
+		InsecureSkipVerify: true, // Opportunistic TLS
+		MinVersion:         tls.VersionTLS12,
 	}
 
 	d.logger.Debug("attempting STARTTLS connection", "mx", mxHost, "timeout", commandTimeout)
 
-	// Perform STARTTLS with timeout enforcement using goroutine
+	// Perform SMTP handshake and STARTTLS with timeout enforcement using goroutine
 	type clientResult struct {
 		client *smtp.Client
 		err    error
 	}
 	resultCh := make(chan clientResult, 1)
 
-	recovery.SafeGo(d.logger, "starttls-handshake", func() {
+	recovery.SafeGo(d.logger, "smtp-handshake", func() {
 		// Set deadline for the handshake
 		conn.SetDeadline(time.Now().Add(commandTimeout))
 
-		// Manual handshake to allow custom Hello hostname and handle STARTTLS upgrade.
-		// go-smtp doesn't easily expose StartTLS upgrade on an existing client session
-		// without using its internal logic which is hardcoded to "localhost".
+		// Manual handshake to handle STARTTLS because go-smtp client doesn't expose it
+		// and we need to handle multi-line EHLO responses correctly.
 		reader := textproto.NewReader(bufio.NewReader(conn))
 
 		// 1. Read greeting banner
-		code, msg, err := reader.ReadResponse(220)
-		if err != nil {
+		if _, _, err := reader.ReadResponse(220); err != nil {
 			resultCh <- clientResult{err: fmt.Errorf("failed to read banner: %w", err)}
 			return
 		}
-		d.logger.Debug("received SMTP banner", "mx", mxHost, "code", code, "msg", msg)
 
-		// 2. Send EHLO with configured hostname
-		d.logger.Debug("sending EHLO", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
+		// 2. Send EHLO to check for STARTTLS
 		fmt.Fprintf(conn, "EHLO %s\r\n", d.config.HelloHostname)
-		code, msg, err = reader.ReadResponse(250)
-		if err != nil {
-			resultCh <- clientResult{err: fmt.Errorf("EHLO failed: %w", err)}
-			return
-		}
-		d.logger.Debug("received EHLO response", "mx", mxHost, "code", code, "msg", msg)
 
-		// 3. Check for STARTTLS support and upgrade if available
-		if strings.Contains(strings.ToUpper(msg), "STARTTLS") {
+		var hasStartTLS bool
+		var ehloSupported bool
+		for {
+			line, err := reader.ReadLine()
+			if err != nil {
+				resultCh <- clientResult{err: fmt.Errorf("EHLO failed: %w", err)}
+				return
+			}
+			if strings.HasPrefix(line, "250") {
+				ehloSupported = true
+				if strings.Contains(strings.ToUpper(line), "STARTTLS") {
+					hasStartTLS = true
+				}
+			}
+			if len(line) < 4 || line[3] == ' ' { // Last line of response
+				break
+			}
+		}
+
+		// If EHLO failed, try HELO (plaintext only)
+		if !ehloSupported {
+			d.logger.Debug("EHLO not supported, falling back to HELO", "mx", mxHost)
+			fmt.Fprintf(conn, "HELO %s\r\n", d.config.HelloHostname)
+			if _, _, err := reader.ReadResponse(250); err != nil {
+				resultCh <- clientResult{err: fmt.Errorf("HELO failed: %w", err)}
+				return
+			}
+		}
+
+		// 3. Upgrade to STARTTLS if supported
+		if hasStartTLS {
 			d.logger.Debug("sending STARTTLS", "mx", mxHost)
 			fmt.Fprintf(conn, "STARTTLS\r\n")
-			code, msg, err = reader.ReadResponse(220)
-			if err != nil {
+			if _, _, err := reader.ReadResponse(220); err != nil {
 				resultCh <- clientResult{err: fmt.Errorf("STARTTLS command failed: %w", err)}
 				return
 			}
-			d.logger.Debug("received STARTTLS response", "mx", mxHost, "code", code, "msg", msg)
 
 			// Upgrade connection to TLS
-			d.logger.Debug("starting TLS handshake", "mx", mxHost, "server_name", tlsConfig.ServerName)
 			tlsConn := tls.Client(conn, tlsConfig)
 			if err := tlsConn.Handshake(); err != nil {
 				resultCh <- clientResult{err: fmt.Errorf("TLS handshake failed: %w", err)}
@@ -787,8 +809,6 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 			}
 			conn = tlsConn
 			d.logger.Debug("STARTTLS upgrade successful", "mx", mxHost)
-		} else {
-			d.logger.Warn("STARTTLS not supported by server, using plaintext", "mx", mxHost)
 		}
 
 		// 4. Wrap the (possibly upgraded) connection in go-smtp client
@@ -796,11 +816,12 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		c.CommandTimeout = commandTimeout
 		c.SubmissionTimeout = commandTimeout
 
-		// 5. Send EHLO again after TLS upgrade (required by SMTP)
-		if err := c.Hello(d.config.HelloHostname); err != nil {
-			c.Close()
-			resultCh <- clientResult{err: fmt.Errorf("EHLO after STARTTLS failed: %w", err)}
-			return
+		// 5. Send EHLO/HELO for the go-smtp client state
+		if ehloSupported {
+			if err := c.Hello(d.config.HelloHostname); err != nil {
+				resultCh <- clientResult{err: fmt.Errorf("EHLO handshake failed: %w", err)}
+				return
+			}
 		}
 
 		resultCh <- clientResult{client: c, err: nil}
