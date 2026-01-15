@@ -405,12 +405,13 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to strin
 		deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mxHost}
 		d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Status == "delivered", nil, deliveryInfo)
 
-		if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+		// Return immediately for definitive results or server-side temp failures
+		if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
 			return result
 		}
 
-		// If temp fail, try next source IP
-		d.logger.Debug("delivery attempt failed",
+		// For network errors or connection failures, try next source IP
+		d.logger.Debug("delivery attempt failed, trying next IP",
 			"mx", mxHost,
 			"source_ip", sourceIP,
 			"ipv6", useIPv6,
