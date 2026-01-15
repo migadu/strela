@@ -841,12 +841,16 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 			d.logger.Debug("STARTTLS upgrade successful", "mx", mxHost)
 		}
 
-		// 4. Wrap the (possibly upgraded) connection in go-smtp client
+		// 4. Clear connection deadline before wrapping in go-smtp client
+		// The smtp.Client will set its own deadlines based on CommandTimeout
+		conn.SetDeadline(time.Time{})
+
+		// 5. Wrap the (possibly upgraded) connection in go-smtp client
 		c := smtp.NewClient(conn)
 		c.CommandTimeout = commandTimeout
 		c.SubmissionTimeout = commandTimeout
 
-		// 5. Send EHLO/HELO for the go-smtp client state
+		// 6. Send EHLO/HELO for the go-smtp client state
 		if ehloSupported {
 			if err := c.Hello(d.config.HelloHostname); err != nil {
 				resultCh <- clientResult{err: fmt.Errorf("EHLO handshake failed: %w", err)}
