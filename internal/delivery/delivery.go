@@ -663,8 +663,17 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 	}
 
 	// TCP connection to port 25 (SMTP)
+	// Use the minimum of configured timeout and remaining context deadline
+	connectionTimeout := time.Duration(d.config.ConnectionTimeoutSeconds) * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < connectionTimeout {
+			connectionTimeout = remaining
+		}
+	}
+
 	dialer := &net.Dialer{
-		Timeout: time.Duration(d.config.ConnectionTimeoutSeconds) * time.Second,
+		Timeout: connectionTimeout,
 	}
 
 	if sourceIP != "" {

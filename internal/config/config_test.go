@@ -67,8 +67,8 @@ func TestSetDefaults(t *testing.T) {
 		t.Errorf("Expected default mx_cache_ttl_seconds 3600, got %d", config.Outbound.MXCacheTTLSeconds)
 	}
 
-	if config.Outbound.ConnectionTimeoutSeconds != 30 {
-		t.Errorf("Expected default connection_timeout_seconds 30, got %d", config.Outbound.ConnectionTimeoutSeconds)
+	if config.Outbound.ConnectionTimeoutSeconds != 15 {
+		t.Errorf("Expected default connection_timeout_seconds 15, got %d", config.Outbound.ConnectionTimeoutSeconds)
 	}
 
 	if config.Outbound.SMTPTimeoutSeconds != 60 {
@@ -145,8 +145,8 @@ source_ips = ["192.168.1.100"]
 		t.Errorf("Expected default delivery_timeout_seconds 30, got %d", config.Outbound.DeliveryTimeoutSeconds)
 	}
 
-	if config.Outbound.ConnectionTimeoutSeconds != 30 {
-		t.Errorf("Expected default connection_timeout_seconds 30, got %d", config.Outbound.ConnectionTimeoutSeconds)
+	if config.Outbound.ConnectionTimeoutSeconds != 15 {
+		t.Errorf("Expected default connection_timeout_seconds 15, got %d", config.Outbound.ConnectionTimeoutSeconds)
 	}
 
 	if config.Inbound.MaxConcurrentRequests != 0 {

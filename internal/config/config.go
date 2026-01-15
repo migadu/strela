@@ -110,7 +110,7 @@ type OutboundConfig struct {
 
 	MXCacheTTLSeconds        int    `toml:"mx_cache_ttl_seconds"`        // MX record cache TTL (default: 3600s)
 	ConnectionPoolTTLSeconds int    `toml:"connection_pool_ttl_seconds"` // Max time to keep idle connection (default: 5s)
-	ConnectionTimeoutSeconds int    `toml:"connection_timeout_seconds"`  // TCP connection timeout (default: 30s)
+	ConnectionTimeoutSeconds int    `toml:"connection_timeout_seconds"`  // TCP connection timeout (default: 15s)
 	SMTPTimeoutSeconds       int    `toml:"smtp_timeout_seconds"`        // SMTP command timeout (default: 60s)
 	DeliveryTimeoutSeconds   int    `toml:"delivery_timeout_seconds"`    // Maximum time to wait for SMTP delivery (default: 30s)
 	MaxIPsPerMX              int    `toml:"max_ips_per_mx"`              // Maximum number of IPs to try per MX host (default: 5)
@@ -219,7 +219,7 @@ func (c *Config) SetDefaults() {
 		c.Outbound.ConnectionPoolTTLSeconds = 5
 	}
 	if c.Outbound.ConnectionTimeoutSeconds == 0 {
-		c.Outbound.ConnectionTimeoutSeconds = 30
+		c.Outbound.ConnectionTimeoutSeconds = 15
 	}
 	if c.Outbound.SMTPTimeoutSeconds == 0 {
 		c.Outbound.SMTPTimeoutSeconds = 60
