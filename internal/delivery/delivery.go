@@ -302,7 +302,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		if tryIPv6First {
 			d.logger.Debug("trying IPv6 first", "mx", mx.Host)
 			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
-			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
 				return result
@@ -313,7 +313,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if tryIPv4 {
 				d.logger.Debug("falling back to IPv4", "mx", mx.Host)
 				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
-				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
 					return result
@@ -324,7 +324,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Try IPv4 first (or only)
 			d.logger.Debug("trying IPv4", "mx", mx.Host)
 			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
-			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
 				return result
@@ -335,7 +335,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if tryIPv6 {
 				d.logger.Debug("falling back to IPv6", "mx", mx.Host)
 				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
-				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
 					return result
@@ -348,7 +348,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			result := d.attemptDelivery(ctx, from, to, message, mx.Host, "", true)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
-			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
 				return result
