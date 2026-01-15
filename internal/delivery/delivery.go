@@ -296,14 +296,17 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		// Check context
 		if ctx.Err() != nil {
 			d.logger.Debug("context canceled during MX attempts", "error", ctx.Err())
-			return DeliveryResult{Status: "timeout", Error: "Context canceled"}
+			lastResult = DeliveryResult{Status: "timeout", Error: "Context canceled", MXHost: mx.Host}
+			break
 		}
 
 		// Try IPv6 first if preferred
 		if tryIPv6First {
 			d.logger.Debug("trying IPv6 first", "mx", mx.Host)
 			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
-			if result.Status == "delivered" || result.Status == "hard_bounce" {
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+				result.AttemptDurationMs = time.Since(start).Milliseconds()
+				d.recordMetrics(result)
 				return result
 			}
 			lastResult = result
@@ -312,7 +315,9 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if tryIPv4 {
 				d.logger.Debug("falling back to IPv4", "mx", mx.Host)
 				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
-				if result.Status == "delivered" || result.Status == "hard_bounce" {
+				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+					result.AttemptDurationMs = time.Since(start).Milliseconds()
+					d.recordMetrics(result)
 					return result
 				}
 				lastResult = result
@@ -321,7 +326,9 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Try IPv4 first (or only)
 			d.logger.Debug("trying IPv4", "mx", mx.Host)
 			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
-			if result.Status == "delivered" || result.Status == "hard_bounce" {
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+				result.AttemptDurationMs = time.Since(start).Milliseconds()
+				d.recordMetrics(result)
 				return result
 			}
 			lastResult = result
@@ -330,7 +337,9 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if tryIPv6 {
 				d.logger.Debug("falling back to IPv6", "mx", mx.Host)
 				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
-				if result.Status == "delivered" || result.Status == "hard_bounce" {
+				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+					result.AttemptDurationMs = time.Since(start).Milliseconds()
+					d.recordMetrics(result)
 					return result
 				}
 				lastResult = result
@@ -341,7 +350,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			result := d.attemptDelivery(ctx, from, to, message, mx.Host, "", true)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
-			if result.Status == "delivered" || result.Status == "hard_bounce" {
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
 				return result
@@ -387,8 +396,8 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to strin
 
 		// Check context
 		if ctx.Err() != nil {
-			d.logger.Debug("context canceled during source IP attempts", "error", ctx.Err())
-			return DeliveryResult{Status: "timeout", Error: "Context canceled"}
+			d.logger.Debug("context canceled during source IP attempts", "error", ctx.Err(), "mx", mxHost, "source_ip", sourceIP)
+			return DeliveryResult{Status: "timeout", Error: "Context canceled", MXHost: mxHost, SourceIP: sourceIP}
 		}
 
 		result := d.attemptDelivery(ctx, from, to, message, mxHost, sourceIP, useIPv6)
@@ -398,7 +407,7 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to strin
 		deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mxHost}
 		d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Status == "delivered", nil, deliveryInfo)
 
-		if result.Status == "delivered" || result.Status == "hard_bounce" {
+		if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
 			return result
 		}
 
@@ -482,7 +491,7 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []
 			d.logger.Debug("using pooled connection", "mx", mxHost)
 
 			result := d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, true)
-			if result.Status == "delivered" || result.Status == "hard_bounce" {
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
 				return result
 			}
 
@@ -685,6 +694,18 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 	// Connect to the target IP
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, "25"))
 	if err != nil {
+		d.logger.Debug("TCP dial failed", "mx", mxHost, "target_ip", targetIP, "source_ip", sourceIP, "error", err)
+
+		// Determine status based on error classification
+		status := "temp_fail"
+		classified := ClassifyError(0, "", err)
+		if classified.Category == ErrorNetwork && (strings.Contains(strings.ToLower(err.Error()), "deadline") || strings.Contains(strings.ToLower(err.Error()), "timeout")) {
+			// If it was a timeout, check if it was the context
+			if ctx.Err() != nil {
+				status = "timeout"
+			}
+		}
+
 		// Check if error is due to source IP binding failure
 		if sourceIP != "" && isBindError(err) {
 			d.logger.Error("failed to bind to source IP",
@@ -698,7 +719,16 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 				Error:    fmt.Sprintf("Cannot bind to source IP %s for target %s: %v", sourceIP, targetIP, err),
 			}, err
 		}
-		return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
+		return nil, DeliveryResult{Status: status, MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
+	}
+
+	// Wrap connection for traffic logging if debug level is enabled
+	if d.logger.Enabled(ctx, slog.LevelDebug) {
+		conn = &loggingConn{
+			Conn:   conn,
+			logger: d.logger,
+			mxHost: mxHost,
+		}
 	}
 
 	// Ensure connection is closed if setup fails
@@ -1020,4 +1050,24 @@ func isBindError(err error) bool {
 // SetMetrics sets the metrics recorder
 func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
 	d.metrics = metrics
+}
+
+// loggingConn wraps a net.Conn to log all sent and received traffic.
+type loggingConn struct {
+	net.Conn
+	logger *slog.Logger
+	mxHost string
+}
+
+func (l *loggingConn) Read(b []byte) (n int, err error) {
+	n, err = l.Conn.Read(b)
+	if n > 0 {
+		l.logger.Debug("SMTP <<<", "mx", l.mxHost, "data", string(b[:n]))
+	}
+	return
+}
+
+func (l *loggingConn) Write(b []byte) (n int, err error) {
+	l.logger.Debug("SMTP >>>", "mx", l.mxHost, "data", string(b))
+	return l.Conn.Write(b)
 }

@@ -71,6 +71,16 @@ func ClassifyError(smtpCode int, smtpResponse string, err error) *DeliveryError 
 func classifyNetworkError(err error) *DeliveryError {
 	errStr := strings.ToLower(err.Error())
 
+	// Timeouts (Context or Network)
+	if strings.Contains(errStr, "deadline exceeded") ||
+		strings.Contains(errStr, "timeout") {
+		return &DeliveryError{
+			Category:    ErrorNetwork,
+			Message:     fmt.Sprintf("Timeout exceeded: %s", err.Error()),
+			OriginalErr: err,
+		}
+	}
+
 	// DNS errors
 	if strings.Contains(errStr, "no such host") ||
 		strings.Contains(errStr, "dns") ||
