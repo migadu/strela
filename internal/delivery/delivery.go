@@ -721,15 +721,6 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		return nil, DeliveryResult{Status: status, MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
 	}
 
-	// Wrap connection for traffic logging if debug level is enabled
-	if d.logger.Enabled(ctx, slog.LevelDebug) {
-		conn = &loggingConn{
-			Conn:   conn,
-			logger: d.logger,
-			mxHost: mxHost,
-		}
-	}
-
 	// Ensure connection is closed if setup fails
 	success := false
 	defer func() {
@@ -990,22 +981,3 @@ func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
 	d.metrics = metrics
 }
 
-// loggingConn wraps a net.Conn to log all sent and received traffic.
-type loggingConn struct {
-	net.Conn
-	logger *slog.Logger
-	mxHost string
-}
-
-func (l *loggingConn) Read(b []byte) (n int, err error) {
-	n, err = l.Conn.Read(b)
-	if n > 0 {
-		l.logger.Debug("SMTP <<<", "mx", l.mxHost, "data", string(b[:n]))
-	}
-	return
-}
-
-func (l *loggingConn) Write(b []byte) (n int, err error) {
-	l.logger.Debug("SMTP >>>", "mx", l.mxHost, "data", string(b))
-	return l.Conn.Write(b)
-}
