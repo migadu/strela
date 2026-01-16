@@ -215,7 +215,7 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 
 	// Retry S3 HeadBucket with exponential backoff to handle DNS startup race conditions
 	maxRetries := 5
-	var err error
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s, 8s

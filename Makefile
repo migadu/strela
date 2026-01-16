@@ -11,7 +11,7 @@ FUNE_SERVER_BIN ?= fune-server
 BIN_DIR ?= ./bin
 
 # Go source paths
-FUNE_SERVER_SRC = $(BIN_DIR)/fune-server
+FUNE_SERVER_SRC = ./cmd/fune-server
 
 # Version Information
 # Override with: make build VERSION=v1.0.0
