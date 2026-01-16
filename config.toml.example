@@ -120,15 +120,45 @@ enabled = false
 # secret_key = "base64-encoded-32-byte-key"    # Generate: openssl rand -base64 32
 # peers = ["node2:7946", "node3:7946"]
 
+[dkim]
+# DKIM (DomainKeys Identified Mail) signing for outbound messages
+# IMPORTANT: enabled=true is REQUIRED for DKIM to be applied (even if API provides parameters)
+enabled = false
+# selector = "default"                           # DNS selector for DKIM public key (e.g., "default", "mail")
+# domain = "example.com"                         # Domain for DKIM signing (e.g., "example.com")
+# private_key_path = "/etc/fune/dkim-private.key" # Path to RSA private key in PEM format (1024 or 2048 bits)
+# skip_validation = false                        # Skip DNS validation of DKIM record (default: false, faster but less safe)
+# header_canon = "relaxed"                       # Header canonicalization: "relaxed" or "simple" (default: relaxed)
+# body_canon = "relaxed"                         # Body canonicalization: "relaxed" or "simple" (default: relaxed)
+
+# API request behavior:
+# - If enabled=true: API parameters (dkim_private_key, dkim_selector, dkim_domain) override config defaults
+# - If enabled=false: All API DKIM parameters are IGNORED (logged as warning)
+# Security: The enabled flag acts as a master switch - API cannot bypass it
+
 [arc]
-# Authenticated Received Chain (ARC) signing
+# Authenticated Received Chain (ARC) signing for email forwarding
+# Preserves authentication results across forwarding hops (prevents DMARC failures)
+# IMPORTANT: enabled=true is REQUIRED for ARC to be applied (even if API provides parameters)
 enabled = false
 # selector = "arc"
 # domain = "example.com"
 # private_key_path = "/etc/fune/arc-private.key"
+# header_canon = "relaxed"                       # Header canonicalization (default: relaxed)
+# body_canon = "relaxed"                         # Body canonicalization (default: relaxed)
+
+# API request behavior (same as DKIM):
+# - If enabled=true: API parameters (arc_private_key, arc_selector, arc_domain) override config defaults
+# - If enabled=false: All API ARC parameters are IGNORED (logged as warning)
+# Security: The enabled flag acts as a master switch - API cannot bypass it
 
 [srs]
-# Sender Rewriting Scheme (SRS) for forwarding
+# Sender Rewriting Scheme (SRS) for envelope sender rewriting
+# Rewrites MAIL FROM to prevent SPF failures when forwarding
 enabled = false
-# domain = "mail.example.com"
-# secret = "change-me-to-something-secure"
+# domain = "mail.example.com"                    # Domain for rewritten SRS addresses
+# secret = "change-me-to-something-secure"       # Secret key for HMAC hash (min 16 chars)
+# max_age = 21                                   # Maximum age in days for SRS addresses (default: 21)
+# hash_length = 4                                # Length of hash in SRS address (default: 4, range: 2-8)
+# separator = "="                                # Separator character (default: "=")
+# always_rewrite = false                         # Rewrite all senders, not just forwarded (default: false)

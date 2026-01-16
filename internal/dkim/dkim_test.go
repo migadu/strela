@@ -356,3 +356,64 @@ func TestSignMessage_WithAllHeaders(t *testing.T) {
 		t.Error("Expected original message body to be preserved")
 	}
 }
+
+func TestExtractPublicKeyFromDKIM(t *testing.T) {
+	tests := []struct {
+		name     string
+		record   string
+		expected string
+	}{
+		{
+			name:     "standard DKIM record",
+			record:   "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A",
+			expected: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A",
+		},
+		{
+			name:     "DKIM record with whitespace",
+			record:   "v=DKIM1; k=rsa; p=MIIBIjAN\n Bgkqhkig9w0B\t AQEFAAOCAQ8A",
+			expected: "MIIBIjANBgkqhkig9w0BAQEFAAOCAQ8A",
+		},
+		{
+			name:     "no public key",
+			record:   "v=DKIM1; k=rsa",
+			expected: "",
+		},
+		{
+			name:     "empty record",
+			record:   "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractPublicKeyFromDKIM(tt.record)
+			if result != tt.expected {
+				t.Errorf("Expected '%s', got '%s'", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestPublicKeysMatch(t *testing.T) {
+	// Generate two different keys
+	key1, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key1: %v", err)
+	}
+
+	key2, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key2: %v", err)
+	}
+
+	// Test matching keys
+	if !publicKeysMatch(&key1.PublicKey, &key1.PublicKey) {
+		t.Error("Expected same key to match itself")
+	}
+
+	// Test non-matching keys
+	if publicKeysMatch(&key1.PublicKey, &key2.PublicKey) {
+		t.Error("Expected different keys to not match")
+	}
+}

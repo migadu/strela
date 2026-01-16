@@ -49,7 +49,7 @@ func TestDeliverMessage_InvalidEmail(t *testing.T) {
 	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
 
 	ctx := context.Background()
-	result := deliverer.DeliverMessage(ctx, "sender@example.com", "invalid-recipient", []byte("test"))
+	result := deliverer.DeliverMessage(ctx, "sender@example.com", "invalid-recipient", []byte("test"), "", "", "", false, "", "", "")
 
 	if result.Status != "hard_bounce" {
 		t.Errorf("Expected hard_bounce for invalid recipient, got %s", result.Status)

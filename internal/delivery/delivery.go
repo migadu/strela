@@ -15,7 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fune/internal/arc"
 	"fune/internal/config"
+	"fune/internal/dkim"
 	"fune/internal/recovery"
 	"fune/internal/srs"
 
@@ -229,7 +231,7 @@ func (d *Deliverer) GetReputationTracker() *IPReputationTracker {
 }
 
 // DeliverMessage attempts to deliver a message synchronously.
-func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message []byte) DeliveryResult {
+func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string) DeliveryResult {
 	start := time.Now()
 
 	// Extract domain from recipient
@@ -260,7 +262,92 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		}
 	}
 
-	// 2. Lookup MX records
+	// 2. DKIM Signing (if provided)
+	signedMessage := message
+	if dkimPrivateKey != "" && dkimSelector != "" {
+		// Use provided domain or extract from sender
+		signingDomain := dkimDomain
+		if signingDomain == "" {
+			signingDomain = dkim.ExtractDomainFromEmail(from)
+			if signingDomain == "" {
+				d.logger.Debug("failed to extract domain from sender for DKIM", "from", from)
+				return DeliveryResult{
+					Status: "error",
+					Error:  "Invalid sender address for DKIM signing",
+				}
+			}
+		}
+
+		// Validate DKIM configuration (check DNS record and key match) unless skipped
+		if !skipDKIMValidation {
+			d.logger.Debug("validating DKIM configuration", "selector", dkimSelector, "domain", signingDomain)
+			if err := dkim.ValidateDKIMConfiguration(ctx, dkimSelector, signingDomain, dkimPrivateKey); err != nil {
+				d.logger.Error("DKIM validation failed", "error", err, "selector", dkimSelector, "domain", signingDomain)
+				return DeliveryResult{
+					Status: "error",
+					Error:  fmt.Sprintf("DKIM validation failed: %v", err),
+				}
+			}
+		} else {
+			d.logger.Debug("skipping DKIM validation (skip_dkim_validation=true)", "selector", dkimSelector, "domain", signingDomain)
+		}
+
+		d.logger.Debug("signing message with DKIM", "selector", dkimSelector, "domain", signingDomain)
+		signed, err := dkim.SignMessage(message, dkimPrivateKey, dkimSelector, signingDomain)
+		if err != nil {
+			d.logger.Error("DKIM signing failed", "error", err, "selector", dkimSelector, "domain", signingDomain)
+			return DeliveryResult{
+				Status: "error",
+				Error:  fmt.Sprintf("DKIM signing failed: %v", err),
+			}
+		}
+		signedMessage = signed
+		d.logger.Debug("message signed with DKIM", "original_size", len(message), "signed_size", len(signedMessage))
+	}
+
+	// 3. ARC Signing (if provided via API or enabled in config)
+	// Priority: API parameters > config
+	finalARCPrivateKey := arcPrivateKey
+	finalARCSelector := arcSelector
+	finalARCDomain := arcDomain
+
+	// Use config defaults if not provided via API
+	if finalARCPrivateKey == "" && d.arcConfig != nil && d.arcConfig.Enabled && d.arcPrivateKey != "" {
+		finalARCPrivateKey = d.arcPrivateKey
+		d.logger.Debug("using ARC private key from config")
+	}
+	if finalARCSelector == "" && d.arcConfig != nil && d.arcConfig.Selector != "" {
+		finalARCSelector = d.arcConfig.Selector
+		d.logger.Debug("using ARC selector from config", "selector", finalARCSelector)
+	}
+	if finalARCDomain == "" && d.arcConfig != nil && d.arcConfig.Domain != "" {
+		finalARCDomain = d.arcConfig.Domain
+		d.logger.Debug("using ARC domain from config", "domain", finalARCDomain)
+	}
+
+	// Apply ARC signing if we have all required parameters
+	if finalARCPrivateKey != "" && finalARCSelector != "" && finalARCDomain != "" {
+		d.logger.Debug("applying ARC signing", "selector", finalARCSelector, "domain", finalARCDomain)
+		arcConfig := &arc.SignConfig{
+			Selector:    finalARCSelector,
+			Domain:      finalARCDomain,
+			PrivateKey:  finalARCPrivateKey,
+			HeaderCanon: "relaxed",
+			BodyCanon:   "relaxed",
+		}
+		arcSigned, err := arc.SignMessage(signedMessage, arcConfig)
+		if err != nil {
+			d.logger.Error("ARC signing failed", "error", err)
+			return DeliveryResult{
+				Status: "error",
+				Error:  fmt.Sprintf("ARC signing failed: %v", err),
+			}
+		}
+		signedMessage = arcSigned
+		d.logger.Debug("message signed with ARC", "original_size", len(message), "arc_signed_size", len(signedMessage))
+	}
+
+	// 4. Lookup MX records
 	d.logger.Debug("looking up MX records", "domain", domain)
 	mxRecords, err := d.mxLookup.Lookup(ctx, domain)
 	if err != nil {
@@ -280,7 +367,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 
 	d.logger.Debug("found MX records", "domain", domain, "count", len(mxRecords))
 
-	// 3. Try each MX with IPv6/IPv4 preference
+	// 5. Try each MX with IPv6/IPv4 preference
 	var lastResult DeliveryResult
 
 	// Determine delivery order: IPv6 first or IPv4 first
@@ -301,7 +388,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		// Try IPv6 first if preferred
 		if tryIPv6First {
 			d.logger.Debug("trying IPv6 first", "mx", mx.Host)
-			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
+			result := d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, true, start)
 			// Return immediately for definitive results (don't try other MX servers)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
@@ -313,7 +400,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Fall back to IPv4 if IPv6 failed and IPv4 is available
 			if tryIPv4 {
 				d.logger.Debug("falling back to IPv4", "mx", mx.Host)
-				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
+				result = d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, false, start)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
@@ -324,7 +411,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		} else if tryIPv4 {
 			// Try IPv4 first (or only)
 			d.logger.Debug("trying IPv4", "mx", mx.Host)
-			result := d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, false, start)
+			result := d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, false, start)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
@@ -335,7 +422,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Fall back to IPv6 if IPv4 failed and IPv6 is available
 			if tryIPv6 {
 				d.logger.Debug("falling back to IPv6", "mx", mx.Host)
-				result = d.tryDeliveryWithIPVersion(ctx, from, to, message, mx.Host, true, start)
+				result = d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, true, start)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
@@ -346,7 +433,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		} else {
 			// No source IPs configured - use system default
 			d.logger.Debug("no source IPs configured, using system default", "mx", mx.Host)
-			result := d.attemptDelivery(ctx, from, to, message, mx.Host, "", true)
+			result := d.attemptDelivery(ctx, from, to, signedMessage, mx.Host, "", true)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
@@ -993,4 +1080,3 @@ func isBindError(err error) bool {
 func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
 	d.metrics = metrics
 }
-

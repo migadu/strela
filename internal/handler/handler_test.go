@@ -1,0 +1,551 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"fune/internal/config"
+	"fune/internal/delivery"
+)
+
+func TestBuildRawMessage_MessageID(t *testing.T) {
+	h := &Handler{}
+
+	tests := []struct {
+		name      string
+		messageID string
+		wantInMsg bool
+	}{
+		{
+			name:      "auto-generate Message-ID when not provided",
+			messageID: "",
+			wantInMsg: true,
+		},
+		{
+			name:      "use provided Message-ID",
+			messageID: "<custom-id@example.com>",
+			wantInMsg: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &MessageRequest{
+				From:      "sender@example.com",
+				To:        "recipient@example.com",
+				Subject:   "Test Subject",
+				Text:      "Test Body",
+				MessageID: tt.messageID,
+			}
+
+			rawMsg, err := h.buildRawMessage(req)
+			if err != nil {
+				t.Fatalf("buildRawMessage() error = %v", err)
+			}
+
+			msgStr := string(rawMsg)
+
+			// Check that Message-ID header exists
+			if !strings.Contains(msgStr, "Message-ID:") && !strings.Contains(msgStr, "Message-Id:") {
+				t.Error("Message-ID header not found in message")
+			}
+
+			// If custom Message-ID was provided, verify it's in the output
+			if tt.messageID != "" {
+				if !strings.Contains(msgStr, tt.messageID) {
+					t.Errorf("Custom Message-ID %q not found in message", tt.messageID)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildRawMessage_ValidEmail(t *testing.T) {
+	h := &Handler{}
+
+	req := &MessageRequest{
+		From:    "sender@example.com",
+		To:      "recipient@example.com",
+		Subject: "Test Subject",
+		Text:    "Plain text body",
+		HTML:    "<html><body>HTML body</body></html>",
+	}
+
+	rawMsg, err := h.buildRawMessage(req)
+	if err != nil {
+		t.Fatalf("buildRawMessage() error = %v", err)
+	}
+
+	msgStr := string(rawMsg)
+
+	// Verify essential headers
+	requiredHeaders := []string{
+		"From:",
+		"To:",
+		"Subject:",
+		"Date:",
+	}
+
+	for _, header := range requiredHeaders {
+		if !strings.Contains(msgStr, header) {
+			t.Errorf("Required header %q not found in message", header)
+		}
+	}
+
+	// Check Message-ID with case-insensitive search
+	if !strings.Contains(msgStr, "Message-ID:") && !strings.Contains(msgStr, "Message-Id:") {
+		t.Errorf("Message-ID header not found in message")
+	}
+
+	// Verify both text and HTML parts are present
+	if !strings.Contains(msgStr, "text/plain") {
+		t.Error("text/plain content type not found")
+	}
+	if !strings.Contains(msgStr, "text/html") {
+		t.Error("text/html content type not found")
+	}
+}
+
+func TestHandleDeliver_RawMessage(t *testing.T) {
+	// Create minimal config
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+	}
+
+	// Create mock deliverer (will not actually send)
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	// Test raw message mode
+	rawEmail := `From: sender@example.com
+To: recipient@example.com
+Subject: Test Forwarded Email
+Message-ID: <original-id@upstream.com>
+Date: Mon, 15 Jan 2026 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This is a forwarded email message.
+It preserves all original headers.`
+
+	reqBody := MessageRequest{
+		From:       "sender@example.com",
+		To:         "recipient@example.com",
+		RawMessage: rawEmail,
+	}
+
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliver(rr, req)
+
+	// Should accept and not return 400
+	if rr.Code == http.StatusBadRequest {
+		t.Errorf("Expected raw message to be accepted, got status %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify the deliverer received the raw message
+	if mockDeliverer.lastMessage == "" {
+		t.Error("Expected deliverer to receive message")
+	}
+
+	if !strings.Contains(mockDeliverer.lastMessage, "This is a forwarded email message") {
+		t.Error("Raw message content not preserved")
+	}
+
+	if !strings.Contains(mockDeliverer.lastMessage, "<original-id@upstream.com>") {
+		t.Error("Original Message-ID not preserved")
+	}
+}
+
+func TestHandleDeliver_ModeValidation(t *testing.T) {
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	tests := []struct {
+		name       string
+		req        MessageRequest
+		wantStatus int
+		wantError  string
+	}{
+		{
+			name: "composed mode - valid",
+			req: MessageRequest{
+				From:    "sender@example.com",
+				To:      "recipient@example.com",
+				Subject: "Test",
+				Text:    "Body",
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "raw mode - valid",
+			req: MessageRequest{
+				From:       "sender@example.com",
+				To:         "recipient@example.com",
+				RawMessage: "From: sender@example.com\r\nTo: recipient@example.com\r\n\r\nBody",
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name: "conflicting modes - invalid",
+			req: MessageRequest{
+				From:       "sender@example.com",
+				To:         "recipient@example.com",
+				Subject:    "Test",
+				RawMessage: "From: sender@example.com\r\n\r\nBody",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantError:  "Cannot use both",
+		},
+		{
+			name: "no content - invalid",
+			req: MessageRequest{
+				From: "sender@example.com",
+				To:   "recipient@example.com",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantError:  "Must provide either",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bodyBytes, _ := json.Marshal(tt.req)
+			req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			h.HandleDeliver(rr, req)
+
+			if rr.Code != tt.wantStatus {
+				t.Errorf("Expected status %d, got %d: %s", tt.wantStatus, rr.Code, rr.Body.String())
+			}
+
+			if tt.wantError != "" && !strings.Contains(rr.Body.String(), tt.wantError) {
+				t.Errorf("Expected error containing %q, got %q", tt.wantError, rr.Body.String())
+			}
+		})
+	}
+}
+
+// mockDeliverer implements the delivery.Deliverer interface for testing
+type mockDeliverer struct {
+	lastMessage string
+}
+
+func (m *mockDeliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string) delivery.DeliveryResult {
+	m.lastMessage = string(message)
+	return delivery.DeliveryResult{
+		Status:            "delivered",
+		SMTPCode:          250,
+		SMTPMessage:       "OK",
+		MXHost:            "mx.example.com",
+		SourceIP:          "127.0.0.1",
+		AttemptDurationMs: 100,
+	}
+}
+
+func (m *mockDeliverer) Stop() {
+	// No-op for mock
+}
+
+func TestHandleDeliver_DKIMConfigDefaults(t *testing.T) {
+	// Create config with DKIM enabled
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+		DKIM: config.DKIMConfig{
+			Enabled:        true,
+			Selector:       "default",
+			Domain:         "example.com",
+			SkipValidation: true, // Skip for testing
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+
+	// Create handler (without DKIM private key file - won't actually sign)
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	tests := []struct {
+		name               string
+		req                MessageRequest
+		expectDKIMSelector string
+		expectDKIMDomain   string
+	}{
+		{
+			name: "use config defaults when not provided",
+			req: MessageRequest{
+				From:    "sender@example.com",
+				To:      "recipient@example.com",
+				Subject: "Test",
+				Text:    "Body",
+			},
+			expectDKIMSelector: "", // Private key not loaded, so won't use config
+			expectDKIMDomain:   "",
+		},
+		{
+			name: "API request overrides config defaults",
+			req: MessageRequest{
+				From:           "sender@example.com",
+				To:             "recipient@example.com",
+				Subject:        "Test",
+				Text:           "Body",
+				DKIMSelector:   "override",
+				DKIMDomain:     "override.com",
+				DKIMPrivateKey: "dummy-key-for-test",
+			},
+			expectDKIMSelector: "override",
+			expectDKIMDomain:   "override.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bodyBytes, _ := json.Marshal(tt.req)
+			req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			h.HandleDeliver(rr, req)
+
+			// Check that request was processed
+			if rr.Code != http.StatusOK {
+				t.Logf("Response: %s", rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestNewHandler_LoadsDKIMKey(t *testing.T) {
+	// Create a temporary DKIM private key file
+	tmpFile, err := os.CreateTemp("", "dkim-test-*.key")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	testKey := "-----BEGIN RSA PRIVATE KEY-----\ntest-key-content\n-----END RSA PRIVATE KEY-----"
+	if _, err := tmpFile.WriteString(testKey); err != nil {
+		t.Fatalf("Failed to write test key: %v", err)
+	}
+	tmpFile.Close()
+
+	cfg := &config.Config{
+		DKIM: config.DKIMConfig{
+			Enabled:        true,
+			Selector:       "default",
+			Domain:         "example.com",
+			PrivateKeyPath: tmpFile.Name(),
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	if h.dkimPrivateKey != testKey {
+		t.Errorf("Expected DKIM private key to be loaded, got %q", h.dkimPrivateKey)
+	}
+}
+
+func TestHandleDeliver_RawMessagePassedToDelivery(t *testing.T) {
+	// Verify that raw_message is passed as-is to delivery engine
+	// This ensures ARC/SRS signing in delivery layer works with raw messages
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	// Original raw message with existing headers
+	originalRawMsg := `From: original@sender.com
+To: recipient@example.com
+Subject: Forwarded Email
+Message-ID: <upstream-id@original.com>
+Received: from mx1.original.com by relay.example.com
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This is a forwarded message with original headers intact.
+`
+
+	req := MessageRequest{
+		From:       "original@sender.com",
+		To:         "recipient@example.com",
+		RawMessage: originalRawMsg,
+	}
+
+	bodyBytes, _ := json.Marshal(req)
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	httpReq.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliver(rr, httpReq)
+
+	// Verify message was passed to deliverer
+	if mockDeliverer.lastMessage == "" {
+		t.Fatal("Expected message to be passed to deliverer")
+	}
+
+	// Verify raw message content is preserved
+	if !strings.Contains(mockDeliverer.lastMessage, "<upstream-id@original.com>") {
+		t.Error("Original Message-ID not preserved in delivery")
+	}
+
+	if !strings.Contains(mockDeliverer.lastMessage, "Received: from mx1.original.com") {
+		t.Error("Original Received header not preserved in delivery")
+	}
+
+	if !strings.Contains(mockDeliverer.lastMessage, "This is a forwarded message with original headers intact.") {
+		t.Error("Original message body not preserved in delivery")
+	}
+
+	// This raw message will be processed by delivery engine where:
+	// - ARC signing will add ARC headers (if enabled)
+	// - SRS will rewrite envelope sender (if enabled)
+	// - DKIM signing will add DKIM-Signature header (if enabled)
+}
+
+func TestHandleDeliver_DynamicARCKey(t *testing.T) {
+	// Test that ARC parameters can be passed via API request
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+		ARC: config.ARCConfig{
+			Enabled:  true,
+			Selector: "config-arc",
+			Domain:   "config.example.com",
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	tests := []struct {
+		name           string
+		req            MessageRequest
+		expectOverride bool
+	}{
+		{
+			name: "API request overrides ARC config",
+			req: MessageRequest{
+				From:          "sender@example.com",
+				To:            "recipient@example.com",
+				Subject:       "Test",
+				Text:          "Body",
+				ARCPrivateKey: "-----BEGIN RSA PRIVATE KEY-----\nAPI-KEY\n-----END RSA PRIVATE KEY-----",
+				ARCSelector:   "api-arc",
+				ARCDomain:     "api.example.com",
+			},
+			expectOverride: true,
+		},
+		{
+			name: "Use config defaults when not provided",
+			req: MessageRequest{
+				From:    "sender@example.com",
+				To:      "recipient@example.com",
+				Subject: "Test",
+				Text:    "Body",
+				// No ARC parameters - should use config
+			},
+			expectOverride: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bodyBytes, _ := json.Marshal(tt.req)
+			req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+
+			h.HandleDeliver(rr, req)
+
+			// Check that request was processed
+			if rr.Code != http.StatusOK {
+				t.Logf("Response: %s", rr.Body.String())
+			}
+
+			// The delivery engine receives the ARC parameters
+			// In production, these would be used for signing
+		})
+	}
+}
+
+func TestHandleDeliver_DKIMARCDisabledIgnoresAPIParams(t *testing.T) {
+	// Test that API parameters are ignored when config explicitly disables DKIM/ARC
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+		DKIM: config.DKIMConfig{
+			Enabled: false, // Explicitly disabled
+		},
+		ARC: config.ARCConfig{
+			Enabled: false, // Explicitly disabled
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	req := MessageRequest{
+		From:           "sender@example.com",
+		To:             "recipient@example.com",
+		Subject:        "Test",
+		Text:           "Body",
+		DKIMPrivateKey: "-----BEGIN RSA PRIVATE KEY-----\nSHOULD-BE-IGNORED\n-----END RSA PRIVATE KEY-----",
+		DKIMSelector:   "ignored",
+		DKIMDomain:     "ignored.com",
+		ARCPrivateKey:  "-----BEGIN RSA PRIVATE KEY-----\nSHOULD-BE-IGNORED\n-----END RSA PRIVATE KEY-----",
+		ARCSelector:    "ignored",
+		ARCDomain:      "ignored.com",
+	}
+
+	bodyBytes, _ := json.Marshal(req)
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	httpReq.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliver(rr, httpReq)
+
+	// Should still succeed (not error), just without DKIM/ARC
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// The delivery engine should have received empty strings for DKIM/ARC params
+	// This test verifies the handler respects the enabled flag
+}

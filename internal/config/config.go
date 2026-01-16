@@ -19,6 +19,7 @@ type Config struct {
 	Outbound   OutboundConfig   `toml:"outbound"`
 	Reputation ReputationConfig `toml:"reputation"`
 	Cluster    ClusterConfig    `toml:"cluster"`
+	DKIM       DKIMConfig       `toml:"dkim"`
 	ARC        ARCConfig        `toml:"arc"`
 	SRS        SRSConfig        `toml:"srs"`
 }
@@ -140,6 +141,17 @@ type ClusterConfig struct {
 	Peers     []string `toml:"peers"`      // All other cluster nodes (address:port)
 	NodeID    string   `toml:"node_id"`    // Unique node identifier (hostname recommended)
 	SecretKey string   `toml:"secret_key"` // 32-byte base64 encoded encryption key for AES-256
+}
+
+// DKIMConfig configures DKIM (DomainKeys Identified Mail) signing for outbound messages.
+type DKIMConfig struct {
+	Enabled        bool   `toml:"enabled"`          // Enable DKIM signing (default: false)
+	Selector       string `toml:"selector"`         // DNS selector for DKIM public key (e.g., "default", "mail")
+	Domain         string `toml:"domain"`           // Domain for DKIM signing (e.g., "example.com")
+	PrivateKeyPath string `toml:"private_key_path"` // Path to RSA private key in PEM format (1024 or 2048 bits)
+	SkipValidation bool   `toml:"skip_validation"`  // Skip DNS validation of DKIM record (default: false)
+	HeaderCanon    string `toml:"header_canon"`     // Header canonicalization: "relaxed" or "simple" (default: relaxed)
+	BodyCanon      string `toml:"body_canon"`       // Body canonicalization: "relaxed" or "simple" (default: relaxed)
 }
 
 // ARCConfig configures Authenticated Received Chain (ARC) signing for email forwarding.

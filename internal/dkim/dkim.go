@@ -34,11 +34,14 @@ package dkim
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -161,4 +164,110 @@ func ExtractDomainFromEmail(email string) string {
 		return ""
 	}
 	return strings.ToLower(parts[1])
+}
+
+// ValidateDKIMConfiguration checks if a DKIM public key exists in DNS for the given
+// selector and domain, and optionally verifies it matches the provided private key.
+//
+// Returns:
+//   - nil if validation succeeds
+//   - error if DNS lookup fails, public key is missing, or keys don't match
+//
+// This function performs two validations:
+//  1. DNS lookup of selector._domainkey.domain to ensure DKIM record exists
+//  2. (Optional) Verify the public key in DNS matches the provided private key
+//
+// Example: ValidateDKIMConfiguration(ctx, "default", "example.com", privateKeyPEM)
+func ValidateDKIMConfiguration(ctx context.Context, selector, domain, privateKeyPEM string) error {
+	// 1. Construct DKIM DNS record name
+	dnsName := fmt.Sprintf("%s._domainkey.%s", selector, domain)
+
+	// 2. Lookup TXT records
+	resolver := &net.Resolver{}
+	txtRecords, err := resolver.LookupTXT(ctx, dnsName)
+	if err != nil {
+		return fmt.Errorf("DKIM DNS lookup failed for %s: %w", dnsName, err)
+	}
+
+	if len(txtRecords) == 0 {
+		return fmt.Errorf("no DKIM TXT record found for %s", dnsName)
+	}
+
+	// 3. Find DKIM record (starts with "v=DKIM1")
+	var dkimRecord string
+	// TXT records might be split across multiple strings, concatenate them
+	fullRecord := strings.Join(txtRecords, "")
+	if strings.Contains(fullRecord, "v=DKIM1") {
+		dkimRecord = fullRecord
+	}
+
+	if dkimRecord == "" {
+		return fmt.Errorf("no valid DKIM record (v=DKIM1) found for %s", dnsName)
+	}
+
+	// 4. Extract public key from DKIM record
+	publicKeyB64 := extractPublicKeyFromDKIM(dkimRecord)
+	if publicKeyB64 == "" {
+		return fmt.Errorf("no public key (p=...) found in DKIM record for %s", dnsName)
+	}
+
+	// 5. Verify the public key matches the private key (if private key provided)
+	if privateKeyPEM != "" {
+		privateKey, err := parsePrivateKey(privateKeyPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse private key: %w", err)
+		}
+
+		// Decode the public key from DNS
+		publicKeyDER, err := base64.StdEncoding.DecodeString(publicKeyB64)
+		if err != nil {
+			return fmt.Errorf("failed to decode public key from DNS: %w", err)
+		}
+
+		// Parse the public key
+		publicKey, err := x509.ParsePKIXPublicKey(publicKeyDER)
+		if err != nil {
+			return fmt.Errorf("failed to parse public key from DNS: %w", err)
+		}
+
+		rsaPublicKey, ok := publicKey.(*rsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("public key in DNS is not an RSA key")
+		}
+
+		// Compare the public keys
+		if !publicKeysMatch(&privateKey.PublicKey, rsaPublicKey) {
+			return fmt.Errorf("public key in DNS does not match the provided private key")
+		}
+	}
+
+	return nil
+}
+
+// extractPublicKeyFromDKIM extracts the base64-encoded public key from a DKIM TXT record.
+// DKIM record format: "v=DKIM1; k=rsa; p=MIIBIjANBgkq..."
+func extractPublicKeyFromDKIM(record string) string {
+	// Remove all whitespace (DKIM records can have spaces/newlines)
+	record = strings.ReplaceAll(record, " ", "")
+	record = strings.ReplaceAll(record, "\n", "")
+	record = strings.ReplaceAll(record, "\t", "")
+
+	// Split by semicolon to get key-value pairs
+	parts := strings.Split(record, ";")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "p=") {
+			return strings.TrimPrefix(part, "p=")
+		}
+	}
+
+	return ""
+}
+
+// publicKeysMatch compares two RSA public keys for equality
+func publicKeysMatch(key1, key2 *rsa.PublicKey) bool {
+	if key1.E != key2.E {
+		return false
+	}
+	return key1.N.Cmp(key2.N) == 0
 }
