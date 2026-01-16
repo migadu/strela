@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/quotedprintable"
 	"net/http"
 	"os"
 	"strings"
@@ -56,6 +58,13 @@ func NewHandler(cfg *config.Config, engine DeliveryEngine, logger *slog.Logger) 
 	return h
 }
 
+// Attachment represents an email attachment
+type Attachment struct {
+	Filename    string `json:"filename"`              // Filename for Content-Disposition
+	ContentType string `json:"content_type"`          // MIME type (e.g., "application/pdf")
+	Content     string `json:"content"`               // Base64-encoded content
+}
+
 // MessageRequest represents the JSON request body for message submission.
 // Supports two modes:
 // 1. Composed mode: Provide from, to, subject, text/html (Fune builds MIME message)
@@ -63,11 +72,13 @@ func NewHandler(cfg *config.Config, engine DeliveryEngine, logger *slog.Logger) 
 type MessageRequest struct {
 	From               string `json:"from"`
 	To                 string `json:"to"`
-	Subject            string `json:"subject,omitempty"`              // Required for composed mode, ignored for raw mode
-	Text               string `json:"text,omitempty"`                 // Optional for composed mode, ignored for raw mode
-	HTML               string `json:"html,omitempty"`                 // Optional for composed mode, ignored for raw mode
-	MessageID          string `json:"message_id,omitempty"`           // Optional Message-ID for composed mode; auto-generated if not provided
-	RawMessage         string `json:"raw_message,omitempty"`          // Raw RFC822 message (forwarding mode) - mutually exclusive with subject/text/html
+	Subject            string              `json:"subject,omitempty"`              // Required for composed mode, ignored for raw mode
+	Text               string              `json:"text,omitempty"`                 // Optional for composed mode, ignored for raw mode
+	HTML               string              `json:"html,omitempty"`                 // Optional for composed mode, ignored for raw mode
+	Attachments        []Attachment        `json:"attachments,omitempty"`          // Optional attachments for composed mode
+	Headers            map[string]string   `json:"headers,omitempty"`              // Optional custom headers (e.g., {"Reply-To": "support@example.com"})
+	MessageID          string              `json:"message_id,omitempty"`           // Optional Message-ID for composed mode; auto-generated if not provided
+	RawMessage         string              `json:"raw_message,omitempty"`          // Raw RFC822 message (forwarding mode) - mutually exclusive with subject/text/html
 	DKIMPrivateKey     string `json:"dkim_private_key,omitempty"`     // Override config DKIM key
 	DKIMSelector       string `json:"dkim_selector,omitempty"`        // Override config DKIM selector
 	DKIMDomain         string `json:"dkim_domain,omitempty"`          // Override config DKIM domain
@@ -280,26 +291,80 @@ func (h *Handler) buildRawMessage(req *MessageRequest) ([]byte, error) {
 		}
 	}
 
-	mw, err := mail.CreateWriter(&buf, header)
-	if err != nil {
-		return nil, err
+	// Apply custom headers
+	for key, value := range req.Headers {
+		header.Set(key, value)
 	}
 
-	if req.HTML != "" && req.Text != "" {
-		iw, err := mw.CreateInline()
+	// Determine if we need multipart structure
+	hasAttachments := len(req.Attachments) > 0
+	hasMultipleBodyParts := req.HTML != "" && req.Text != ""
+	needsMultipart := hasAttachments || hasMultipleBodyParts
+
+	// For multipart messages, use CreateWriter
+	if needsMultipart {
+		mw, err := mail.CreateWriter(&buf, header)
 		if err != nil {
 			return nil, err
 		}
-		createPart(iw, "text/plain", req.Text)
-		createPart(iw, "text/html", req.HTML)
-		iw.Close()
-	} else if req.HTML != "" {
-		createPart(mw, "text/html", req.HTML)
-	} else {
-		createPart(mw, "text/plain", req.Text)
+
+		// Handle body parts
+		if hasMultipleBodyParts {
+			// multipart/alternative for text + html
+			iw, err := mw.CreateInline()
+			if err != nil {
+				return nil, err
+			}
+			createPart(iw, "text/plain", req.Text)
+			createPart(iw, "text/html", req.HTML)
+			iw.Close()
+		} else if req.HTML != "" {
+			createPart(mw, "text/html", req.HTML)
+		} else if req.Text != "" {
+			createPart(mw, "text/plain", req.Text)
+		}
+
+		// Handle attachments
+		for _, att := range req.Attachments {
+			if err := createAttachment(mw, att); err != nil {
+				mw.Close()
+				return nil, fmt.Errorf("failed to create attachment %s: %w", att.Filename, err)
+			}
+		}
+
+		mw.Close()
+		return buf.Bytes(), nil
 	}
 
-	mw.Close()
+	// For simple single-part messages, write directly
+	if req.HTML != "" {
+		header.Set("Content-Type", "text/html; charset=utf-8")
+		header.Set("Content-Transfer-Encoding", "quoted-printable")
+	} else {
+		header.Set("Content-Type", "text/plain; charset=utf-8")
+		header.Set("Content-Transfer-Encoding", "quoted-printable")
+	}
+
+	// Write headers
+	fields := header.Header.Fields()
+	for fields.Next() {
+		raw, err := fields.Raw()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(raw)
+	}
+	buf.WriteString("\r\n")
+
+	// Write body (quoted-printable encoded)
+	qpWriter := quotedprintable.NewWriter(&buf)
+	if req.HTML != "" {
+		qpWriter.Write([]byte(req.HTML))
+	} else {
+		qpWriter.Write([]byte(req.Text))
+	}
+	qpWriter.Close()
+
 	return buf.Bytes(), nil
 }
 
@@ -334,6 +399,34 @@ func createPart(w interface{}, contentType, content string) error {
 		return err
 	}
 	return p.Close()
+}
+
+// createAttachment creates an attachment part with base64 encoding
+func createAttachment(w *mail.Writer, att Attachment) error {
+	// Decode base64 content
+	content, err := base64.StdEncoding.DecodeString(att.Content)
+	if err != nil {
+		return fmt.Errorf("invalid base64 content: %w", err)
+	}
+
+	// Create attachment header
+	var h mail.AttachmentHeader
+	h.Set("Content-Type", att.ContentType)
+	h.SetFilename(att.Filename)
+
+	// Create attachment part
+	aw, err := w.CreateAttachment(h)
+	if err != nil {
+		return err
+	}
+
+	// Write decoded content
+	if _, err := aw.Write(content); err != nil {
+		aw.Close()
+		return err
+	}
+
+	return aw.Close()
 }
 
 // Helper methods for validation could go here

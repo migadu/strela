@@ -212,11 +212,35 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 	}
 
 	logger.Info("validating S3 bucket access", "bucket", cfg.S3.Bucket)
-	_, err = s3Client.HeadBucket(initCtx, &s3.HeadBucketInput{
-		Bucket: &cfg.S3.Bucket,
-	})
+
+	// Retry S3 HeadBucket with exponential backoff to handle DNS startup race conditions
+	maxRetries := 5
+	var err error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s, 8s
+			logger.Info("retrying S3 bucket validation after backoff",
+				"attempt", attempt+1,
+				"max_retries", maxRetries,
+				"backoff", backoff)
+			time.Sleep(backoff)
+		}
+
+		_, err = s3Client.HeadBucket(initCtx, &s3.HeadBucketInput{
+			Bucket: &cfg.S3.Bucket,
+		})
+		if err == nil {
+			break // Success
+		}
+
+		logger.Warn("S3 bucket validation failed",
+			"attempt", attempt+1,
+			"max_retries", maxRetries,
+			"error", err)
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("S3 bucket validation failed: %w", err)
+		return nil, fmt.Errorf("S3 bucket validation failed after %d attempts: %w", maxRetries, err)
 	}
 
 	logger.Info("S3 bucket validated successfully", "bucket", cfg.S3.Bucket)

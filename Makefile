@@ -8,10 +8,10 @@
 FUNE_SERVER_BIN ?= fune-server
 
 # Target directories
-CMD_DIR ?= ./cmd
+BIN_DIR ?= ./bin
 
 # Go source paths
-FUNE_SERVER_SRC = $(CMD_DIR)/fune-server
+FUNE_SERVER_SRC = $(BIN_DIR)/fune-server
 
 # Version Information
 # Override with: make build VERSION=v1.0.0
@@ -42,7 +42,7 @@ all: build
 build: fune-server
 
 fune-server:
-	go build $(LDFLAGS) -o $(CMD_DIR)/$(FUNE_SERVER_BIN) $(FUNE_SERVER_SRC)
+	go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_SERVER_BIN) $(FUNE_SERVER_SRC)
 
 # ====================================================================================
 # Installation and Cleanup
@@ -52,7 +52,7 @@ install:
 	go install $(FUNE_SERVER_SRC)
 
 clean:
-	rm -f $(CMD_DIR)/$(FUNE_SERVER_BIN)
+	rm -f $(BIN_DIR)/$(FUNE_SERVER_BIN)
 	rm -f $(BIN_DIR)/$(FUNE_LINUX_BINARY)
 	rm -f $(BIN_DIR)/$(FUNE_FREEBSD_BINARY)
 	rm -f coverage.out
