@@ -871,8 +871,9 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		conn.SetDeadline(time.Now().Add(commandTimeout))
 		defer conn.SetDeadline(time.Time{}) // Clear deadline after handshake
 
-		// Use go-smtp's built-in STARTTLS support
-		client, err := smtp.NewClientStartTLS(conn, tlsConfig)
+		// Use go-smtp's STARTTLS with custom hostname
+		// This will send EHLO with our configured hostname instead of "localhost"
+		client, err := smtp.NewClientStartTLSWithName(conn, tlsConfig, d.config.HelloHostname)
 		if err != nil {
 			resultCh <- clientResult{err: fmt.Errorf("STARTTLS handshake failed: %w", err)}
 			return
@@ -882,7 +883,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		client.CommandTimeout = commandTimeout
 		client.SubmissionTimeout = commandTimeout
 
-		d.logger.Debug("STARTTLS connection established", "mx", mxHost)
+		d.logger.Debug("STARTTLS connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
 		resultCh <- clientResult{client: client, err: nil}
 	})
 
