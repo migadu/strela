@@ -76,11 +76,13 @@ type TLSConfig struct {
 
 // LetsEncryptConfig configures automatic certificate provisioning via Let's Encrypt.
 type LetsEncryptConfig struct {
-	Email           string   `toml:"email"`
-	Domains         []string `toml:"domains"`
-	StorageProvider string   `toml:"storage_provider"` // "s3" or "file" (default: s3)
-	CacheDir        string   `toml:"cache_dir"`        // Directory for file storage (used when storage_provider="file")
-	S3              S3Config `toml:"s3"`
+	Email               string   `toml:"email"`
+	Domains             []string `toml:"domains"`
+	DefaultDomain       string   `toml:"default_domain"`        // Default domain for SNI-less connections (optional, uses first domain if not specified)
+	StorageProvider     string   `toml:"storage_provider"`      // "s3" or "file" (default: s3)
+	CacheDir            string   `toml:"cache_dir"`             // Directory for local file cache (used for "file" mode or as local cache when using S3)
+	SyncIntervalMinutes int      `toml:"sync_interval_minutes"` // Interval for syncing local cache to S3 (default: 5 minutes, only applies when storage_provider="s3")
+	S3                  S3Config `toml:"s3"`
 }
 
 // S3Config provides AWS S3 credentials for Let's Encrypt certificate storage.

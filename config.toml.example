@@ -42,11 +42,15 @@ enabled = false
 [tls.letsencrypt]
 # email = "admin@example.com"
 # domains = ["mail.example.com"]
-# storage_provider = "file"              # "file" (single node) or "s3" (cluster)
-# cache_dir = "/var/lib/fune/letsencrypt" # For storage_provider = "file"
+# storage_provider = "file"              # "file" (single node) or "s3" (hybrid local+S3 for cluster)
+# cache_dir = "/var/lib/fune/letsencrypt" # Local cache directory (required for both "file" and "s3" modes)
+# sync_interval_minutes = 5               # Sync local cache to S3 every N minutes (default: 5, only for storage_provider="s3")
+                                          # Only changed/missing certificates are uploaded (smart sync)
 
 [tls.letsencrypt.s3]
 # Required for storage_provider = "s3"
+# When using S3, certificates are stored locally for fast TLS handshakes
+# and periodically synced to S3 for backup and cluster sharing
 # bucket = "fune-letsencrypt"
 # region = "us-east-1"
 # endpoint = ""                                  # Optional: Custom S3 endpoint (e.g., "https://s3.us-west-004.backblazeb2.com" for Backblaze B2)

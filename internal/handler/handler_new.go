@@ -60,9 +60,9 @@ func NewHandler(cfg *config.Config, engine DeliveryEngine, logger *slog.Logger) 
 
 // Attachment represents an email attachment
 type Attachment struct {
-	Filename    string `json:"filename"`              // Filename for Content-Disposition
-	ContentType string `json:"content_type"`          // MIME type (e.g., "application/pdf")
-	Content     string `json:"content"`               // Base64-encoded content
+	Filename    string `json:"filename"`     // Filename for Content-Disposition
+	ContentType string `json:"content_type"` // MIME type (e.g., "application/pdf")
+	Content     string `json:"content"`      // Base64-encoded content
 }
 
 // MessageRequest represents the JSON request body for message submission.
@@ -70,22 +70,22 @@ type Attachment struct {
 // 1. Composed mode: Provide from, to, subject, text/html (Fune builds MIME message)
 // 2. Raw mode: Provide from, to, raw_message (Fune forwards pre-built RFC822 message)
 type MessageRequest struct {
-	From               string `json:"from"`
-	To                 string `json:"to"`
-	Subject            string              `json:"subject,omitempty"`              // Required for composed mode, ignored for raw mode
-	Text               string              `json:"text,omitempty"`                 // Optional for composed mode, ignored for raw mode
-	HTML               string              `json:"html,omitempty"`                 // Optional for composed mode, ignored for raw mode
-	Attachments        []Attachment        `json:"attachments,omitempty"`          // Optional attachments for composed mode
-	Headers            map[string]string   `json:"headers,omitempty"`              // Optional custom headers (e.g., {"Reply-To": "support@example.com"})
-	MessageID          string              `json:"message_id,omitempty"`           // Optional Message-ID for composed mode; auto-generated if not provided
-	RawMessage         string              `json:"raw_message,omitempty"`          // Raw RFC822 message (forwarding mode) - mutually exclusive with subject/text/html
-	DKIMPrivateKey     string `json:"dkim_private_key,omitempty"`     // Override config DKIM key
-	DKIMSelector       string `json:"dkim_selector,omitempty"`        // Override config DKIM selector
-	DKIMDomain         string `json:"dkim_domain,omitempty"`          // Override config DKIM domain
-	SkipDKIMValidation bool   `json:"skip_dkim_validation,omitempty"` // Skip DNS validation (faster but less safe)
-	ARCPrivateKey      string `json:"arc_private_key,omitempty"`      // Override config ARC key (for dynamic/multi-tenant scenarios)
-	ARCSelector        string `json:"arc_selector,omitempty"`         // Override config ARC selector
-	ARCDomain          string `json:"arc_domain,omitempty"`           // Override config ARC domain
+	From               string            `json:"from"`
+	To                 string            `json:"to"`
+	Subject            string            `json:"subject,omitempty"`              // Required for composed mode, ignored for raw mode
+	Text               string            `json:"text,omitempty"`                 // Optional for composed mode, ignored for raw mode
+	HTML               string            `json:"html,omitempty"`                 // Optional for composed mode, ignored for raw mode
+	Attachments        []Attachment      `json:"attachments,omitempty"`          // Optional attachments for composed mode
+	Headers            map[string]string `json:"headers,omitempty"`              // Optional custom headers (e.g., {"Reply-To": "support@example.com"})
+	MessageID          string            `json:"message_id,omitempty"`           // Optional Message-ID for composed mode; auto-generated if not provided
+	RawMessage         string            `json:"raw_message,omitempty"`          // Raw RFC822 message (forwarding mode) - mutually exclusive with subject/text/html
+	DKIMPrivateKey     string            `json:"dkim_private_key,omitempty"`     // Override config DKIM key
+	DKIMSelector       string            `json:"dkim_selector,omitempty"`        // Override config DKIM selector
+	DKIMDomain         string            `json:"dkim_domain,omitempty"`          // Override config DKIM domain
+	SkipDKIMValidation bool              `json:"skip_dkim_validation,omitempty"` // Skip DNS validation (faster but less safe)
+	ARCPrivateKey      string            `json:"arc_private_key,omitempty"`      // Override config ARC key (for dynamic/multi-tenant scenarios)
+	ARCSelector        string            `json:"arc_selector,omitempty"`         // Override config ARC selector
+	ARCDomain          string            `json:"arc_domain,omitempty"`           // Override config ARC domain
 }
 
 // HandleDeliver handles synchronous message delivery requests.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"fune/internal/config"
@@ -25,9 +26,16 @@ type Manager struct {
 	autocertManager *autocert.Manager
 	logger          *slog.Logger
 	domains         []string
+	defaultDomain   string                  // Default domain for SNI-less connections
+	syncWorker      *storage.CertSyncWorker // Periodic S3 sync worker (nil if not using S3)
+	tlsConfig       *tls.Config             // Cached TLS config with wrapped GetCertificate
 }
 
 type gossipService interface{} // Placeholder or remove if unused
+
+// IsLeaderFunc is a function that returns true if this node is the cluster leader.
+// Used for cluster-aware certificate management.
+type IsLeaderFunc func() bool
 
 // NewManager creates a new TLS manager.
 func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, logger *slog.Logger) (*Manager, error) {
@@ -36,6 +44,7 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, log
 	}
 
 	var cache autocert.Cache
+	var syncWorker *storage.CertSyncWorker
 
 	switch cfg.LetsEncrypt.StorageProvider {
 	case "s3":
@@ -44,10 +53,30 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, log
 		if err != nil {
 			return nil, err
 		}
-		cache = s3Cache
+
+		// Create fallback cache (local file + S3) for hybrid storage
+		cacheDir := cfg.LetsEncrypt.CacheDir
+		if cacheDir == "" {
+			cacheDir = "cert-cache" // Default local cache directory
+		}
+		fallbackCache := storage.NewFallbackCache(cacheDir, s3Cache, logger)
+		cache = fallbackCache
+
+		// Start periodic sync worker
+		syncInterval := time.Duration(cfg.LetsEncrypt.SyncIntervalMinutes) * time.Minute
+		if syncInterval == 0 {
+			syncInterval = 5 * time.Minute // Default: 5 minutes
+		}
+		syncWorker = storage.NewCertSyncWorker(fallbackCache, syncInterval, logger)
+		syncWorker.Start()
+
+		logger.Info("using hybrid file+S3 certificate cache with periodic sync",
+			"local_cache_dir", cacheDir,
+			"s3_bucket", cfg.LetsEncrypt.S3.Bucket,
+			"sync_interval", syncInterval)
 
 	case "file":
-		// Use autocert.DirCache for local filesystem storage
+		// Use autocert.DirCache for local filesystem storage only
 		cache = autocert.DirCache(cfg.LetsEncrypt.CacheDir)
 		logger.Info("using file-based certificate cache",
 			"cache_dir", cfg.LetsEncrypt.CacheDir)
@@ -56,31 +85,102 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, log
 		return nil, fmt.Errorf("unsupported storage provider: %s", cfg.LetsEncrypt.StorageProvider)
 	}
 
-	m := &autocert.Manager{
+	autocertMgr := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		HostPolicy: autocert.HostWhitelist(cfg.LetsEncrypt.Domains...),
 		Cache:      cache,
 		Email:      cfg.LetsEncrypt.Email,
 	}
 
+	// Determine default domain for SNI-less connections
+	defaultDomain := cfg.LetsEncrypt.DefaultDomain
+	if defaultDomain == "" && len(cfg.LetsEncrypt.Domains) > 0 {
+		// If not specified, use the first configured domain
+		defaultDomain = cfg.LetsEncrypt.Domains[0]
+	}
+
+	// Create base TLS config
+	baseTLSConfig := autocertMgr.TLSConfig()
+
+	m := &Manager{
+		autocertManager: autocertMgr,
+		logger:          logger,
+		domains:         cfg.LetsEncrypt.Domains,
+		defaultDomain:   defaultDomain,
+		syncWorker:      syncWorker,
+		tlsConfig:       nil, // Will be set below after wrapping GetCertificate
+	}
+
+	// Wrap GetCertificate with enhanced logging and SNI handling
+	originalGetCert := baseTLSConfig.GetCertificate
+	baseTLSConfig.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		serverName := hello.ServerName
+
+		// Handle missing SNI by using default domain
+		if serverName == "" {
+			if defaultDomain != "" {
+				logger.Debug("TLS: missing SNI - using default domain", "domain", defaultDomain)
+				serverName = defaultDomain
+			} else {
+				logger.Debug("TLS: rejected certificate request - missing SNI and no default domain")
+				return nil, ErrMissingServerName
+			}
+		}
+
+		// Normalize server name to lowercase for case-insensitive comparison
+		// RFC 4343: DNS names are case-insensitive
+		serverName = strings.ToLower(serverName)
+
+		// Check if the server name matches our configured domains using the HostPolicy
+		if err := autocertMgr.HostPolicy(nil, serverName); err != nil {
+			logger.Debug("TLS: rejected certificate request for unconfigured domain", "domain", serverName, "error", err)
+			return nil, fmt.Errorf("%w: %s", ErrHostNotAllowed, serverName)
+		}
+
+		logger.Info("TLS: certificate request during handshake", "domain", serverName, "has_sni", hello.ServerName != "")
+
+		// Create a modified ClientHelloInfo with the resolved server name
+		modifiedHello := *hello
+		modifiedHello.ServerName = serverName
+
+		cert, err := originalGetCert(&modifiedHello)
+		if err != nil {
+			// Certificate retrieval failures are often transient (S3 down, ACME rate limits, network issues)
+			// Wrap as ErrCertificateUnavailable so the server logs but doesn't crash
+			// This allows the server to continue serving cached certificates for other domains
+			logger.Error("TLS: failed to get certificate",
+				"server_name", serverName,
+				"error", err,
+				"error_type", fmt.Sprintf("%T", err))
+			return nil, fmt.Errorf("%w for %s: %v", ErrCertificateUnavailable, serverName, err)
+		}
+		logger.Info("TLS: certificate provided successfully", "domain", serverName)
+		return cert, nil
+	}
+
+	// Store the wrapped TLS config in the manager
+	m.tlsConfig = baseTLSConfig
+
 	logger.Info("TLS manager initialized",
 		"domains", cfg.LetsEncrypt.Domains,
 		"email", cfg.LetsEncrypt.Email,
-		"storage", cfg.LetsEncrypt.StorageProvider)
+		"storage", cfg.LetsEncrypt.StorageProvider,
+		"default_domain", defaultDomain)
 
-	return &Manager{
-		autocertManager: m,
-		logger:          logger,
-		domains:         cfg.LetsEncrypt.Domains,
-	}, nil
+	return m, nil
 }
 
-// TLSConfig returns a TLS configuration.
+// TLSConfig returns the TLS configuration for use with HTTP/SMTP servers.
+// Returns the cached config with our wrapped GetCertificate function.
 func (m *Manager) TLSConfig() *tls.Config {
-	if m == nil || m.autocertManager == nil {
+	if m == nil {
 		return nil
 	}
-	return m.autocertManager.TLSConfig()
+	if m.tlsConfig != nil {
+		m.logger.Debug("TLSConfig retrieved (using cached wrapped config)",
+			"has_get_certificate", m.tlsConfig.GetCertificate != nil)
+	}
+	return m.tlsConfig
 }
 
 // HTTPHandler returns an HTTP handler for ACME HTTP-01 challenges.
@@ -168,6 +268,18 @@ func (m *Manager) CheckCertificates() {
 				"domain", domain,
 				"days_remaining", info.DaysUntilExpiry)
 		}
+	}
+}
+
+// Stop gracefully shuts down the TLS manager and its sync worker.
+func (m *Manager) Stop() {
+	if m == nil {
+		return
+	}
+
+	if m.syncWorker != nil {
+		m.logger.Info("stopping certificate sync worker")
+		m.syncWorker.Stop(10 * time.Second)
 	}
 }
 
