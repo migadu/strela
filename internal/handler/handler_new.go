@@ -214,6 +214,11 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		arcSelector = req.ARCSelector
 		arcDomain = req.ARCDomain
 
+		h.logger.Debug("ARC parameters from API",
+			"has_private_key", req.ARCPrivateKey != "",
+			"selector", arcSelector,
+			"domain", arcDomain)
+
 		// Apply config defaults if not provided in request
 		if arcSelector == "" && h.config.ARC.Selector != "" {
 			arcSelector = h.config.ARC.Selector
@@ -237,7 +242,12 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// 7. Synchronous Delivery
-	h.logger.Debug("starting synchronous delivery", "from", req.From, "to", req.To)
+	h.logger.Debug("starting synchronous delivery",
+		"from", req.From,
+		"to", req.To,
+		"has_arc_key", arcPrivateKey != "",
+		"arc_selector", arcSelector,
+		"arc_domain", arcDomain)
 	result := h.deliveryEngine.DeliverMessage(ctx, req.From, req.To, rawMessage, dkimPrivateKey, dkimSelector, dkimDomain, skipDKIMValidation, arcPrivateKey, arcSelector, arcDomain)
 	h.logger.Debug("delivery attempt finished",
 		"status", result.Status,

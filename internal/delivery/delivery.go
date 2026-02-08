@@ -311,6 +311,11 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	finalARCSelector := arcSelector
 	finalARCDomain := arcDomain
 
+	d.logger.Debug("ARC signing check",
+		"has_api_key", arcPrivateKey != "",
+		"api_selector", arcSelector,
+		"api_domain", arcDomain)
+
 	// Use config defaults if not provided via API
 	if finalARCPrivateKey == "" && d.arcConfig != nil && d.arcConfig.Enabled && d.arcPrivateKey != "" {
 		finalARCPrivateKey = d.arcPrivateKey
@@ -325,9 +330,15 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		d.logger.Debug("using ARC domain from config", "domain", finalARCDomain)
 	}
 
+	d.logger.Debug("final ARC parameters",
+		"has_private_key", finalARCPrivateKey != "",
+		"selector", finalARCSelector,
+		"domain", finalARCDomain,
+		"will_sign", finalARCPrivateKey != "" && finalARCSelector != "" && finalARCDomain != "")
+
 	// Apply ARC signing if we have all required parameters
 	if finalARCPrivateKey != "" && finalARCSelector != "" && finalARCDomain != "" {
-		d.logger.Debug("applying ARC signing", "selector", finalARCSelector, "domain", finalARCDomain)
+		d.logger.Info("applying ARC signing", "selector", finalARCSelector, "domain", finalARCDomain)
 		arcConfig := &arc.SignConfig{
 			Selector:    finalARCSelector,
 			Domain:      finalARCDomain,
@@ -344,7 +355,12 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			}
 		}
 		signedMessage = arcSigned
-		d.logger.Debug("message signed with ARC", "original_size", len(message), "arc_signed_size", len(signedMessage))
+		d.logger.Info("message signed with ARC successfully", "original_size", len(message), "arc_signed_size", len(signedMessage))
+	} else {
+		d.logger.Debug("skipping ARC signing - missing parameters",
+			"has_private_key", finalARCPrivateKey != "",
+			"has_selector", finalARCSelector != "",
+			"has_domain", finalARCDomain != "")
 	}
 
 	// 4. Lookup MX records
