@@ -124,7 +124,13 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		"from", req.From,
 		"to", req.To,
 		"subject", req.Subject,
-		"has_dkim_key", req.DKIMPrivateKey != "")
+		"has_raw_message", req.RawMessage != "",
+		"has_dkim_key", req.DKIMPrivateKey != "",
+		"dkim_selector", req.DKIMSelector,
+		"dkim_domain", req.DKIMDomain,
+		"has_arc_key", req.ARCPrivateKey != "",
+		"arc_selector", req.ARCSelector,
+		"arc_domain", req.ARCDomain)
 
 	// 3. Validation
 	if req.From == "" || req.To == "" {
