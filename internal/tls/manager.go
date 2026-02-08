@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -131,9 +132,21 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, log
 		// RFC 4343: DNS names are case-insensitive
 		serverName = strings.ToLower(serverName)
 
+		// Check if someone is trying to use an IP address (common misconfiguration)
+		// Let's Encrypt doesn't issue certificates for IP addresses, only domain names
+		if isIPAddress(serverName) {
+			logger.Debug("TLS: rejected certificate request for IP address (Let's Encrypt requires domain names)",
+				"ip", serverName,
+				"remote_addr", hello.Conn.RemoteAddr().String())
+			return nil, fmt.Errorf("%w: IP addresses not supported (use domain name)", ErrHostNotAllowed)
+		}
+
 		// Check if the server name matches our configured domains using the HostPolicy
 		if err := autocertMgr.HostPolicy(nil, serverName); err != nil {
-			logger.Debug("TLS: rejected certificate request for unconfigured domain", "domain", serverName, "error", err)
+			logger.Debug("TLS: rejected certificate request for unconfigured domain",
+				"domain", serverName,
+				"remote_addr", hello.Conn.RemoteAddr().String(),
+				"error", err)
 			return nil, fmt.Errorf("%w: %s", ErrHostNotAllowed, serverName)
 		}
 
@@ -362,4 +375,11 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 		Bucket:   cfg.S3.Bucket,
 		Logger:   logger,
 	}, nil
+}
+
+// isIPAddress checks if a string is an IPv4 or IPv6 address.
+// Used to detect when clients are trying to connect via IP instead of domain name.
+func isIPAddress(host string) bool {
+	// net.ParseIP returns nil if it's not a valid IP address
+	return net.ParseIP(host) != nil
 }
