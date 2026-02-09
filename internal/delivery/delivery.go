@@ -279,30 +279,29 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		}
 
 		// Validate DKIM configuration (check DNS record and key match) unless skipped
+		dkimValid := true
 		if !skipDKIMValidation {
 			d.logger.Debug("validating DKIM configuration", "selector", dkimSelector, "domain", signingDomain)
 			if err := dkim.ValidateDKIMConfiguration(ctx, dkimSelector, signingDomain, dkimPrivateKey); err != nil {
-				d.logger.Error("DKIM validation failed", "error", err, "selector", dkimSelector, "domain", signingDomain)
-				return DeliveryResult{
-					Status: "error",
-					Error:  fmt.Sprintf("DKIM validation failed: %v", err),
-				}
+				d.logger.Warn("DKIM validation failed, will deliver without DKIM signature", "error", err, "selector", dkimSelector, "domain", signingDomain)
+				dkimValid = false
 			}
 		} else {
 			d.logger.Debug("skipping DKIM validation (skip_dkim_validation=true)", "selector", dkimSelector, "domain", signingDomain)
 		}
 
-		d.logger.Debug("signing message with DKIM", "selector", dkimSelector, "domain", signingDomain)
-		signed, err := dkim.SignMessage(message, dkimPrivateKey, dkimSelector, signingDomain)
-		if err != nil {
-			d.logger.Error("DKIM signing failed", "error", err, "selector", dkimSelector, "domain", signingDomain)
-			return DeliveryResult{
-				Status: "error",
-				Error:  fmt.Sprintf("DKIM signing failed: %v", err),
+		if dkimValid {
+			d.logger.Debug("signing message with DKIM", "selector", dkimSelector, "domain", signingDomain)
+			signed, err := dkim.SignMessage(message, dkimPrivateKey, dkimSelector, signingDomain)
+			if err != nil {
+				d.logger.Warn("DKIM signing failed, will deliver without DKIM signature", "error", err, "selector", dkimSelector, "domain", signingDomain)
+			} else {
+				signedMessage = signed
+				d.logger.Debug("message signed with DKIM", "original_size", len(message), "signed_size", len(signedMessage))
 			}
+		} else {
+			d.logger.Debug("skipping DKIM signing due to validation failure")
 		}
-		signedMessage = signed
-		d.logger.Debug("message signed with DKIM", "original_size", len(message), "signed_size", len(signedMessage))
 	}
 
 	// 3. ARC Signing (if provided via API or enabled in config)
@@ -348,14 +347,11 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		}
 		arcSigned, err := arc.SignMessage(signedMessage, arcConfig)
 		if err != nil {
-			d.logger.Error("ARC signing failed", "error", err)
-			return DeliveryResult{
-				Status: "error",
-				Error:  fmt.Sprintf("ARC signing failed: %v", err),
-			}
+			d.logger.Warn("ARC signing failed, will deliver without ARC signature", "error", err)
+		} else {
+			signedMessage = arcSigned
+			d.logger.Info("message signed with ARC successfully", "original_size", len(message), "arc_signed_size", len(signedMessage))
 		}
-		signedMessage = arcSigned
-		d.logger.Info("message signed with ARC successfully", "original_size", len(message), "arc_signed_size", len(signedMessage))
 	} else {
 		d.logger.Debug("skipping ARC signing - missing parameters",
 			"has_private_key", finalARCPrivateKey != "",
