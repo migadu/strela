@@ -246,19 +246,21 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 
 	d.logger.Debug("starting delivery attempt", "from", from, "to", to, "domain", domain)
 
-	// 1. Wait for per-domain rate limit
-	if err := d.waitForDomainRateLimit(ctx, domain); err != nil {
-		if err == ErrDomainRateLimitExceeded {
-			d.logger.Debug("domain rate limit exceeded", "domain", domain)
-			return DeliveryResult{
-				Status: "rate_limit", // Fail Fast status
-				Error:  "Domain rate limit exceeded",
+	// 1. Wait for per-domain rate limit (skip if disabled)
+	if d.config.PerDomainIntervalSeconds > 0 {
+		if err := d.waitForDomainRateLimit(ctx, domain); err != nil {
+			if err == ErrDomainRateLimitExceeded {
+				d.logger.Debug("domain rate limit exceeded", "domain", domain)
+				return DeliveryResult{
+					Status: "rate_limit", // Fail Fast status
+					Error:  "Domain rate limit exceeded",
+				}
 			}
-		}
-		d.logger.Debug("rate limit check failed", "domain", domain, "error", err)
-		return DeliveryResult{
-			Status: "timeout",
-			Error:  "Rate limit check failed",
+			d.logger.Debug("rate limit check failed", "domain", domain, "error", err)
+			return DeliveryResult{
+				Status: "timeout",
+				Error:  "Rate limit check failed",
+			}
 		}
 	}
 
