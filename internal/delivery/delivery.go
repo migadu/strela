@@ -683,8 +683,22 @@ func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []b
 		}
 	}
 
+	// Check if UTF-8 addresses are needed and supported
+	needsUTF8 := needsUTF8Address(mailFrom) || needsUTF8Address(to)
+	var mailOpts *smtp.MailOptions
+	if needsUTF8 {
+		// Only use SMTPUTF8 if server supports it
+		if supportsExtension(client, "SMTPUTF8") {
+			mailOpts = &smtp.MailOptions{UTF8: true}
+			d.logger.Debug("using SMTPUTF8 extension", "from", mailFrom, "to", to)
+		} else {
+			// Server doesn't support UTF-8, delivery will likely fail
+			d.logger.Warn("UTF-8 address required but server doesn't support SMTPUTF8", "from", mailFrom, "to", to)
+		}
+	}
+
 	d.logger.Debug("sending MAIL FROM", "from", mailFrom)
-	if err := client.Mail(mailFrom, nil); err != nil {
+	if err := client.Mail(mailFrom, mailOpts); err != nil {
 		d.logger.Debug("MAIL FROM failed", "error", err)
 		return err
 	}
@@ -1125,4 +1139,23 @@ func (d *Deliverer) logDeliveryResult(from, to string, result DeliveryResult) {
 		"source_ip", result.SourceIP,
 		"duration_ms", result.AttemptDurationMs,
 		"error", result.Error)
+}
+
+// needsUTF8Address checks if an email address contains non-ASCII characters.
+func needsUTF8Address(email string) bool {
+	for _, r := range email {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
+// supportsExtension checks if the SMTP server supports a given extension.
+func supportsExtension(client *smtp.Client, ext string) bool {
+	if client == nil {
+		return false
+	}
+	supported, _ := client.Extension(ext)
+	return supported
 }
