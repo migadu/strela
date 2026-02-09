@@ -238,10 +238,12 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	_, domain := splitEmail(to)
 	if domain == "" {
 		d.logger.Debug("invalid recipient address", "to", to)
-		return DeliveryResult{
+		result := DeliveryResult{
 			Status: "hard_bounce",
 			Error:  "Invalid recipient address",
 		}
+		d.logDeliveryResult(from, to, result)
+		return result
 	}
 
 	d.logger.Debug("starting delivery attempt", "from", from, "to", to, "domain", domain)
@@ -251,16 +253,20 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		if err := d.waitForDomainRateLimit(ctx, domain); err != nil {
 			if err == ErrDomainRateLimitExceeded {
 				d.logger.Debug("domain rate limit exceeded", "domain", domain)
-				return DeliveryResult{
+				result := DeliveryResult{
 					Status: "rate_limit", // Fail Fast status
 					Error:  "Domain rate limit exceeded",
 				}
+				d.logDeliveryResult(from, to, result)
+				return result
 			}
 			d.logger.Debug("rate limit check failed", "domain", domain, "error", err)
-			return DeliveryResult{
+			result := DeliveryResult{
 				Status: "timeout",
 				Error:  "Rate limit check failed",
 			}
+			d.logDeliveryResult(from, to, result)
+			return result
 		}
 	}
 
@@ -273,10 +279,12 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			signingDomain = dkim.ExtractDomainFromEmail(from)
 			if signingDomain == "" {
 				d.logger.Debug("failed to extract domain from sender for DKIM", "from", from)
-				return DeliveryResult{
+				result := DeliveryResult{
 					Status: "error",
 					Error:  "Invalid sender address for DKIM signing",
 				}
+				d.logDeliveryResult(from, to, result)
+				return result
 			}
 		}
 
@@ -366,17 +374,21 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	mxRecords, err := d.mxLookup.Lookup(ctx, domain)
 	if err != nil {
 		d.logger.Debug("MX lookup failed", "domain", domain, "error", err)
-		return DeliveryResult{
+		result := DeliveryResult{
 			Status: "temp_fail",
 			Error:  fmt.Sprintf("MX lookup failed: %v", err),
 		}
+		d.logDeliveryResult(from, to, result)
+		return result
 	}
 	if len(mxRecords) == 0 {
 		d.logger.Debug("no MX records found", "domain", domain)
-		return DeliveryResult{
+		result := DeliveryResult{
 			Status: "hard_bounce",
 			Error:  "No MX records found",
 		}
+		d.logDeliveryResult(from, to, result)
+		return result
 	}
 
 	d.logger.Debug("found MX records", "domain", domain, "count", len(mxRecords))
@@ -407,6 +419,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
+				d.logDeliveryResult(from, to, result)
 				return result
 			}
 			lastResult = result
@@ -418,6 +431,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
+					d.logDeliveryResult(from, to, result)
 					return result
 				}
 				lastResult = result
@@ -429,6 +443,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
+				d.logDeliveryResult(from, to, result)
 				return result
 			}
 			lastResult = result
@@ -440,6 +455,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
+					d.logDeliveryResult(from, to, result)
 					return result
 				}
 				lastResult = result
@@ -453,6 +469,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
+				d.logDeliveryResult(from, to, result)
 				return result
 			}
 			lastResult = result
@@ -464,6 +481,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 
 	lastResult.AttemptDurationMs = time.Since(start).Milliseconds()
 	d.recordMetrics(lastResult)
+	d.logDeliveryResult(from, to, lastResult)
 	return lastResult
 }
 
@@ -1094,4 +1112,17 @@ func isBindError(err error) bool {
 // SetMetrics sets the metrics recorder
 func (d *Deliverer) SetMetrics(metrics DeliveryMetrics) {
 	d.metrics = metrics
+}
+
+// logDeliveryResult logs the final delivery result at INFO level
+func (d *Deliverer) logDeliveryResult(from, to string, result DeliveryResult) {
+	d.logger.Info("delivery completed",
+		"from", from,
+		"to", to,
+		"status", result.Status,
+		"smtp_code", result.SMTPCode,
+		"mx_host", result.MXHost,
+		"source_ip", result.SourceIP,
+		"duration_ms", result.AttemptDurationMs,
+		"error", result.Error)
 }
