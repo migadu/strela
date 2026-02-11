@@ -200,6 +200,13 @@ Return JSON response immediately:
 #### `srs/`
 - SRS (Sender Rewriting Scheme) for envelope sender rewriting
 - Prevents SPF failures when forwarding email
+- **Multi-domain support (v2.0.6)**: Configure multiple SRS domains to avoid rate limiting
+- **Selection strategies**: "round-robin" (even distribution) or "hash-sender" (consistent per sender)
+- **Key features**:
+  - Atomic counter-based round-robin for thread-safe rotation
+  - FNV-1a hash for deterministic sender-based domain selection
+  - Bounce handling works with any configured SRS domain
+  - Shared secret across all domains for decoding
 
 #### `tls/`
 - TLS certificate management (file-based or Let's Encrypt)
@@ -254,6 +261,8 @@ Return JSON response immediately:
 - `[cluster]` → `ClusterConfig` (optional, for Let's Encrypt S3 coordination)
 - `[arc]` → `ARCConfig`
 - `[srs]` → `SRSConfig`
+  - **New in v2.0.6:** `domains` (list), `selection` - Multi-domain SRS support
+  - **Removed:** `domain` (single domain, replaced by `domains` list)
 
 ### Hot Reloadable Settings
 Trigger with: `kill -HUP <pid>` or `systemctl reload fune`
@@ -620,6 +629,16 @@ keepalive_timeout 90s;
 - Investigate blacklisting (use online blacklist checkers)
 - Rotate to different source IPs
 
+### Gmail SRS Rate Limiting
+- **Problem**: Gmail rate limits emails from single SRS domain after high volume
+- **Solution**: Multi-domain SRS (v2.0.6+)
+  - Configure 3-6 SRS domains (e.g., `srs1.example.com`, `srs2.example.com`, etc.)
+  - Use `selection = "round-robin"` for even distribution across domains
+  - Use `selection = "hash-sender"` for consistent domain per sender (less useful for Gmail-only)
+  - All SRS domains must have MX records pointing to your bounce handler
+  - All domains share same `secret` for bounce decoding
+- **Setup**: See `[srs]` section in `config.toml.example`
+
 ## Important Reminders
 
 1. **Always run tests with race detector**: `go test -race ./...`
@@ -632,6 +651,7 @@ keepalive_timeout 90s;
 8. **Server never crashes from panics**: All HTTP handlers and goroutines are protected
 9. **IPv6/IPv4 configuration**: Use `source_ips_v4` and `source_ips_v6` (legacy `source_ips` removed in v2.0.4)
 10. **CIDR expansion on startup**: Subnets expanded once at startup, hot reload doesn't re-expand
+11. **Multi-domain SRS (v2.0.6)**: Use multiple SRS domains to avoid Gmail rate limiting - see troubleshooting section
 
 ---
 
@@ -674,5 +694,5 @@ When receiving SIGINT/SIGTERM:
 
 ---
 
-**Last Updated**: 2025-12-14 (v2.0.5 - Production readiness: cleanup goroutines & graceful shutdown)
+**Last Updated**: 2026-02-11 (v2.0.6 - Multi-domain SRS support for Gmail rate limiting mitigation)
 **Next Review**: After load testing and operational documentation

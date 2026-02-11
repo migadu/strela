@@ -159,10 +159,25 @@ enabled = false
 [srs]
 # Sender Rewriting Scheme (SRS) for envelope sender rewriting
 # Rewrites MAIL FROM to prevent SPF failures when forwarding
+# Multi-domain support helps avoid rate limiting from providers like Gmail
 enabled = false
-# domain = "mail.example.com"                    # Domain for rewritten SRS addresses
-# secret = "change-me-to-something-secure"       # Secret key for HMAC hash (min 16 chars)
+# domains = [                                    # List of domains for SRS addresses (rotated to distribute volume)
+#   "srs1.example.com",
+#   "srs2.example.com",
+#   "srs3.example.com",
+#   "srs1.example.org",
+#   "srs2.example.org",
+#   "srs3.example.org"
+# ]
+# selection = "round-robin"                      # Domain selection: "round-robin" (even distribution) or "hash-sender" (consistent per sender)
+# secret = "change-me-to-something-secure"       # Secret key for HMAC hash (min 16 chars, shared across all domains)
 # max_age = 21                                   # Maximum age in days for SRS addresses (default: 21)
 # hash_length = 4                                # Length of hash in SRS address (default: 4, range: 2-8)
 # separator = "="                                # Separator character (default: "=")
 # always_rewrite = false                         # Rewrite all senders, not just forwarded (default: false)
+
+# IMPORTANT: All SRS domains must:
+# - Point to your mail server (MX records) to receive bounces
+# - Have matching SPF records
+# - Optionally have DKIM configured
+# - Share the same secret for bounce decoding

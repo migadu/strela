@@ -84,18 +84,23 @@ func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSou
 	// Initialize SRS if enabled
 	var srsInstance *srs.SRS
 	if srsConfig != nil && srsConfig.Enabled {
-		var err error
-		srsInstance, err = srs.NewSRS(
-			srsConfig.Domain,
-			srsConfig.Secret,
-			srsConfig.MaxAge,
-			srsConfig.HashLength,
-			srsConfig.Separator,
-			srsConfig.AlwaysRewrite,
-		)
-		if err != nil {
-			logger.Error("failed to initialize SRS", "error", err)
-			srsInstance = nil
+		if len(srsConfig.Domains) == 0 {
+			logger.Error("SRS enabled but no domains configured")
+		} else {
+			var err error
+			srsInstance, err = srs.NewSRS(
+				srsConfig.Domains,
+				srsConfig.Selection,
+				srsConfig.Secret,
+				srsConfig.MaxAge,
+				srsConfig.HashLength,
+				srsConfig.Separator,
+				srsConfig.AlwaysRewrite,
+			)
+			if err != nil {
+				logger.Error("failed to initialize SRS", "error", err)
+				srsInstance = nil
+			}
 		}
 	}
 

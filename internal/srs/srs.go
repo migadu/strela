@@ -56,25 +56,39 @@ import (
 	"crypto/sha1"
 	"encoding/base32"
 	"fmt"
+	"hash/fnv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 // SRS implements Sender Rewriting Scheme for envelope sender rewriting
 type SRS struct {
-	domain        string // SRS domain for rewritten addresses
-	secret        string // Secret for HMAC hash generation
-	maxAge        int    // Maximum age in days for SRS addresses
-	hashLength    int    // Length of hash in characters (2-8)
-	separator     string // Separator character (default "=")
-	alwaysRewrite bool   // Always rewrite, even non-forwarded addresses
+	domains       []string // List of SRS domains for rewritten addresses
+	selection     string   // Domain selection strategy: "round-robin" or "hash-sender"
+	counter       uint64   // Atomic counter for round-robin selection
+	secret        string   // Secret for HMAC hash generation
+	maxAge        int      // Maximum age in days for SRS addresses
+	hashLength    int      // Length of hash in characters (2-8)
+	separator     string   // Separator character (default "=")
+	alwaysRewrite bool     // Always rewrite, even non-forwarded addresses
 }
 
 // NewSRS creates a new SRS instance with the specified configuration
-func NewSRS(domain, secret string, maxAge, hashLength int, separator string, alwaysRewrite bool) (*SRS, error) {
-	if domain == "" {
-		return nil, fmt.Errorf("SRS domain cannot be empty")
+func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, separator string, alwaysRewrite bool) (*SRS, error) {
+	if len(domains) == 0 {
+		return nil, fmt.Errorf("SRS domains list cannot be empty")
 	}
+
+	// Normalize all domains to lowercase
+	normalizedDomains := make([]string, len(domains))
+	for i, domain := range domains {
+		if domain == "" {
+			return nil, fmt.Errorf("SRS domain at index %d is empty", i)
+		}
+		normalizedDomains[i] = strings.ToLower(domain)
+	}
+
 	if secret == "" {
 		return nil, fmt.Errorf("SRS secret cannot be empty")
 	}
@@ -90,15 +104,48 @@ func NewSRS(domain, secret string, maxAge, hashLength int, separator string, alw
 	if separator == "" {
 		separator = "="
 	}
+	if selection == "" {
+		selection = "round-robin"
+	}
+	if selection != "round-robin" && selection != "hash-sender" {
+		return nil, fmt.Errorf("SRS selection must be 'round-robin' or 'hash-sender' (got %q)", selection)
+	}
 
 	return &SRS{
-		domain:        strings.ToLower(domain),
+		domains:       normalizedDomains,
+		selection:     selection,
+		counter:       0,
 		secret:        secret,
 		maxAge:        maxAge,
 		hashLength:    hashLength,
 		separator:     separator,
 		alwaysRewrite: alwaysRewrite,
 	}, nil
+}
+
+// selectDomain chooses an SRS domain based on the configured selection strategy
+func (s *SRS) selectDomain(originalSender string) string {
+	if len(s.domains) == 1 {
+		return s.domains[0]
+	}
+
+	switch s.selection {
+	case "round-robin":
+		// Atomically increment counter and use modulo to select domain
+		idx := atomic.AddUint64(&s.counter, 1) - 1
+		return s.domains[idx%uint64(len(s.domains))]
+
+	case "hash-sender":
+		// Hash the original sender address to select domain
+		h := fnv.New64a()
+		h.Write([]byte(strings.ToLower(originalSender)))
+		idx := h.Sum64() % uint64(len(s.domains))
+		return s.domains[idx]
+
+	default:
+		// Fallback to first domain (should never happen due to validation)
+		return s.domains[0]
+	}
 }
 
 // Forward rewrites an email address to SRS format (SRS0)
@@ -134,11 +181,14 @@ func (s *SRS) Forward(sender string) (string, error) {
 	}
 
 	// Create SRS0 address
-	return s.forwardSRS0(localpart, domain)
+	return s.forwardSRS0(localpart, domain, sender)
 }
 
 // forwardSRS0 creates an SRS0 address from a regular email address
-func (s *SRS) forwardSRS0(localpart, domain string) (string, error) {
+func (s *SRS) forwardSRS0(localpart, domain string, originalSender string) (string, error) {
+	// Select domain based on strategy
+	srsDomain := s.selectDomain(originalSender)
+
 	// Generate timestamp (base32-encoded days since epoch / 4)
 	timestamp := s.generateTimestamp()
 
@@ -152,7 +202,7 @@ func (s *SRS) forwardSRS0(localpart, domain string) (string, error) {
 		s.separator, domain,
 		s.separator, localpart)
 
-	return srsLocal + "@" + s.domain, nil
+	return srsLocal + "@" + srsDomain, nil
 }
 
 // forwardSRS1 creates an SRS1 address from an SRS0 address (for re-forwarding)
@@ -167,13 +217,16 @@ func (s *SRS) forwardSRS1(srs0Localpart, srs0Domain string) (string, error) {
 	// Generate new hash for SRS1
 	hash := s.generateHash(srs0Domain, srs0Localpart, "")
 
+	// Use first domain for SRS1 (SRS1 is rare, doesn't need rotation)
+	srsDomain := s.domains[0]
+
 	// Build SRS1 address
 	srsLocal := fmt.Sprintf("SRS1%s%s%s%s%s%s",
 		s.separator, hash,
 		s.separator, srs0Domain,
 		s.separator, srs0Localpart)
 
-	return srsLocal + "@" + s.domain, nil
+	return srsLocal + "@" + srsDomain, nil
 }
 
 // Reverse decodes an SRS address back to the original sender address
@@ -405,7 +458,15 @@ func parseEmail(email string) (localpart, domain string, err error) {
 	return localpart, strings.ToLower(domain), nil
 }
 
-// GetDomain returns the SRS domain
+// GetDomain returns the first SRS domain (for backward compatibility)
 func (s *SRS) GetDomain() string {
-	return s.domain
+	if len(s.domains) > 0 {
+		return s.domains[0]
+	}
+	return ""
+}
+
+// GetDomains returns all configured SRS domains
+func (s *SRS) GetDomains() []string {
+	return s.domains
 }

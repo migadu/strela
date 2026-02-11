@@ -168,13 +168,14 @@ type ARCConfig struct {
 
 // SRSConfig configures Sender Rewriting Scheme (SRS) for envelope sender rewriting.
 type SRSConfig struct {
-	Enabled       bool   `toml:"enabled"`        // Enable SRS envelope rewriting (default: false)
-	Domain        string `toml:"domain"`         // Domain for rewritten addresses (e.g., "mail.example.com")
-	Secret        string `toml:"secret"`         // Secret key for HMAC hash (min 16 chars, keep secure)
-	MaxAge        int    `toml:"max_age"`        // Maximum age in days for SRS addresses (default: 21)
-	HashLength    int    `toml:"hash_length"`    // Length of hash in SRS address (default: 4, range: 2-8)
-	Separator     string `toml:"separator"`      // Separator character (default: "=")
-	AlwaysRewrite bool   `toml:"always_rewrite"` // Rewrite all senders, not just forwarded (default: false)
+	Enabled       bool     `toml:"enabled"`        // Enable SRS envelope rewriting (default: false)
+	Domains       []string `toml:"domains"`        // List of domains for rewritten addresses (e.g., ["srs1.example.com", "srs2.example.com"])
+	Selection     string   `toml:"selection"`      // Domain selection strategy: "round-robin" or "hash-sender" (default: round-robin)
+	Secret        string   `toml:"secret"`         // Secret key for HMAC hash (min 16 chars, keep secure)
+	MaxAge        int      `toml:"max_age"`        // Maximum age in days for SRS addresses (default: 21)
+	HashLength    int      `toml:"hash_length"`    // Length of hash in SRS address (default: 4, range: 2-8)
+	Separator     string   `toml:"separator"`      // Separator character (default: "=")
+	AlwaysRewrite bool     `toml:"always_rewrite"` // Rewrite all senders, not just forwarded (default: false)
 }
 
 // SetDefaults sets default values for optional configuration fields.
@@ -306,6 +307,9 @@ func (c *Config) SetDefaults() {
 	}
 	if c.SRS.Separator == "" {
 		c.SRS.Separator = "="
+	}
+	if c.SRS.Selection == "" {
+		c.SRS.Selection = "round-robin"
 	}
 }
 
