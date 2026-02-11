@@ -100,6 +100,8 @@ func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSou
 			if err != nil {
 				logger.Error("failed to initialize SRS", "error", err)
 				srsInstance = nil
+			} else {
+				logger.Info("SRS initialized", "domains", srsConfig.Domains, "selection", srsConfig.Selection)
 			}
 		}
 	}
@@ -684,7 +686,9 @@ func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []b
 	if d.srs != nil {
 		if rewritten, err := d.srs.Forward(from); err == nil {
 			mailFrom = rewritten
-			d.logger.Debug("SRS rewrote sender", "original", from, "rewritten", rewritten)
+			d.logger.Info("SRS rewrote sender", "original", from, "rewritten", rewritten)
+		} else {
+			d.logger.Warn("SRS rewrite failed", "original", from, "error", err)
 		}
 	}
 
