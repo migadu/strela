@@ -927,7 +927,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		conn.SetDeadline(time.Now().Add(commandTimeout))
 		defer conn.SetDeadline(time.Time{}) // Clear deadline after handshake
 
-		// First try STARTTLS (opportunistic)
+		// Try STARTTLS first (opportunistic)
 		client, err := smtp.NewClientStartTLSWithName(conn, tlsConfig, d.config.HelloHostname)
 		if err == nil {
 			// STARTTLS succeeded
@@ -940,13 +940,31 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 
 		// STARTTLS failed - check if it's because server doesn't support it
 		if strings.Contains(err.Error(), "server doesn't support STARTTLS") {
-			d.logger.Info("STARTTLS not supported, falling back to plaintext", "mx", mxHost)
+			// Server doesn't support STARTTLS - connection is now in bad state, need fresh connection
+			d.logger.Info("STARTTLS not supported, reconnecting for plaintext SMTP", "mx", mxHost)
 
-			// Fall back to plaintext SMTP
-			// Create new client without STARTTLS
-			client := smtp.NewClient(conn)
+			// Close corrupted connection
+			conn.Close()
 
-			// Send EHLO/HELO with custom hostname
+			// Reconnect without STARTTLS
+			dialer := &net.Dialer{Timeout: connectionTimeout}
+			if sourceIP != "" {
+				ip := net.ParseIP(sourceIP)
+				dialer.LocalAddr = &net.TCPAddr{IP: ip}
+			}
+
+			// Reconnect to same target
+			newConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, "25"))
+			if err != nil {
+				resultCh <- clientResult{err: fmt.Errorf("reconnect for plaintext failed: %w", err)}
+				return
+			}
+
+			// Set deadline on new connection
+			newConn.SetDeadline(time.Now().Add(commandTimeout))
+
+			// Create plaintext client
+			client := smtp.NewClient(newConn)
 			if err := client.Hello(d.config.HelloHostname); err != nil {
 				client.Close()
 				resultCh <- clientResult{err: fmt.Errorf("EHLO/HELO failed: %w", err)}
