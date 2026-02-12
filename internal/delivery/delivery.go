@@ -912,12 +912,13 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		MinVersion:         tls.VersionTLS12,
 	}
 
-	d.logger.Debug("attempting STARTTLS connection", "mx", mxHost, "timeout", commandTimeout)
+	d.logger.Debug("attempting SMTP connection", "mx", mxHost, "timeout", commandTimeout)
 
-	// Perform SMTP handshake and STARTTLS with timeout enforcement using goroutine
+	// Perform SMTP handshake (EHLO) and optionally STARTTLS with timeout enforcement using goroutine
 	type clientResult struct {
-		client *smtp.Client
-		err    error
+		client  *smtp.Client
+		usedTLS bool
+		err     error
 	}
 	resultCh := make(chan clientResult, 1)
 
@@ -926,20 +927,41 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		conn.SetDeadline(time.Now().Add(commandTimeout))
 		defer conn.SetDeadline(time.Time{}) // Clear deadline after handshake
 
-		// Use go-smtp's STARTTLS with custom hostname
-		// This will send EHLO with our configured hostname instead of "localhost"
+		// First try STARTTLS (opportunistic)
 		client, err := smtp.NewClientStartTLSWithName(conn, tlsConfig, d.config.HelloHostname)
-		if err != nil {
-			resultCh <- clientResult{err: fmt.Errorf("STARTTLS handshake failed: %w", err)}
+		if err == nil {
+			// STARTTLS succeeded
+			client.CommandTimeout = commandTimeout
+			client.SubmissionTimeout = commandTimeout
+			d.logger.Debug("STARTTLS connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
+			resultCh <- clientResult{client: client, usedTLS: true, err: nil}
 			return
 		}
 
-		// Set timeouts for subsequent commands
-		client.CommandTimeout = commandTimeout
-		client.SubmissionTimeout = commandTimeout
+		// STARTTLS failed - check if it's because server doesn't support it
+		if strings.Contains(err.Error(), "server doesn't support STARTTLS") {
+			d.logger.Info("STARTTLS not supported, falling back to plaintext", "mx", mxHost)
 
-		d.logger.Debug("STARTTLS connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
-		resultCh <- clientResult{client: client, err: nil}
+			// Fall back to plaintext SMTP
+			// Create new client without STARTTLS
+			client := smtp.NewClient(conn)
+
+			// Send EHLO/HELO with custom hostname
+			if err := client.Hello(d.config.HelloHostname); err != nil {
+				client.Close()
+				resultCh <- clientResult{err: fmt.Errorf("EHLO/HELO failed: %w", err)}
+				return
+			}
+
+			client.CommandTimeout = commandTimeout
+			client.SubmissionTimeout = commandTimeout
+			d.logger.Debug("plaintext SMTP connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
+			resultCh <- clientResult{client: client, usedTLS: false, err: nil}
+			return
+		}
+
+		// Other STARTTLS errors (handshake failed, etc.) - fail
+		resultCh <- clientResult{err: fmt.Errorf("STARTTLS handshake failed: %w", err)}
 	})
 
 	var client *smtp.Client
@@ -954,10 +976,13 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 			return nil, DeliveryResult{Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("Handshake failed: %v", result.err)}, result.err
 		}
 		client = result.client
+		if !result.usedTLS {
+			d.logger.Warn("delivering over plaintext SMTP (no TLS)", "mx", mxHost)
+		}
 	case <-ctx.Done():
 		// Timeout occurred
 		conn.Close()
-		return nil, DeliveryResult{Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "STARTTLS handshake timed out"}, ctx.Err()
+		return nil, DeliveryResult{Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "SMTP handshake timed out"}, ctx.Err()
 	}
 
 	success = true // Prevent deferred close
@@ -967,26 +992,37 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 func (d *Deliverer) mapSMTPError(err error, mxHost, sourceIP string) DeliveryResult {
 	res := DeliveryResult{MXHost: mxHost, SourceIP: sourceIP}
 
-	// First classify using our error classifier for better category assignment
-	classified := ClassifyError(0, "", err)
+	// Extract SMTP code and message first if available
+	var smtpCode int
+	var smtpMessage string
+	if smtpErr, ok := err.(*smtp.SMTPError); ok {
+		smtpCode = smtpErr.Code
+		smtpMessage = smtpErr.Message
+		res.SMTPCode = smtpCode
+		res.SMTPMessage = smtpMessage
+	}
+
+	// Classify using our error classifier with actual SMTP code/message
+	classified := ClassifyError(smtpCode, smtpMessage, err)
 	res.Error = classified.Message
 
 	d.logger.Debug("classifying SMTP error",
 		"mx", mxHost,
 		"error", err,
+		"smtp_code", smtpCode,
 		"category", classified.Category,
 		"retryable", IsRetryable(classified.Category))
 
-	if smtpErr, ok := err.(*smtp.SMTPError); ok {
-		res.SMTPCode = smtpErr.Code
-		res.SMTPMessage = smtpErr.Message
-		if smtpErr.Code >= 500 {
+	// Map category to status
+	if smtpCode > 0 {
+		// SMTP error - use code-based classification
+		if smtpCode >= 500 {
 			res.Status = "hard_bounce"
 		} else {
 			res.Status = "temp_fail"
 		}
 	} else {
-		// Category-based mapping
+		// Non-SMTP error - use category-based mapping
 		switch classified.Category {
 		case ErrorPermanent:
 			res.Status = "hard_bounce"
