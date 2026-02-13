@@ -549,3 +549,207 @@ func TestHandleDeliver_DKIMARCDisabledIgnoresAPIParams(t *testing.T) {
 	// The delivery engine should have received empty strings for DKIM/ARC params
 	// This test verifies the handler respects the enabled flag
 }
+
+func TestHandleDeliver_HeaderMode(t *testing.T) {
+	// Test the new header mode (Content-Type: message/rfc822)
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	rawEmail := `From: sender@example.com
+To: recipient@example.com
+Subject: Test Email via Header Mode
+Message-ID: <test-123@example.com>
+Date: Mon, 15 Jan 2026 10:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This is the email body sent via header mode.
+`
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req.Header.Set("Content-Type", "message/rfc822")
+	req.Header.Set("X-Envelope-From", "sender@example.com")
+	req.Header.Set("X-Envelope-To", "recipient@example.com")
+	req.Header.Set("X-DKIM-Selector", "default")
+	req.Header.Set("X-DKIM-Domain", "example.com")
+	req.Header.Set("X-ARC-Selector", "arc1")
+	req.Header.Set("X-ARC-Domain", "arc.example.com")
+
+	rr := httptest.NewRecorder()
+	h.HandleDeliver(rr, req)
+
+	// Should succeed
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify message was delivered
+	if mockDeliverer.lastMessage == "" {
+		t.Fatal("Expected message to be delivered")
+	}
+
+	// Verify raw message content preserved
+	if !strings.Contains(mockDeliverer.lastMessage, "This is the email body sent via header mode.") {
+		t.Error("Email body not preserved")
+	}
+
+	if !strings.Contains(mockDeliverer.lastMessage, "<test-123@example.com>") {
+		t.Error("Message-ID not preserved")
+	}
+}
+
+func TestHandleDeliver_HeaderModeWithDKIM(t *testing.T) {
+	// Test header mode with DKIM parameters
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+		DKIM: config.DKIMConfig{
+			Enabled: true,
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	rawEmail := `From: sender@example.com
+To: recipient@example.com
+Subject: Test with DKIM
+
+Test body
+`
+
+	testKey := "-----BEGIN RSA PRIVATE KEY-----\ntest-key\n-----END RSA PRIVATE KEY-----"
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req.Header.Set("Content-Type", "message/rfc822")
+	req.Header.Set("X-Envelope-From", "sender@example.com")
+	req.Header.Set("X-Envelope-To", "recipient@example.com")
+	req.Header.Set("X-DKIM-Private-Key", testKey)
+	req.Header.Set("X-DKIM-Selector", "test-selector")
+	req.Header.Set("X-DKIM-Domain", "test.example.com")
+
+	rr := httptest.NewRecorder()
+	h.HandleDeliver(rr, req)
+
+	// Should succeed
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleDeliver_HeaderModeMissingEnvelope(t *testing.T) {
+	// Test that header mode fails gracefully when envelope headers missing
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	rawEmail := `From: sender@example.com
+To: recipient@example.com
+Subject: Test
+
+Body
+`
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req.Header.Set("Content-Type", "message/rfc822")
+	// Missing X-Envelope-From and X-Envelope-To headers
+
+	rr := httptest.NewRecorder()
+	h.HandleDeliver(rr, req)
+
+	// Should fail with 400 Bad Request
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if !strings.Contains(rr.Body.String(), "Missing 'from' or 'to'") {
+		t.Errorf("Expected missing fields error, got: %s", rr.Body.String())
+	}
+}
+
+func TestHandleDeliver_BothModesWork(t *testing.T) {
+	// Test that both JSON and header modes work correctly
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	rawEmail := `From: sender@example.com
+To: recipient@example.com
+Subject: Test Email
+
+Test body content
+`
+
+	tests := []struct {
+		name        string
+		setupReq    func() *http.Request
+		wantSuccess bool
+	}{
+		{
+			name: "JSON mode",
+			setupReq: func() *http.Request {
+				reqBody := MessageRequest{
+					From:       "sender@example.com",
+					To:         "recipient@example.com",
+					RawMessage: rawEmail,
+				}
+				bodyBytes, _ := json.Marshal(reqBody)
+				req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "Header mode",
+			setupReq: func() *http.Request {
+				req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+				req.Header.Set("Content-Type", "message/rfc822")
+				req.Header.Set("X-Envelope-From", "sender@example.com")
+				req.Header.Set("X-Envelope-To", "recipient@example.com")
+				return req
+			},
+			wantSuccess: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := tt.setupReq()
+			rr := httptest.NewRecorder()
+			h.HandleDeliver(rr, req)
+
+			if tt.wantSuccess {
+				if rr.Code != http.StatusOK {
+					t.Errorf("Expected success, got status %d: %s", rr.Code, rr.Body.String())
+				}
+
+				// Verify message delivered
+				if !strings.Contains(mockDeliverer.lastMessage, "Test body content") {
+					t.Error("Message content not delivered correctly")
+				}
+			}
+		})
+	}
+}

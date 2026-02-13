@@ -89,6 +89,9 @@ type MessageRequest struct {
 }
 
 // HandleDeliver handles synchronous message delivery requests.
+// Supports two modes:
+// 1. JSON mode: Content-Type: application/json with MessageRequest body
+// 2. Header mode: Content-Type: message/rfc822 with raw RFC822 body and HTTP headers
 func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("received delivery request",
 		"remote_addr", r.RemoteAddr,
@@ -113,12 +116,23 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		h.logger.Debug("authentication successful", "remote_addr", r.RemoteAddr)
 	}
 
-	// 2. Parse request
+	// 2. Determine mode based on Content-Type
+	contentType := r.Header.Get("Content-Type")
+	isHeaderMode := strings.HasPrefix(contentType, "message/rfc822")
+
 	var req MessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Debug("failed to decode JSON payload", "error", err, "remote_addr", r.RemoteAddr)
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
+	if isHeaderMode {
+		// Header mode: parse from HTTP headers + raw body
+		h.logger.Debug("using header mode (Content-Type: message/rfc822)")
+		req = h.parseHeaderMode(r)
+	} else {
+		// JSON mode (legacy): parse from JSON body
+		h.logger.Debug("using JSON mode")
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			h.logger.Debug("failed to decode JSON payload", "error", err, "remote_addr", r.RemoteAddr)
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
 	}
 	h.logger.Debug("parsed message request",
 		"from", req.From,
@@ -443,6 +457,40 @@ func createAttachment(w *mail.Writer, att Attachment) error {
 	}
 
 	return aw.Close()
+}
+
+// parseHeaderMode extracts request parameters from HTTP headers and body.
+// Expected headers:
+//   - X-Envelope-From: sender@example.com
+//   - X-Envelope-To: recipient@example.com
+//   - X-DKIM-Private-Key: <base64 private key>
+//   - X-DKIM-Selector: selector
+//   - X-DKIM-Domain: example.com
+//   - X-ARC-Private-Key: <base64 private key>
+//   - X-ARC-Selector: selector
+//   - X-ARC-Domain: example.com
+//   - Content-Type: message/rfc822
+//
+// Body should contain the raw RFC822 message.
+func (h *Handler) parseHeaderMode(r *http.Request) MessageRequest {
+	// Read raw message body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.logger.Error("failed to read request body", "error", err)
+		body = []byte{}
+	}
+
+	return MessageRequest{
+		From:           r.Header.Get("X-Envelope-From"),
+		To:             r.Header.Get("X-Envelope-To"),
+		RawMessage:     string(body),
+		DKIMPrivateKey: r.Header.Get("X-DKIM-Private-Key"),
+		DKIMSelector:   r.Header.Get("X-DKIM-Selector"),
+		DKIMDomain:     r.Header.Get("X-DKIM-Domain"),
+		ARCPrivateKey:  r.Header.Get("X-ARC-Private-Key"),
+		ARCSelector:    r.Header.Get("X-ARC-Selector"),
+		ARCDomain:      r.Header.Get("X-ARC-Domain"),
+	}
 }
 
 // Helper methods for validation could go here
