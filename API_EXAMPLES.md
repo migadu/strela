@@ -74,19 +74,48 @@ curl -X POST http://localhost:8080/v1/deliver \
 
 ### Header Mode with DKIM/ARC
 
+**Important:** Private keys MUST be base64-encoded when sent in HTTP headers (newlines are not allowed in HTTP header values).
+
 ```bash
+# Encode private keys to base64 first (remove line wrapping)
+DKIM_KEY_B64=$(cat dkim-key.pem | base64 -w 0)  # Linux: -w 0
+# DKIM_KEY_B64=$(cat dkim-key.pem | base64)     # macOS: no -w flag needed
+
 curl -X POST http://localhost:8080/v1/deliver \
   -H "Content-Type: message/rfc822" \
   -H "Authorization: Bearer your-token-here" \
   -H "X-Envelope-From: sender@example.com" \
   -H "X-Envelope-To: recipient@example.com" \
-  -H "X-DKIM-Private-Key: $(cat dkim-key.pem | base64)" \
+  -H "X-DKIM-Private-Key: $DKIM_KEY_B64" \
   -H "X-DKIM-Selector: default" \
   -H "X-DKIM-Domain: example.com" \
-  -H "X-ARC-Private-Key: $(cat arc-key.pem | base64)" \
-  -H "X-ARC-Selector: arc1" \
-  -H "X-ARC-Domain: arc.example.com" \
   --data-binary @message.eml
+```
+
+**JavaScript/TypeScript Example:**
+
+```javascript
+import { readFileSync } from 'fs';
+
+const dkimPrivateKey = readFileSync('dkim-key.pem', 'utf-8');
+const rawEmail = readFileSync('message.eml', 'utf-8');
+
+// Base64 encode the private key for HTTP header
+const dkimKeyB64 = Buffer.from(dkimPrivateKey).toString('base64');
+
+const response = await fetch('http://localhost:8080/v1/deliver', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'message/rfc822',
+    'Authorization': 'Bearer your-token-here',
+    'X-Envelope-From': 'sender@example.com',
+    'X-Envelope-To': 'recipient@example.com',
+    'X-ARC-Private-Key': dkimKeyB64,  // Base64 encoded
+    'X-ARC-Selector': 'arc1',
+    'X-ARC-Domain': 'example.com'
+  },
+  body: rawEmail
+});
 ```
 
 ### Header Mode Example with Inline Message

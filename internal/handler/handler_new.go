@@ -463,15 +463,16 @@ func createAttachment(w *mail.Writer, att Attachment) error {
 // Expected headers:
 //   - X-Envelope-From: sender@example.com
 //   - X-Envelope-To: recipient@example.com
-//   - X-DKIM-Private-Key: <base64 private key>
-//   - X-DKIM-Selector: selector
-//   - X-DKIM-Domain: example.com
-//   - X-ARC-Private-Key: <base64 private key>
-//   - X-ARC-Selector: selector
-//   - X-ARC-Domain: example.com
+//   - X-DKIM-Private-Key: <base64 encoded private key> (optional)
+//   - X-DKIM-Selector: selector (optional)
+//   - X-DKIM-Domain: example.com (optional)
+//   - X-ARC-Private-Key: <base64 encoded private key> (optional)
+//   - X-ARC-Selector: selector (optional)
+//   - X-ARC-Domain: example.com (optional)
 //   - Content-Type: message/rfc822
 //
 // Body should contain the raw RFC822 message.
+// Private keys in headers MUST be base64-encoded (newlines not allowed in HTTP headers).
 func (h *Handler) parseHeaderMode(r *http.Request) MessageRequest {
 	// Read raw message body
 	body, err := io.ReadAll(r.Body)
@@ -480,17 +481,40 @@ func (h *Handler) parseHeaderMode(r *http.Request) MessageRequest {
 		body = []byte{}
 	}
 
+	// Decode base64-encoded private keys if present
+	dkimKey := h.decodeBase64Header(r.Header.Get("X-DKIM-Private-Key"))
+	arcKey := h.decodeBase64Header(r.Header.Get("X-ARC-Private-Key"))
+
 	return MessageRequest{
 		From:           r.Header.Get("X-Envelope-From"),
 		To:             r.Header.Get("X-Envelope-To"),
 		RawMessage:     string(body),
-		DKIMPrivateKey: r.Header.Get("X-DKIM-Private-Key"),
+		DKIMPrivateKey: dkimKey,
 		DKIMSelector:   r.Header.Get("X-DKIM-Selector"),
 		DKIMDomain:     r.Header.Get("X-DKIM-Domain"),
-		ARCPrivateKey:  r.Header.Get("X-ARC-Private-Key"),
+		ARCPrivateKey:  arcKey,
 		ARCSelector:    r.Header.Get("X-ARC-Selector"),
 		ARCDomain:      r.Header.Get("X-ARC-Domain"),
 	}
+}
+
+// decodeBase64Header attempts to decode a base64-encoded header value.
+// If decoding fails or the value is empty, returns the original value.
+// This allows both base64-encoded and plain values (for backwards compatibility).
+func (h *Handler) decodeBase64Header(value string) string {
+	if value == "" {
+		return ""
+	}
+
+	// Try to decode as base64
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		// Not valid base64, return original value
+		// (Could be a plain value or intentionally not encoded)
+		return value
+	}
+
+	return string(decoded)
 }
 
 // Helper methods for validation could go here

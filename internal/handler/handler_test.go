@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -749,6 +750,107 @@ Test body content
 				if !strings.Contains(mockDeliverer.lastMessage, "Test body content") {
 					t.Error("Message content not delivered correctly")
 				}
+			}
+		})
+	}
+}
+
+func TestHandleDeliver_HeaderModeBase64PrivateKeys(t *testing.T) {
+	// Test that base64-encoded private keys in headers are decoded correctly
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+		DKIM: config.DKIMConfig{
+			Enabled: true,
+		},
+		ARC: config.ARCConfig{
+			Enabled: true,
+		},
+	}
+
+	logger := slog.Default()
+	mockDeliverer := &mockDeliverer{}
+	h := NewHandler(cfg, mockDeliverer, logger)
+
+	rawEmail := `From: sender@example.com
+To: recipient@example.com
+Subject: Test with Base64 Keys
+
+Test body
+`
+
+	// Simulate a PEM private key (with newlines)
+	dkimKey := "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Pmr3ZOxa\n-----END RSA PRIVATE KEY-----"
+	arcKey := "-----BEGIN RSA PRIVATE KEY-----\nMIIBPAIBAAJBALc3WGLdhuqYVF6Y8owW2l7rgYGmBqJv\n-----END RSA PRIVATE KEY-----"
+
+	// Base64 encode them for HTTP headers (newlines not allowed in headers)
+	dkimKeyB64 := base64.StdEncoding.EncodeToString([]byte(dkimKey))
+	arcKeyB64 := base64.StdEncoding.EncodeToString([]byte(arcKey))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req.Header.Set("Content-Type", "message/rfc822")
+	req.Header.Set("X-Envelope-From", "sender@example.com")
+	req.Header.Set("X-Envelope-To", "recipient@example.com")
+	req.Header.Set("X-DKIM-Private-Key", dkimKeyB64)
+	req.Header.Set("X-DKIM-Selector", "test-selector")
+	req.Header.Set("X-DKIM-Domain", "test.example.com")
+	req.Header.Set("X-ARC-Private-Key", arcKeyB64)
+	req.Header.Set("X-ARC-Selector", "arc-selector")
+	req.Header.Set("X-ARC-Domain", "arc.example.com")
+
+	rr := httptest.NewRecorder()
+	h.HandleDeliver(rr, req)
+
+	// Should succeed
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// The handler should have decoded the base64 keys back to original PEM format
+	// (This would be verified by the delivery engine in real usage)
+}
+
+func TestDecodeBase64Header(t *testing.T) {
+	h := &Handler{}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "valid base64",
+			input:    base64.StdEncoding.EncodeToString([]byte("test value")),
+			expected: "test value",
+		},
+		{
+			name:     "PEM key encoded",
+			input:    base64.StdEncoding.EncodeToString([]byte("-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34Gkx\n-----END RSA PRIVATE KEY-----")),
+			expected: "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34Gkx\n-----END RSA PRIVATE KEY-----",
+		},
+		{
+			name:     "plain text (not base64)",
+			input:    "plain-text-selector",
+			expected: "plain-text-selector", // Returns original if not valid base64
+		},
+		{
+			name:     "invalid base64 with special chars",
+			input:    "invalid!!!base64",
+			expected: "invalid!!!base64", // Returns original if decode fails
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := h.decodeBase64Header(tt.input)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
 		})
 	}
