@@ -259,7 +259,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	if d.config.PerDomainIntervalSeconds > 0 {
 		if err := d.waitForDomainRateLimit(ctx, domain); err != nil {
 			if err == ErrDomainRateLimitExceeded {
-				d.logger.Debug("domain rate limit exceeded", "domain", domain)
+				d.logger.Warn("domain rate limit exceeded", "domain", domain)
 				result := DeliveryResult{
 					Status: "rate_limit", // Fail Fast status
 					Error:  "Domain rate limit exceeded",
@@ -941,7 +941,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, p
 		// STARTTLS failed - check if it's because server doesn't support it
 		if strings.Contains(err.Error(), "server doesn't support STARTTLS") {
 			// Server doesn't support STARTTLS - connection is now in bad state, need fresh connection
-			d.logger.Info("STARTTLS not supported, reconnecting for plaintext SMTP", "mx", mxHost)
+			d.logger.Warn("STARTTLS not supported, reconnecting for plaintext SMTP", "mx", mxHost)
 
 			// Close corrupted connection
 			conn.Close()

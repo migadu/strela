@@ -109,7 +109,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(token), []byte(h.config.Inbound.AuthToken)) != 1 {
-			h.logger.Debug("authentication failed", "remote_addr", r.RemoteAddr)
+			h.logger.Warn("authentication failed", "remote_addr", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -152,6 +152,12 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing 'from' or 'to' fields", http.StatusBadRequest)
 		return
 	}
+
+	// Log incoming delivery request at INFO level
+	h.logger.Info("delivery request received",
+		"from", req.From,
+		"to", req.To,
+		"remote_addr", r.RemoteAddr)
 
 	// Determine mode: raw message or composed
 	isRawMode := req.RawMessage != ""
