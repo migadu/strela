@@ -178,6 +178,7 @@ func main() {
 		ReadTimeout:  time.Duration(cfg.Inbound.ReadTimeoutSecs) * time.Second,
 		WriteTimeout: time.Duration(cfg.Inbound.WriteTimeoutSecs) * time.Second,
 		IdleTimeout:  time.Duration(cfg.Inbound.IdleTimeoutSecs) * time.Second,
+		ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelDebug), // TLS handshake errors at debug level
 	}
 
 	// Start server with panic recovery

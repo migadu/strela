@@ -20,3 +20,4 @@ config.toml
 *.pem
 *.key
 test-config.toml
+fune-server

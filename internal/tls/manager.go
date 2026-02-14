@@ -150,7 +150,7 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, log
 			return nil, fmt.Errorf("%w: %s", ErrHostNotAllowed, serverName)
 		}
 
-		logger.Info("TLS: certificate request during handshake", "domain", serverName, "has_sni", hello.ServerName != "")
+		logger.Debug("TLS: certificate request during handshake", "domain", serverName, "has_sni", hello.ServerName != "")
 
 		// Create a modified ClientHelloInfo with the resolved server name
 		modifiedHello := *hello
@@ -167,7 +167,7 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, log
 				"error_type", fmt.Sprintf("%T", err))
 			return nil, fmt.Errorf("%w for %s: %v", ErrCertificateUnavailable, serverName, err)
 		}
-		logger.Info("TLS: certificate provided successfully", "domain", serverName)
+		logger.Debug("TLS: certificate provided successfully", "domain", serverName)
 		return cert, nil
 	}
 
