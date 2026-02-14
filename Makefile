@@ -27,8 +27,10 @@ LDFLAGS = -ldflags="${LDFLAGS_VARS}"
 
 # Cross-compilation binaries
 BIN_DIR ?= bin
-FUNE_LINUX_BINARY ?= fune-linux-amd64
-FUNE_FREEBSD_BINARY ?= fune-freebsd-amd64
+FUNE_SERVER_LINUX_BINARY ?= fune-linux-amd64
+FUNE_SERVER_FREEBSD_BINARY ?= fune-freebsd-amd64
+FUNE_ADMIN_LINUX_BINARY ?= fune-admin-linux-amd64
+FUNE_ADMIN_FREEBSD_BINARY ?= fune-admin-freebsd-amd64
 
 
 # ====================================================================================
@@ -59,8 +61,10 @@ install:
 clean:
 	rm -f $(BIN_DIR)/$(FUNE_SERVER_BIN)
 	rm -f $(BIN_DIR)/$(FUNE_ADMIN_BIN)
-	rm -f $(BIN_DIR)/$(FUNE_LINUX_BINARY)
-	rm -f $(BIN_DIR)/$(FUNE_FREEBSD_BINARY)
+	rm -f $(BIN_DIR)/$(FUNE_SERVER_LINUX_BINARY)
+	rm -f $(BIN_DIR)/$(FUNE_SERVER_FREEBSD_BINARY)
+	rm -f $(BIN_DIR)/$(FUNE_ADMIN_LINUX_BINARY)
+	rm -f $(BIN_DIR)/$(FUNE_ADMIN_FREEBSD_BINARY)
 	rm -f coverage.out
 
 # ====================================================================================
@@ -84,11 +88,13 @@ security-scan:
 
 build-linux:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(FUNE_LINUX_BINARY) $(FUNE_SERVER_SRC)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(FUNE_SERVER_LINUX_BINARY) $(FUNE_SERVER_SRC)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(FUNE_ADMIN_LINUX_BINARY) $(FUNE_ADMIN_SRC)
 
 freebsd:
 	@mkdir -p $(BIN_DIR)
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_FREEBSD_BINARY) $(FUNE_SERVER_SRC)
+	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_SERVER_FREEBSD_BINARY) $(FUNE_SERVER_SRC)
+	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_ADMIN_FREEBSD_BINARY) $(FUNE_ADMIN_SRC)
 
 # ====================================================================================
 # Help
@@ -106,6 +112,6 @@ help:
 	@echo "  clean              Remove build artifacts"
 	@echo "  test               Run tests"
 	@echo "  coverage           Run tests with coverage"
-	@echo "  build-linux        Cross-compile static binary for Linux"
-	@echo "  freebsd            Cross-compile for FreeBSD"
+	@echo "  build-linux        Cross-compile both binaries for Linux"
+	@echo "  freebsd            Cross-compile both binaries for FreeBSD"
 	@echo "  help               Show this help message"
