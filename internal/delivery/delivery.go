@@ -652,7 +652,7 @@ func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to str
 		"source_ip", sourceIP,
 		"reused", reused)
 
-	err := d.deliverPayload(client, from, to, msg)
+	smtpMsg, err := d.deliverPayload(client, from, to, msg)
 	if err != nil {
 		// If error occurred on a reused connection, it might be stale.
 		// We could retry? For now, we fail and let client retry.
@@ -674,13 +674,13 @@ func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to str
 	return DeliveryResult{
 		Status:      "delivered",
 		SMTPCode:    250,
-		SMTPMessage: "OK",
+		SMTPMessage: smtpMsg,
 		MXHost:      mxHost,
 		SourceIP:    sourceIP,
 	}
 }
 
-func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []byte) error {
+func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []byte) (string, error) {
 	// MAIL FROM
 	mailFrom := from
 	if d.srs != nil {
@@ -709,14 +709,14 @@ func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []b
 	d.logger.Debug("sending MAIL FROM", "from", mailFrom)
 	if err := client.Mail(mailFrom, mailOpts); err != nil {
 		d.logger.Debug("MAIL FROM failed", "error", err)
-		return err
+		return "", err
 	}
 
 	// RCPT TO
 	d.logger.Debug("sending RCPT TO", "to", to)
 	if err := client.Rcpt(to, nil); err != nil {
 		d.logger.Debug("RCPT TO failed", "error", err)
-		return err
+		return "", err
 	}
 
 	// DATA
@@ -724,24 +724,26 @@ func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []b
 	w, err := client.Data()
 	if err != nil {
 		d.logger.Debug("DATA command failed", "error", err)
-		return err
+		return "", err
 	}
 	if w == nil {
-		return fmt.Errorf("DATA command returned nil writer")
+		return "", fmt.Errorf("DATA command returned nil writer")
 	}
 
 	if _, err := w.Write(msg); err != nil {
 		d.logger.Debug("failed to write message data", "error", err)
-		return err
+		return "", err
 	}
 
-	if err := w.Close(); err != nil {
+	// Close and capture the SMTP response from the server
+	resp, err := w.CloseWithResponse()
+	if err != nil {
 		d.logger.Debug("DATA close failed (message rejected)", "error", err)
-		return err
+		return "", err
 	}
 
-	d.logger.Debug("delivery transaction successful")
-	return nil
+	d.logger.Debug("delivery transaction successful", "smtp_response", resp.StatusText)
+	return resp.StatusText, nil
 }
 
 func (d *Deliverer) dialAndHello(ctx context.Context, mxHost, sourceIP string, preferIPv6 bool) (*smtp.Client, DeliveryResult, error) {
@@ -1198,6 +1200,7 @@ func (d *Deliverer) logDeliveryResult(from, to string, result DeliveryResult) {
 		"to", to,
 		"status", result.Status,
 		"smtp_code", result.SMTPCode,
+		"smtp_message", result.SMTPMessage,
 		"mx_host", result.MXHost,
 		"source_ip", result.SourceIP,
 		"duration_ms", result.AttemptDurationMs,
