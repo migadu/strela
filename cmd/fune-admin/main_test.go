@@ -110,14 +110,14 @@ func TestTLSListCommand(t *testing.T) {
 	cache := autocert.DirCache(cacheDir)
 	ctx := context.Background()
 
-	// Store ECDSA certificate
-	ecdsaKey := hashDomain(testDomain)
+	// Store ECDSA certificate (autocert uses domain name as key)
+	ecdsaKey := testDomain
 	if err := cache.Put(ctx, ecdsaKey, testCert); err != nil {
 		t.Fatalf("Failed to store ECDSA cert: %v", err)
 	}
 
-	// Store RSA certificate
-	rsaKey := hashDomain(testDomain + "+rsa")
+	// Store RSA certificate (autocert uses "domain+rsa" as key)
+	rsaKey := testDomain + "+rsa"
 	if err := cache.Put(ctx, rsaKey, testCert); err != nil {
 		t.Fatalf("Failed to store RSA cert: %v", err)
 	}
@@ -185,8 +185,8 @@ func TestTLSDeleteCommand(t *testing.T) {
 	cache := autocert.DirCache(cacheDir)
 	ctx := context.Background()
 
-	ecdsaKey := hashDomain(testDomain)
-	rsaKey := hashDomain(testDomain + "+rsa")
+	ecdsaKey := testDomain
+	rsaKey := testDomain + "+rsa"
 
 	if err := cache.Put(ctx, ecdsaKey, testCert); err != nil {
 		t.Fatalf("Failed to store ECDSA cert: %v", err)
@@ -267,7 +267,7 @@ func TestTLSCleanCommand(t *testing.T) {
 	// Create valid certificate
 	validDomain := "valid.com"
 	validCert := createTestCertificate(t, validDomain, 60*24*time.Hour)
-	validKey := hashDomain(validDomain)
+	validKey := validDomain
 	if err := cache.Put(ctx, validKey, validCert); err != nil {
 		t.Fatalf("Failed to store valid cert: %v", err)
 	}
@@ -275,14 +275,14 @@ func TestTLSCleanCommand(t *testing.T) {
 	// Create expired certificate
 	expiredDomain := "expired.com"
 	expiredCert := createTestCertificate(t, expiredDomain, -10*24*time.Hour)
-	expiredKey := hashDomain(expiredDomain)
+	expiredKey := expiredDomain
 	if err := cache.Put(ctx, expiredKey, expiredCert); err != nil {
 		t.Fatalf("Failed to store expired cert: %v", err)
 	}
 
 	// Create invalid certificate
 	invalidDomain := "invalid.com"
-	invalidKey := hashDomain(invalidDomain)
+	invalidKey := invalidDomain
 	if err := cache.Put(ctx, invalidKey, []byte("not a valid certificate")); err != nil {
 		t.Fatalf("Failed to store invalid cert: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestTLSSyncCommand(t *testing.T) {
 	cache := autocert.DirCache(cacheDir)
 	ctx := context.Background()
 
-	ecdsaKey := hashDomain(testDomain)
+	ecdsaKey := testDomain
 	if err := cache.Put(ctx, ecdsaKey, testCert); err != nil {
 		t.Fatalf("Failed to store cert: %v", err)
 	}
@@ -499,60 +499,63 @@ func TestTLSCommandValidation(t *testing.T) {
 	}
 }
 
-// TestCertificateHashing tests domain hashing for certificate keys
-func TestCertificateHashing(t *testing.T) {
+// TestCertificateKeys tests certificate key format used by autocert
+func TestCertificateKeys(t *testing.T) {
 	tests := []struct {
 		domain      string
-		expectedLen int
-		shouldBeHex bool
+		suffix      string
+		expectedKey string
 	}{
 		{
 			domain:      "example.com",
-			expectedLen: 64,
-			shouldBeHex: true,
+			suffix:      "",
+			expectedKey: "example.com",
+		},
+		{
+			domain:      "example.com",
+			suffix:      "+rsa",
+			expectedKey: "example.com+rsa",
 		},
 		{
 			domain:      "test.org",
-			expectedLen: 64,
-			shouldBeHex: true,
-		},
-		{
-			domain:      "example.com+rsa",
-			expectedLen: 64,
-			shouldBeHex: true,
+			suffix:      "",
+			expectedKey: "test.org",
 		},
 		{
 			domain:      "mail.example.com",
-			expectedLen: 64,
-			shouldBeHex: true,
+			suffix:      "+rsa",
+			expectedKey: "mail.example.com+rsa",
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.domain, func(t *testing.T) {
-			hash := hashDomain(tt.domain)
+		t.Run(tt.domain+tt.suffix, func(t *testing.T) {
+			key := tt.domain + tt.suffix
 
-			if len(hash) != tt.expectedLen {
-				t.Errorf("Expected hash length %d, got %d", tt.expectedLen, len(hash))
+			if key != tt.expectedKey {
+				t.Errorf("Expected key %s, got %s", tt.expectedKey, key)
 			}
 
-			// Verify it's valid hex
-			if tt.shouldBeHex {
-				for _, c := range hash {
-					if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-						t.Errorf("Hash contains non-hex character: %c", c)
-						break
-					}
-				}
+			// Verify autocert accepts this key format
+			tmpDir := t.TempDir()
+			cache := autocert.DirCache(tmpDir)
+			ctx := context.Background()
+
+			testData := []byte("test certificate data")
+			if err := cache.Put(ctx, key, testData); err != nil {
+				t.Fatalf("Failed to store with key %s: %v", key, err)
 			}
 
-			// Verify hashing is deterministic
-			hash2 := hashDomain(tt.domain)
-			if hash != hash2 {
-				t.Error("Hash should be deterministic")
+			retrieved, err := cache.Get(ctx, key)
+			if err != nil {
+				t.Fatalf("Failed to retrieve with key %s: %v", key, err)
 			}
 
-			t.Logf("Domain: %s -> Hash: %s", tt.domain, hash[:16]+"...")
+			if string(retrieved) != string(testData) {
+				t.Error("Retrieved data doesn't match stored data")
+			}
+
+			t.Logf("Certificate key: %s -> stored and retrieved successfully", key)
 		})
 	}
 }

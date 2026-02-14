@@ -174,8 +174,9 @@ func handleTLSList(ctx context.Context) {
 
 	for _, domain := range cfg.TLS.LetsEncrypt.Domains {
 		// Try both ECDSA and RSA variants
+		// autocert stores ECDSA as "domain" and RSA as "domain+rsa"
 		for _, suffix := range []string{"", "+rsa"} {
-			certKey := hashDomain(domain + suffix)
+			certKey := domain + suffix
 			data, err := cache.Get(ctx, certKey)
 			if err != nil {
 				if err == autocert.ErrCacheMiss {
@@ -266,8 +267,9 @@ func handleTLSDelete(ctx context.Context) {
 	var errors []string
 
 	// Delete both ECDSA and RSA variants
+	// autocert stores ECDSA as "domain" and RSA as "domain+rsa"
 	for _, suffix := range []string{"", "+rsa"} {
-		certKey := hashDomain(domain + suffix)
+		certKey := domain + suffix
 		keyType := "ECDSA"
 		if suffix == "+rsa" {
 			keyType = "RSA"
@@ -325,7 +327,8 @@ func handleTLSClean(ctx context.Context) {
 	// Check all configured domains
 	for _, domain := range cfg.TLS.LetsEncrypt.Domains {
 		for _, suffix := range []string{"", "+rsa"} {
-			certKey := hashDomain(domain + suffix)
+			// autocert stores ECDSA as "domain" and RSA as "domain+rsa"
+			certKey := domain + suffix
 			displayDomain := domain
 			if suffix == "+rsa" {
 				displayDomain += " (RSA)"
@@ -437,7 +440,8 @@ func handleTLSSync(ctx context.Context) {
 	// Sync all configured domains
 	for _, domain := range cfg.TLS.LetsEncrypt.Domains {
 		for _, suffix := range []string{"", "+rsa"} {
-			certKey := hashDomain(domain + suffix)
+			// autocert stores ECDSA as "domain" and RSA as "domain+rsa"
+			certKey := domain + suffix
 			localPath := filepath.Join(cfg.TLS.LetsEncrypt.CacheDir, certKey)
 			displayDomain := domain
 			if suffix == "+rsa" {
