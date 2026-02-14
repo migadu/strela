@@ -1,4 +1,4 @@
-.PHONY: all clean build fune-server install test coverage build-linux freebsd help
+.PHONY: all clean build fune-server fune-admin install test coverage build-linux freebsd help
 
 # ====================================================================================
 # Variables
@@ -6,12 +6,14 @@
 
 # Binary names
 FUNE_SERVER_BIN ?= fune-server
+FUNE_ADMIN_BIN ?= fune-admin
 
 # Target directories
 BIN_DIR ?= ./bin
 
 # Go source paths
 FUNE_SERVER_SRC = ./cmd/fune-server
+FUNE_ADMIN_SRC = ./cmd/fune-admin
 
 # Version Information
 # Override with: make build VERSION=v1.0.0
@@ -39,10 +41,13 @@ all: build
 # Build Targets
 # ====================================================================================
 
-build: fune-server
+build: fune-server fune-admin
 
 fune-server:
 	go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_SERVER_BIN) $(FUNE_SERVER_SRC)
+
+fune-admin:
+	go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_ADMIN_BIN) $(FUNE_ADMIN_SRC)
 
 # ====================================================================================
 # Installation and Cleanup
@@ -53,6 +58,7 @@ install:
 
 clean:
 	rm -f $(BIN_DIR)/$(FUNE_SERVER_BIN)
+	rm -f $(BIN_DIR)/$(FUNE_ADMIN_BIN)
 	rm -f $(BIN_DIR)/$(FUNE_LINUX_BINARY)
 	rm -f $(BIN_DIR)/$(FUNE_FREEBSD_BINARY)
 	rm -f coverage.out
@@ -92,9 +98,10 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all                Build fune-server (default)"
-	@echo "  build              Build fune-server"
+	@echo "  all                Build fune-server and fune-admin (default)"
+	@echo "  build              Build fune-server and fune-admin"
 	@echo "  fune-server        Build the fune-server binary"
+	@echo "  fune-admin         Build the fune-admin binary"
 	@echo "  install            Install binary to GOPATH/bin"
 	@echo "  clean              Remove build artifacts"
 	@echo "  test               Run tests"

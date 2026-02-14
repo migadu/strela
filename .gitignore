@@ -20,7 +20,6 @@ config.toml
 *.pem
 *.key
 test-config.toml
-fune-server
-fune-admin
-cmd/fune-server/fune-server
-cmd/fune-admin/fune-admin
+./fune-server
+./fune-admin
+bin/
