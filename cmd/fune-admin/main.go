@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
@@ -548,10 +549,15 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig) (*storage.
 		s3Client = s3.NewFromConfig(awsCfg)
 	}
 
+	// Create a simple logger for admin tool (writes to stderr)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelError, // Only show errors to keep output clean
+	}))
+
 	return &storage.S3Cache{
 		S3Client: s3Client,
 		Bucket:   cfg.S3.Bucket,
-		Logger:   nil, // Admin tool doesn't need logger
+		Logger:   logger,
 	}, nil
 }
 
