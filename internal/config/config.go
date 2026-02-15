@@ -120,9 +120,10 @@ type OutboundConfig struct {
 	HelloHostname            string `toml:"hello_hostname"`              // Hostname for EHLO greeting (default: system hostname)
 
 	// Rate limiting per destination domain
-	PerDomainIntervalSeconds int `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
-	PerDomainBurst           int `toml:"per_domain_burst"`            // Bucket size for token bucket rate limiting (default: 10)
-	PerDomainRetrySeconds    int `toml:"per_domain_retry_seconds"`    // Delay before retrying throttled message (default: 5s)
+	PerDomainIntervalSeconds int      `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
+	PerDomainBurst           int      `toml:"per_domain_burst"`            // Bucket size for token bucket rate limiting (default: 10)
+	PerDomainRetrySeconds    int      `toml:"per_domain_retry_seconds"`    // Delay before retrying throttled message (default: 5s)
+	RateLimitWhitelist       []string `toml:"rate_limit_whitelist"`        // Domains exempt from rate limiting (default: [])
 }
 
 // ReputationConfig configures IP reputation tracking and alerting.

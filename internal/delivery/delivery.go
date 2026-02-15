@@ -255,8 +255,8 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 
 	d.logger.Debug("starting delivery attempt", "from", from, "to", to, "domain", domain)
 
-	// 1. Wait for per-domain rate limit (skip if disabled)
-	if d.config.PerDomainIntervalSeconds > 0 {
+	// 1. Wait for per-domain rate limit (skip if disabled or whitelisted)
+	if d.config.PerDomainIntervalSeconds > 0 && !d.isDomainWhitelisted(domain) {
 		if err := d.waitForDomainRateLimit(ctx, domain); err != nil {
 			if err == ErrDomainRateLimitExceeded {
 				d.logger.Warn("domain rate limit exceeded", "domain", domain)
@@ -550,6 +550,23 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to strin
 	}
 
 	return lastResult
+}
+
+// isDomainWhitelisted checks if a domain is in the rate limit whitelist.
+func (d *Deliverer) isDomainWhitelisted(domain string) bool {
+	if len(d.config.RateLimitWhitelist) == 0 {
+		return false
+	}
+
+	// Case-insensitive domain matching
+	domainLower := strings.ToLower(domain)
+	for _, whitelistedDomain := range d.config.RateLimitWhitelist {
+		if strings.ToLower(whitelistedDomain) == domainLower {
+			d.logger.Debug("domain is whitelisted from rate limiting", "domain", domain)
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Deliverer) waitForDomainRateLimit(ctx context.Context, domain string) error {

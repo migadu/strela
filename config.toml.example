@@ -109,6 +109,7 @@ per_domain_interval_seconds = 2             # Minimum seconds between deliveries
 per_domain_burst = 10                       # Burst size (allow X concurrent starts before rate limiting)
                                             # "Fail Fast": If exceeded, returns 429 Too Many Requests
 per_domain_retry_seconds = 5                # Delay before retrying rate-limited delivery (deprecated in v2.0)
+# rate_limit_whitelist = ["example.com", "trusted-domain.net"]  # Domains exempt from rate limiting
 
 [reputation]
 enable_ip_tracking = false                  # Track and rotate out degraded source IPs
