@@ -370,7 +370,7 @@ func TestShouldSkipSRS_NoSRSConfig(t *testing.T) {
 	// When srsConfig is nil, SRS is disabled entirely (d.srs == nil).
 	// deliverPayload never calls shouldSkipSRS in this case.
 	// Verify that a *SRS instance with no skip options set doesn't skip.
-	srsInst, _ := srs.NewSRS([]string{"srs.example.com"}, "round-robin", "test-secret-key-1234", 21, 4, "=", nil, false, false)
+	srsInst, _ := srs.NewSRS([]string{"srs.example.com"}, "round-robin", "test-secret-key-1234", 21, 4, "=", nil, false, false, false)
 
 	skip, _ := srsInst.ShouldSkip("alice@example.com", "alice@example.com", "pass")
 	if skip {

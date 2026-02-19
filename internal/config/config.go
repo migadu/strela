@@ -178,7 +178,8 @@ type SRSConfig struct {
 	Separator        string   `toml:"separator"`           // Separator character (default: "=")
 	SkipDomains      []string `toml:"skip_domains"`        // Destination domains to skip SRS rewriting (e.g., ["gmail.com", "googlemail.com"])
 	SkipIfDKIMPass   bool     `toml:"skip_if_dkim_pass"`   // Skip SRS rewriting when caller reports DKIM=pass for the message (default: false)
-	SkipIfSameDomain bool     `toml:"skip_if_same_domain"` // Skip SRS rewriting when sender domain matches recipient domain (default: false)
+	SkipIfSameDomain    bool `toml:"skip_if_same_domain"`    // Skip SRS rewriting when sender domain matches recipient domain (default: false)
+	UseDynamicSubdomain bool `toml:"use_dynamic_subdomain"`  // Prepend sanitized sender domain as subdomain of selected SRS domain (e.g. outlook-com.srs.example.com) (default: false)
 }
 
 // SetDefaults sets default values for optional configuration fields.

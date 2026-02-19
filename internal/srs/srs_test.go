@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewSRS_Success(t *testing.T) {
-	srs, err := NewSRS([]string{"example.com"}, "round-robin", "my-secret-key-123", 21, 4, "=", nil, false, false)
+	srs, err := NewSRS([]string{"example.com"}, "round-robin", "my-secret-key-123", 21, 4, "=", nil, false, false, false)
 	if err != nil {
 		t.Fatalf("NewSRS failed: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestNewSRS_Success(t *testing.T) {
 }
 
 func TestNewSRS_EmptyDomain(t *testing.T) {
-	_, err := NewSRS([]string{}, "round-robin", "my-secret-key-123", 21, 4, "=", nil, false, false)
+	_, err := NewSRS([]string{}, "round-robin", "my-secret-key-123", 21, 4, "=", nil, false, false, false)
 	if err == nil {
 		t.Error("Expected error for empty domain list, got nil")
 	}
@@ -33,14 +33,14 @@ func TestNewSRS_EmptyDomain(t *testing.T) {
 }
 
 func TestNewSRS_EmptySecret(t *testing.T) {
-	_, err := NewSRS([]string{"example.com"}, "round-robin", "", 21, 4, "=", nil, false, false)
+	_, err := NewSRS([]string{"example.com"}, "round-robin", "", 21, 4, "=", nil, false, false, false)
 	if err == nil {
 		t.Error("Expected error for empty secret, got nil")
 	}
 }
 
 func TestNewSRS_ShortSecret(t *testing.T) {
-	_, err := NewSRS([]string{"example.com"}, "round-robin", "short", 21, 4, "=", nil, false, false)
+	_, err := NewSRS([]string{"example.com"}, "round-robin", "short", 21, 4, "=", nil, false, false, false)
 	if err == nil {
 		t.Error("Expected error for short secret, got nil")
 	}
@@ -52,7 +52,7 @@ func TestNewSRS_ShortSecret(t *testing.T) {
 func TestNewSRS_InvalidHashLength(t *testing.T) {
 	tests := []int{0, 1, 9, 10}
 	for _, hashLen := range tests {
-		_, err := NewSRS([]string{"example.com"}, "round-robin", "my-secret-key-123", 21, hashLen, "=", nil, false, false)
+		_, err := NewSRS([]string{"example.com"}, "round-robin", "my-secret-key-123", 21, hashLen, "=", nil, false, false, false)
 		if err == nil {
 			t.Errorf("Expected error for hash length %d, got nil", hashLen)
 		}
@@ -60,7 +60,7 @@ func TestNewSRS_InvalidHashLength(t *testing.T) {
 }
 
 func TestForward_Basic(t *testing.T) {
-	srs, err := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, err := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 	if err != nil {
 		t.Fatalf("NewSRS failed: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestForward_Basic(t *testing.T) {
 }
 
 func TestForward_EmptyAddress(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	_, err := srs.Forward("")
 	if err == nil {
@@ -98,7 +98,7 @@ func TestForward_EmptyAddress(t *testing.T) {
 }
 
 func TestForward_InvalidAddress(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	invalidAddresses := []string{
 		"invalid",
@@ -116,7 +116,7 @@ func TestForward_InvalidAddress(t *testing.T) {
 }
 
 func TestForwardReverse_RoundTrip(t *testing.T) {
-	srs, err := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, err := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 	if err != nil {
 		t.Fatalf("NewSRS failed: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestForwardReverse_RoundTrip(t *testing.T) {
 }
 
 func TestForwardReverse_WithSpecialCharacters(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	testCases := []string{
 		"user+tag@example.com",
@@ -170,7 +170,7 @@ func TestForwardReverse_WithSpecialCharacters(t *testing.T) {
 }
 
 func TestForward_SRS0ToSRS1(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding2.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding2.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	// Create an SRS0 address
 	srs0 := "SRS0=ABCD=TT=example.com=user@forwarding1.com"
@@ -190,7 +190,7 @@ func TestForward_SRS0ToSRS1(t *testing.T) {
 }
 
 func TestForward_SRS1StaysSRS1(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding2.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding2.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	// Create an SRS1 address
 	srs1Original := "SRS1=ABCD=forwarding1.com=SRS0=WXYZ=TT=example.com=user@forwarding1.com"
@@ -208,7 +208,7 @@ func TestForward_SRS1StaysSRS1(t *testing.T) {
 }
 
 func TestIsSRS(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	tests := []struct {
 		address  string
@@ -230,7 +230,7 @@ func TestIsSRS(t *testing.T) {
 }
 
 func TestReverse_NotSRS(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	_, err := srs.Reverse("user@example.com")
 	if err == nil {
@@ -242,7 +242,7 @@ func TestReverse_NotSRS(t *testing.T) {
 }
 
 func TestReverse_InvalidHash(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	// Create an SRS address with wrong hash but valid timestamp
 	currentTimestamp := srs.generateTimestamp()
@@ -258,7 +258,7 @@ func TestReverse_InvalidHash(t *testing.T) {
 }
 
 func TestReverse_InvalidFormat(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	invalidFormats := []string{
 		"SRS0=ABCD@forwarding.com",                // Missing parts
@@ -311,7 +311,7 @@ func TestParseEmail(t *testing.T) {
 }
 
 func TestGenerateHash_Consistency(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	// Generate hash multiple times with same input
 	hash1 := srs.generateHash("timestamp", "example.com", "user")
@@ -333,7 +333,7 @@ func TestGenerateHash_Length(t *testing.T) {
 	tests := []int{2, 4, 6, 8}
 
 	for _, hashLen := range tests {
-		srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, hashLen, "=", nil, false, false)
+		srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, hashLen, "=", nil, false, false, false)
 		hash := srs.generateHash("test", "example.com", "user")
 
 		if len(hash) != hashLen {
@@ -343,7 +343,7 @@ func TestGenerateHash_Length(t *testing.T) {
 }
 
 func TestGenerateTimestamp(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	timestamp1 := srs.generateTimestamp()
 	timestamp2 := srs.generateTimestamp()
@@ -360,7 +360,7 @@ func TestGenerateTimestamp(t *testing.T) {
 }
 
 func TestValidateTimestamp_Current(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	// Generate current timestamp
 	timestamp := srs.generateTimestamp()
@@ -373,7 +373,7 @@ func TestValidateTimestamp_Current(t *testing.T) {
 }
 
 func TestGetDomain(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 
 	if srs.GetDomain() != "forwarding.com" {
 		t.Errorf("Expected domain 'forwarding.com', got '%s'", srs.GetDomain())
@@ -381,8 +381,8 @@ func TestGetDomain(t *testing.T) {
 }
 
 func TestDifferentSecrets_DifferentHashes(t *testing.T) {
-	srs1, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "secret-key-number-1", 21, 4, "=", nil, false, false)
-	srs2, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "secret-key-number-2", 21, 4, "=", nil, false, false)
+	srs1, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "secret-key-number-1", 21, 4, "=", nil, false, false, false)
+	srs2, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "secret-key-number-2", 21, 4, "=", nil, false, false, false)
 
 	original := "user@example.com"
 
@@ -413,7 +413,7 @@ func TestDifferentSecrets_DifferentHashes(t *testing.T) {
 }
 
 func TestCustomSeparator(t *testing.T) {
-	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "+", nil, false, false)
+	srs, _ := NewSRS([]string{"forwarding.com"}, "round-robin", "my-secret-key-123456", 21, 4, "+", nil, false, false, false)
 
 	original := "user@example.com"
 	rewritten, err := srs.Forward(original)
@@ -443,7 +443,7 @@ func TestCustomSeparator(t *testing.T) {
 
 func TestMultiDomain_RoundRobin(t *testing.T) {
 	domains := []string{"srs1.example.com", "srs2.example.com", "srs3.example.com"}
-	srs, err := NewSRS(domains, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, err := NewSRS(domains, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 	if err != nil {
 		t.Fatalf("NewSRS failed: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestMultiDomain_RoundRobin(t *testing.T) {
 
 func TestMultiDomain_HashSender(t *testing.T) {
 	domains := []string{"srs1.example.com", "srs2.example.com", "srs3.example.com"}
-	srs, err := NewSRS(domains, "hash-sender", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, err := NewSRS(domains, "hash-sender", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 	if err != nil {
 		t.Fatalf("NewSRS failed: %v", err)
 	}
@@ -535,7 +535,7 @@ func TestMultiDomain_HashSender(t *testing.T) {
 
 func TestMultiDomain_ReverseAnyDomain(t *testing.T) {
 	domains := []string{"srs1.example.com", "srs2.example.com", "srs3.example.com"}
-	srs, err := NewSRS(domains, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, err := NewSRS(domains, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 	if err != nil {
 		t.Fatalf("NewSRS failed: %v", err)
 	}
@@ -563,7 +563,7 @@ func TestMultiDomain_ReverseAnyDomain(t *testing.T) {
 
 func TestMultiDomain_InvalidSelection(t *testing.T) {
 	domains := []string{"srs1.example.com", "srs2.example.com"}
-	_, err := NewSRS(domains, "invalid-strategy", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	_, err := NewSRS(domains, "invalid-strategy", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 	if err == nil {
 		t.Error("Expected error for invalid selection strategy, got nil")
 	}
@@ -577,7 +577,7 @@ func TestMultiDomain_SingleDomain(t *testing.T) {
 	domains := []string{"srs1.example.com"}
 
 	for _, strategy := range []string{"round-robin", "hash-sender"} {
-		srs, err := NewSRS(domains, strategy, "my-secret-key-123456", 21, 4, "=", nil, false, false)
+		srs, err := NewSRS(domains, strategy, "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 		if err != nil {
 			t.Fatalf("NewSRS failed with strategy %s: %v", strategy, err)
 		}
@@ -604,7 +604,7 @@ func TestMultiDomain_SingleDomain(t *testing.T) {
 
 func TestGetDomains(t *testing.T) {
 	domains := []string{"srs1.example.com", "srs2.example.com", "srs3.example.com"}
-	srs, err := NewSRS(domains, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false)
+	srs, err := NewSRS(domains, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
 	if err != nil {
 		t.Fatalf("NewSRS failed: %v", err)
 	}
@@ -617,6 +617,115 @@ func TestGetDomains(t *testing.T) {
 	for i, domain := range domains {
 		if returnedDomains[i] != domain {
 			t.Errorf("Domain mismatch at index %d: expected %s, got %s", i, domain, returnedDomains[i])
+		}
+	}
+}
+
+func TestBuildSRSDomain_Disabled(t *testing.T) {
+	srs, _ := NewSRS([]string{"srs.example.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
+
+	// When disabled, baseDomain is returned unchanged regardless of sender domain
+	result := srs.buildSRSDomain("srs.example.com", "outlook.com")
+	if result != "srs.example.com" {
+		t.Errorf("expected 'srs.example.com', got %q", result)
+	}
+}
+
+func TestBuildSRSDomain_Enabled(t *testing.T) {
+	srs, _ := NewSRS([]string{"srs.example.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, true)
+
+	tests := []struct {
+		senderDomain string
+		want         string
+	}{
+		{"outlook.com", "outlook-com.srs.example.com"},
+		{"sub.example.org", "sub-example-org.srs.example.com"},
+		{"GMAIL.COM", "gmail-com.srs.example.com"}, // lowercased
+		{"example.com", "example-com.srs.example.com"},
+		{"", "srs.example.com"}, // empty sender domain falls back to base
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.senderDomain, func(t *testing.T) {
+			result := srs.buildSRSDomain("srs.example.com", tt.senderDomain)
+			if result != tt.want {
+				t.Errorf("buildSRSDomain(%q) = %q, want %q", tt.senderDomain, result, tt.want)
+			}
+		})
+	}
+}
+
+func TestForward_DynamicSubdomain(t *testing.T) {
+	srs, err := NewSRS([]string{"srs.example.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, true)
+	if err != nil {
+		t.Fatalf("failed to create SRS: %v", err)
+	}
+
+	rewritten, err := srs.Forward("user@outlook.com")
+	if err != nil {
+		t.Fatalf("Forward() error: %v", err)
+	}
+
+	// Should use outlook-com.srs.example.com as the SRS domain
+	if !strings.HasSuffix(rewritten, "@outlook-com.srs.example.com") {
+		t.Errorf("expected @outlook-com.srs.example.com suffix, got %q", rewritten)
+	}
+
+	// Round-trip: Reverse should still decode correctly
+	original, err := srs.Reverse(rewritten)
+	if err != nil {
+		t.Fatalf("Reverse() error: %v", err)
+	}
+	if original != "user@outlook.com" {
+		t.Errorf("Reverse() = %q, want %q", original, "user@outlook.com")
+	}
+}
+
+func TestForward_DynamicSubdomain_MultipleSenders(t *testing.T) {
+	srs, _ := NewSRS([]string{"srs.example.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, true)
+
+	cases := []struct {
+		sender    string
+		wantSuffix string
+	}{
+		{"user@gmail.com", "@gmail-com.srs.example.com"},
+		{"user@sub.domain.org", "@sub-domain-org.srs.example.com"},
+		{"user@example.com", "@example-com.srs.example.com"},
+	}
+
+	for _, c := range cases {
+		rewritten, err := srs.Forward(c.sender)
+		if err != nil {
+			t.Errorf("Forward(%q) error: %v", c.sender, err)
+			continue
+		}
+		if !strings.HasSuffix(rewritten, c.wantSuffix) {
+			t.Errorf("Forward(%q) = %q, want suffix %q", c.sender, rewritten, c.wantSuffix)
+		}
+		// Verify round-trip
+		original, err := srs.Reverse(rewritten)
+		if err != nil {
+			t.Errorf("Reverse(%q) error: %v", rewritten, err)
+			continue
+		}
+		if original != c.sender {
+			t.Errorf("Reverse() = %q, want %q", original, c.sender)
+		}
+	}
+}
+
+func TestForward_DynamicSubdomain_Disabled(t *testing.T) {
+	// With dynamic subdomain disabled, all senders use the same base domain
+	srs, _ := NewSRS([]string{"srs.example.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, false)
+
+	for _, sender := range []string{"user@outlook.com", "user@gmail.com", "user@other.org"} {
+		rewritten, err := srs.Forward(sender)
+		if err != nil {
+			t.Errorf("Forward(%q) error: %v", sender, err)
+			continue
+		}
+		if !strings.HasSuffix(rewritten, "@srs.example.com") {
+			t.Errorf("Forward(%q) = %q, expected plain @srs.example.com", sender, rewritten)
 		}
 	}
 }

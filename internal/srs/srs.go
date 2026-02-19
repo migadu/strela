@@ -71,13 +71,14 @@ type SRS struct {
 	maxAge           int                 // Maximum age in days for SRS addresses
 	hashLength       int                 // Length of hash in characters (2-8)
 	separator        string              // Separator character (default "=")
-	skipDomains      map[string]struct{} // Destination domains that bypass SRS rewriting
-	skipIfDKIMPass   bool                // Skip rewriting when caller reports DKIM=pass
-	skipIfSameDomain bool                // Skip rewriting when sender and recipient share a domain
+	skipDomains         map[string]struct{} // Destination domains that bypass SRS rewriting
+	skipIfDKIMPass      bool                // Skip rewriting when caller reports DKIM=pass
+	skipIfSameDomain    bool                // Skip rewriting when sender and recipient share a domain
+	useDynamicSubdomain bool                // Prepend sanitized sender domain as subdomain of selected SRS domain
 }
 
 // NewSRS creates a new SRS instance with the specified configuration
-func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, separator string, skipDomains []string, skipIfDKIMPass, skipIfSameDomain bool) (*SRS, error) {
+func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, separator string, skipDomains []string, skipIfDKIMPass, skipIfSameDomain, useDynamicSubdomain bool) (*SRS, error) {
 	if len(domains) == 0 {
 		return nil, fmt.Errorf("SRS domains list cannot be empty")
 	}
@@ -126,10 +127,24 @@ func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, 
 		maxAge:           maxAge,
 		hashLength:       hashLength,
 		separator:        separator,
-		skipDomains:      skipDomainsMap,
-		skipIfDKIMPass:   skipIfDKIMPass,
-		skipIfSameDomain: skipIfSameDomain,
+		skipDomains:         skipDomainsMap,
+		skipIfDKIMPass:      skipIfDKIMPass,
+		skipIfSameDomain:    skipIfSameDomain,
+		useDynamicSubdomain: useDynamicSubdomain,
 	}, nil
+}
+
+// buildSRSDomain returns the final SRS domain to use for the given sender domain.
+// When useDynamicSubdomain is enabled, it prepends a sanitized form of the sender
+// domain (dots replaced with dashes) as a subdomain of the selected base domain.
+// For example: sender "user@outlook.com" with base "srs.example.com"
+// produces "outlook-com.srs.example.com".
+func (s *SRS) buildSRSDomain(baseDomain, senderDomain string) string {
+	if !s.useDynamicSubdomain || senderDomain == "" {
+		return baseDomain
+	}
+	sanitized := strings.ReplaceAll(strings.ToLower(senderDomain), ".", "-")
+	return sanitized + "." + baseDomain
 }
 
 // ShouldSkip returns true when SRS rewriting should be bypassed for the given
@@ -221,8 +236,8 @@ func (s *SRS) Forward(sender string) (string, error) {
 
 // forwardSRS0 creates an SRS0 address from a regular email address
 func (s *SRS) forwardSRS0(localpart, domain string, originalSender string) (string, error) {
-	// Select domain based on strategy
-	srsDomain := s.selectDomain(originalSender)
+	// Select domain based on strategy, then optionally prepend sender subdomain
+	srsDomain := s.buildSRSDomain(s.selectDomain(originalSender), domain)
 
 	// Generate timestamp (base32-encoded days since epoch / 4)
 	timestamp := s.generateTimestamp()

@@ -178,6 +178,9 @@ enabled = false
 # skip_domains = ["gmail.com", "googlemail.com"] # Destination domains that should NOT receive SRS-rewritten senders
 # skip_if_dkim_pass = false                       # Skip SRS when caller reports dkim_result="pass" (message was DKIM-authenticated at the forwarder)
 # skip_if_same_domain = false                     # Skip SRS when sender domain matches recipient domain (intra-domain forwarding)
+# use_dynamic_subdomain = false                   # Prepend sanitized sender domain as subdomain of the selected SRS domain
+#                                                 # e.g. sender "user@outlook.com" + base "srs.example.com" → "outlook-com.srs.example.com"
+#                                                 # Requires wildcard DNS: *.srs.example.com → your server
 
 # IMPORTANT: All SRS domains must:
 # - Point to your mail server (MX records) to receive bounces

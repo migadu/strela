@@ -98,6 +98,7 @@ func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSou
 				srsConfig.SkipDomains,
 				srsConfig.SkipIfDKIMPass,
 				srsConfig.SkipIfSameDomain,
+				srsConfig.UseDynamicSubdomain,
 			)
 			if err != nil {
 				logger.Error("failed to initialize SRS", "error", err)
