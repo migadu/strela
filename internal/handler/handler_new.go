@@ -24,7 +24,7 @@ import (
 
 // DeliveryEngine defines the interface for message delivery
 type DeliveryEngine interface {
-	DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string) delivery.DeliveryResult
+	DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult
 	Stop()
 }
 
@@ -70,22 +70,23 @@ type Attachment struct {
 // 1. Composed mode: Provide from, to, subject, text/html (Fune builds MIME message)
 // 2. Raw mode: Provide from, to, raw_message (Fune forwards pre-built RFC822 message)
 type MessageRequest struct {
-	From               string            `json:"from"`
-	To                 string            `json:"to"`
-	Subject            string            `json:"subject,omitempty"`              // Required for composed mode, ignored for raw mode
-	Text               string            `json:"text,omitempty"`                 // Optional for composed mode, ignored for raw mode
-	HTML               string            `json:"html,omitempty"`                 // Optional for composed mode, ignored for raw mode
-	Attachments        []Attachment      `json:"attachments,omitempty"`          // Optional attachments for composed mode
-	Headers            map[string]string `json:"headers,omitempty"`              // Optional custom headers (e.g., {"Reply-To": "support@example.com"})
-	MessageID          string            `json:"message_id,omitempty"`           // Optional Message-ID for composed mode; auto-generated if not provided
-	RawMessage         string            `json:"raw_message,omitempty"`          // Raw RFC822 message (forwarding mode) - mutually exclusive with subject/text/html
-	DKIMPrivateKey     string            `json:"dkim_private_key,omitempty"`     // Override config DKIM key
-	DKIMSelector       string            `json:"dkim_selector,omitempty"`        // Override config DKIM selector
-	DKIMDomain         string            `json:"dkim_domain,omitempty"`          // Override config DKIM domain
-	SkipDKIMValidation bool              `json:"skip_dkim_validation,omitempty"` // Skip DNS validation (faster but less safe)
-	ARCPrivateKey      string            `json:"arc_private_key,omitempty"`      // Override config ARC key (for dynamic/multi-tenant scenarios)
-	ARCSelector        string            `json:"arc_selector,omitempty"`         // Override config ARC selector
-	ARCDomain          string            `json:"arc_domain,omitempty"`           // Override config ARC domain
+	From               string                       `json:"from"`
+	To                 string                       `json:"to"`
+	Subject            string                       `json:"subject,omitempty"`              // Required for composed mode, ignored for raw mode
+	Text               string                       `json:"text,omitempty"`                 // Optional for composed mode, ignored for raw mode
+	HTML               string                       `json:"html,omitempty"`                 // Optional for composed mode, ignored for raw mode
+	Attachments        []Attachment                 `json:"attachments,omitempty"`          // Optional attachments for composed mode
+	Headers            map[string]string            `json:"headers,omitempty"`              // Optional custom headers (e.g., {"Reply-To": "support@example.com"})
+	MessageID          string                       `json:"message_id,omitempty"`           // Optional Message-ID for composed mode; auto-generated if not provided
+	RawMessage         string                       `json:"raw_message,omitempty"`          // Raw RFC822 message (forwarding mode) - mutually exclusive with subject/text/html
+	DKIMPrivateKey     string                       `json:"dkim_private_key,omitempty"`     // Override config DKIM key
+	DKIMSelector       string                       `json:"dkim_selector,omitempty"`        // Override config DKIM selector
+	DKIMDomain         string                       `json:"dkim_domain,omitempty"`          // Override config DKIM domain
+	SkipDKIMValidation bool                         `json:"skip_dkim_validation,omitempty"` // Skip DNS validation (faster but less safe)
+	ARCPrivateKey      string                       `json:"arc_private_key,omitempty"`      // Override config ARC key (for dynamic/multi-tenant scenarios)
+	ARCSelector        string                       `json:"arc_selector,omitempty"`         // Override config ARC selector
+	ARCDomain          string                       `json:"arc_domain,omitempty"`           // Override config ARC domain
+	InboundAuth        *delivery.InboundAuthResults `json:"inbound_auth,omitempty"`         // Auth results from the previous hop (forwarding only); nil for normal outbound
 }
 
 // HandleDeliver handles synchronous message delivery requests.
@@ -164,13 +165,13 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 	isComposedMode := req.Subject != "" || req.Text != "" || req.HTML != ""
 
 	if isRawMode && isComposedMode {
-		h.logger.Debug("conflicting fields: raw_message and composed fields both provided")
+		h.logger.Warn("conflicting fields: raw_message and composed fields both provided")
 		http.Error(w, "Cannot use both 'raw_message' and composed fields (subject/text/html)", http.StatusBadRequest)
 		return
 	}
 
 	if !isRawMode && !isComposedMode {
-		h.logger.Debug("missing message content")
+		h.logger.Warn("missing message content")
 		http.Error(w, "Must provide either 'raw_message' or at least one of 'subject'/'text'/'html'", http.StatusBadRequest)
 		return
 	}
@@ -274,7 +275,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		"has_arc_key", arcPrivateKey != "",
 		"arc_selector", arcSelector,
 		"arc_domain", arcDomain)
-	result := h.deliveryEngine.DeliverMessage(ctx, req.From, req.To, rawMessage, dkimPrivateKey, dkimSelector, dkimDomain, skipDKIMValidation, arcPrivateKey, arcSelector, arcDomain)
+	result := h.deliveryEngine.DeliverMessage(ctx, req.From, req.To, rawMessage, dkimPrivateKey, dkimSelector, dkimDomain, skipDKIMValidation, arcPrivateKey, arcSelector, arcDomain, req.InboundAuth)
 	h.logger.Debug("delivery attempt finished",
 		"status", result.Status,
 		"mx", result.MXHost,
@@ -475,6 +476,9 @@ func createAttachment(w *mail.Writer, att Attachment) error {
 //   - X-ARC-Private-Key: <base64 encoded private key> (optional)
 //   - X-ARC-Selector: selector (optional)
 //   - X-ARC-Domain: example.com (optional)
+//   - X-Inbound-DKIM-Result: pass|fail|none (optional, forwarding only)
+//   - X-Inbound-SPF-Result: pass|fail|softfail|none (optional, forwarding only)
+//   - X-Inbound-DMARC-Result: pass|fail|none (optional, forwarding only)
 //   - Content-Type: message/rfc822
 //
 // Body should contain the raw RFC822 message.
@@ -491,6 +495,19 @@ func (h *Handler) parseHeaderMode(r *http.Request) MessageRequest {
 	dkimKey := h.decodeBase64Header(r.Header.Get("X-DKIM-Private-Key"))
 	arcKey := h.decodeBase64Header(r.Header.Get("X-ARC-Private-Key"))
 
+	// Build inbound auth results from headers only if at least one is present
+	var inboundAuth *delivery.InboundAuthResults
+	dkimRes := r.Header.Get("X-Inbound-DKIM-Result")
+	spfRes := r.Header.Get("X-Inbound-SPF-Result")
+	dmarcRes := r.Header.Get("X-Inbound-DMARC-Result")
+	if dkimRes != "" || spfRes != "" || dmarcRes != "" {
+		inboundAuth = &delivery.InboundAuthResults{
+			DKIM:  dkimRes,
+			SPF:   spfRes,
+			DMARC: dmarcRes,
+		}
+	}
+
 	return MessageRequest{
 		From:           r.Header.Get("X-Envelope-From"),
 		To:             r.Header.Get("X-Envelope-To"),
@@ -501,6 +518,7 @@ func (h *Handler) parseHeaderMode(r *http.Request) MessageRequest {
 		ARCPrivateKey:  arcKey,
 		ARCSelector:    r.Header.Get("X-ARC-Selector"),
 		ARCDomain:      r.Header.Get("X-ARC-Domain"),
+		InboundAuth:    inboundAuth,
 	}
 }
 

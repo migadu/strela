@@ -95,7 +95,9 @@ func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSou
 				srsConfig.MaxAge,
 				srsConfig.HashLength,
 				srsConfig.Separator,
-				srsConfig.AlwaysRewrite,
+				srsConfig.SkipDomains,
+				srsConfig.SkipIfDKIMPass,
+				srsConfig.SkipIfSameDomain,
 			)
 			if err != nil {
 				logger.Error("failed to initialize SRS", "error", err)
@@ -238,7 +240,7 @@ func (d *Deliverer) GetReputationTracker() *IPReputationTracker {
 }
 
 // DeliverMessage attempts to deliver a message synchronously.
-func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string) DeliveryResult {
+func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *InboundAuthResults) DeliveryResult {
 	start := time.Now()
 
 	// Extract domain from recipient
@@ -421,7 +423,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		// Try IPv6 first if preferred
 		if tryIPv6First {
 			d.logger.Debug("trying IPv6 first", "mx", mx.Host)
-			result := d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, true, start)
+			result := d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, true, start, inboundAuth)
 			// Return immediately for definitive results (don't try other MX servers)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
@@ -434,7 +436,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Fall back to IPv4 if IPv6 failed and IPv4 is available
 			if tryIPv4 {
 				d.logger.Debug("falling back to IPv4", "mx", mx.Host)
-				result = d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, false, start)
+				result = d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, false, start, inboundAuth)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
@@ -446,7 +448,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		} else if tryIPv4 {
 			// Try IPv4 first (or only)
 			d.logger.Debug("trying IPv4", "mx", mx.Host)
-			result := d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, false, start)
+			result := d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, false, start, inboundAuth)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result)
@@ -458,7 +460,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Fall back to IPv6 if IPv4 failed and IPv6 is available
 			if tryIPv6 {
 				d.logger.Debug("falling back to IPv6", "mx", mx.Host)
-				result = d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, true, start)
+				result = d.tryDeliveryWithIPVersion(ctx, from, to, signedMessage, mx.Host, true, start, inboundAuth)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result)
@@ -470,7 +472,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		} else {
 			// No source IPs configured - use system default
 			d.logger.Debug("no source IPs configured, using system default", "mx", mx.Host)
-			result := d.attemptDelivery(ctx, from, to, signedMessage, mx.Host, "", true)
+			result := d.attemptDelivery(ctx, from, to, signedMessage, mx.Host, "", true, inboundAuth)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
@@ -493,7 +495,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 }
 
 // tryDeliveryWithIPVersion attempts delivery using either IPv6 or IPv4 source IPs and matching MX host IPs.
-func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to string, message []byte, mxHost string, useIPv6 bool, startTime time.Time) DeliveryResult {
+func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to string, message []byte, mxHost string, useIPv6 bool, startTime time.Time, inboundAuth *InboundAuthResults) DeliveryResult {
 	// Extract domain from recipient for hash-domain strategy
 	_, domain := splitEmail(to)
 
@@ -528,7 +530,7 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, from, to strin
 			return DeliveryResult{Status: "timeout", Error: "Context canceled", MXHost: mxHost, SourceIP: sourceIP}
 		}
 
-		result := d.attemptDelivery(ctx, from, to, message, mxHost, sourceIP, useIPv6)
+		result := d.attemptDelivery(ctx, from, to, message, mxHost, sourceIP, useIPv6, inboundAuth)
 		lastResult = result
 
 		// Track reputation
@@ -628,7 +630,7 @@ func (d *Deliverer) waitForDomainRateLimit(ctx context.Context, domain string) e
 	return ErrDomainRateLimitExceeded
 }
 
-func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []byte, mxHost, sourceIP string, preferIPv6 bool) DeliveryResult {
+func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []byte, mxHost, sourceIP string, preferIPv6 bool, inboundAuth *InboundAuthResults) DeliveryResult {
 	// 1. Try to get a pooled connection
 	var client *smtp.Client
 	if d.pool != nil {
@@ -636,7 +638,7 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []
 		if client != nil {
 			d.logger.Debug("using pooled connection", "mx", mxHost)
 
-			result := d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, true)
+			result := d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, true, inboundAuth)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
 				return result
 			}
@@ -660,16 +662,16 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, from, to string, msg []
 	}
 
 	// 3. Deliver message logic
-	return d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, false)
+	return d.performDeliveryTransaction(client, from, to, msg, mxHost, sourceIP, false, inboundAuth)
 }
 
-func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool) DeliveryResult {
+func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool, inboundAuth *InboundAuthResults) DeliveryResult {
 	d.logger.Debug("starting delivery transaction",
 		"mx", mxHost,
 		"source_ip", sourceIP,
 		"reused", reused)
 
-	smtpMsg, err := d.deliverPayload(client, from, to, msg)
+	smtpMsg, err := d.deliverPayload(client, from, to, msg, inboundAuth)
 	if err != nil {
 		// If error occurred on a reused connection, it might be stale.
 		// We could retry? For now, we fail and let client retry.
@@ -697,11 +699,22 @@ func (d *Deliverer) performDeliveryTransaction(client *smtp.Client, from, to str
 	}
 }
 
-func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []byte) (string, error) {
+// shouldSkipSRS delegates to d.srs.ShouldSkip, keeping delivery.go free of skip policy details.
+func (d *Deliverer) shouldSkipSRS(from, to string, inboundAuth *InboundAuthResults) (skip bool, reason string) {
+	dkimResult := ""
+	if inboundAuth != nil {
+		dkimResult = inboundAuth.DKIM
+	}
+	return d.srs.ShouldSkip(from, to, dkimResult)
+}
+
+func (d *Deliverer) deliverPayload(client *smtp.Client, from, to string, msg []byte, inboundAuth *InboundAuthResults) (string, error) {
 	// MAIL FROM
 	mailFrom := from
 	if d.srs != nil {
-		if rewritten, err := d.srs.Forward(from); err == nil {
+		if skip, reason := d.shouldSkipSRS(from, to, inboundAuth); skip {
+			d.logger.Debug("SRS skipped", "reason", reason, "from", from, "to", to)
+		} else if rewritten, err := d.srs.Forward(from); err == nil {
 			mailFrom = rewritten
 			d.logger.Info("SRS rewrote sender", "original", from, "rewritten", rewritten)
 		} else {

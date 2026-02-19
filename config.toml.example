@@ -175,7 +175,9 @@ enabled = false
 # max_age = 21                                   # Maximum age in days for SRS addresses (default: 21)
 # hash_length = 4                                # Length of hash in SRS address (default: 4, range: 2-8)
 # separator = "="                                # Separator character (default: "=")
-# always_rewrite = false                         # Rewrite all senders, not just forwarded (default: false)
+# skip_domains = ["gmail.com", "googlemail.com"] # Destination domains that should NOT receive SRS-rewritten senders
+# skip_if_dkim_pass = false                       # Skip SRS when caller reports dkim_result="pass" (message was DKIM-authenticated at the forwarder)
+# skip_if_same_domain = false                     # Skip SRS when sender domain matches recipient domain (intra-domain forwarding)
 
 # IMPORTANT: All SRS domains must:
 # - Point to your mail server (MX records) to receive bounces

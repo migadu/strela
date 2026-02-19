@@ -255,7 +255,7 @@ type mockDeliverer struct {
 	lastMessage string
 }
 
-func (m *mockDeliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string) delivery.DeliveryResult {
+func (m *mockDeliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult {
 	m.lastMessage = string(message)
 	return delivery.DeliveryResult{
 		Status:            "delivered",

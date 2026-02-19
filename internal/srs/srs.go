@@ -64,18 +64,20 @@ import (
 
 // SRS implements Sender Rewriting Scheme for envelope sender rewriting
 type SRS struct {
-	domains       []string // List of SRS domains for rewritten addresses
-	selection     string   // Domain selection strategy: "round-robin" or "hash-sender"
-	counter       uint64   // Atomic counter for round-robin selection
-	secret        string   // Secret for HMAC hash generation
-	maxAge        int      // Maximum age in days for SRS addresses
-	hashLength    int      // Length of hash in characters (2-8)
-	separator     string   // Separator character (default "=")
-	alwaysRewrite bool     // Always rewrite, even non-forwarded addresses
+	domains          []string            // List of SRS domains for rewritten addresses
+	selection        string              // Domain selection strategy: "round-robin" or "hash-sender"
+	counter          uint64              // Atomic counter for round-robin selection
+	secret           string              // Secret for HMAC hash generation
+	maxAge           int                 // Maximum age in days for SRS addresses
+	hashLength       int                 // Length of hash in characters (2-8)
+	separator        string              // Separator character (default "=")
+	skipDomains      map[string]struct{} // Destination domains that bypass SRS rewriting
+	skipIfDKIMPass   bool                // Skip rewriting when caller reports DKIM=pass
+	skipIfSameDomain bool                // Skip rewriting when sender and recipient share a domain
 }
 
 // NewSRS creates a new SRS instance with the specified configuration
-func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, separator string, alwaysRewrite bool) (*SRS, error) {
+func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, separator string, skipDomains []string, skipIfDKIMPass, skipIfSameDomain bool) (*SRS, error) {
 	if len(domains) == 0 {
 		return nil, fmt.Errorf("SRS domains list cannot be empty")
 	}
@@ -111,16 +113,49 @@ func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, 
 		return nil, fmt.Errorf("SRS selection must be 'round-robin' or 'hash-sender' (got %q)", selection)
 	}
 
+	skipDomainsMap := make(map[string]struct{}, len(skipDomains))
+	for _, d := range skipDomains {
+		skipDomainsMap[strings.ToLower(d)] = struct{}{}
+	}
+
 	return &SRS{
-		domains:       normalizedDomains,
-		selection:     selection,
-		counter:       0,
-		secret:        secret,
-		maxAge:        maxAge,
-		hashLength:    hashLength,
-		separator:     separator,
-		alwaysRewrite: alwaysRewrite,
+		domains:          normalizedDomains,
+		selection:        selection,
+		counter:          0,
+		secret:           secret,
+		maxAge:           maxAge,
+		hashLength:       hashLength,
+		separator:        separator,
+		skipDomains:      skipDomainsMap,
+		skipIfDKIMPass:   skipIfDKIMPass,
+		skipIfSameDomain: skipIfSameDomain,
 	}, nil
+}
+
+// ShouldSkip returns true when SRS rewriting should be bypassed for the given
+// from/to pair and caller-reported dkimResult. The reason string is one of
+// "skip_domains", "dkim_pass", or "same_domain".
+func (s *SRS) ShouldSkip(from, to, dkimResult string) (skip bool, reason string) {
+	toDomain := ""
+	if atIdx := strings.LastIndex(to, "@"); atIdx >= 0 {
+		toDomain = strings.ToLower(to[atIdx+1:])
+	}
+	if _, ok := s.skipDomains[toDomain]; ok {
+		return true, "skip_domains"
+	}
+	if s.skipIfDKIMPass && strings.EqualFold(dkimResult, "pass") {
+		return true, "dkim_pass"
+	}
+	if s.skipIfSameDomain {
+		fromDomain := ""
+		if atIdx := strings.LastIndex(from, "@"); atIdx >= 0 {
+			fromDomain = strings.ToLower(from[atIdx+1:])
+		}
+		if fromDomain != "" && fromDomain == toDomain {
+			return true, "same_domain"
+		}
+	}
+	return false, ""
 }
 
 // selectDomain chooses an SRS domain based on the configured selection strategy
