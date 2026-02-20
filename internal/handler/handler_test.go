@@ -253,10 +253,14 @@ func TestHandleDeliver_ModeValidation(t *testing.T) {
 // mockDeliverer implements the delivery.Deliverer interface for testing
 type mockDeliverer struct {
 	lastMessage string
+	result      *delivery.DeliveryResult // if set, returned instead of default
 }
 
 func (m *mockDeliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult {
 	m.lastMessage = string(message)
+	if m.result != nil {
+		return *m.result
+	}
 	return delivery.DeliveryResult{
 		Status:            "delivered",
 		SMTPCode:          250,
@@ -853,5 +857,65 @@ func TestDecodeBase64Header(t *testing.T) {
 				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
 		})
+	}
+}
+
+// TestTimeoutResponse verifies that on a connection timeout:
+// - HTTP status is 504 (Gateway Timeout)
+// - JSON body smtp_code is 0 (no SMTP response was received, NOT 504)
+// - JSON body status is "timeout"
+func TestTimeoutResponse(t *testing.T) {
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			DeliveryTimeoutSeconds: 30,
+		},
+	}
+
+	timeoutResult := &delivery.DeliveryResult{
+		Status:            "timeout",
+		SMTPCode:          0, // No SMTP response received during a connection timeout
+		SMTPMessage:       "",
+		MXHost:            "mx.example.com",
+		SourceIP:          "192.0.2.1",
+		AttemptDurationMs: 30000,
+		Error:             "context deadline exceeded",
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockDel := &mockDeliverer{result: timeoutResult}
+	h := NewHandler(cfg, mockDel, logger)
+
+	reqBody := MessageRequest{
+		From:    "sender@example.com",
+		To:      "recipient@example.com",
+		Subject: "Test",
+		Text:    "Body",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliver(rr, req)
+
+	// HTTP status must be 504 Gateway Timeout
+	if rr.Code != http.StatusGatewayTimeout {
+		t.Errorf("Expected HTTP 504, got %d", rr.Code)
+	}
+
+	var resp delivery.DeliveryResult
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("Failed to decode response body: %v", err)
+	}
+
+	// status must be "timeout"
+	if resp.Status != "timeout" {
+		t.Errorf("Expected status %q, got %q", "timeout", resp.Status)
+	}
+
+	// smtp_code must be 0 — connection timed out before any SMTP response
+	// It must NOT be 504 (that is the HTTP status, not an SMTP code)
+	if resp.SMTPCode != 0 {
+		t.Errorf("Expected smtp_code 0 for connection timeout, got %d (504 is HTTP status, not SMTP code)", resp.SMTPCode)
 	}
 }

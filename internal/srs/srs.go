@@ -64,13 +64,13 @@ import (
 
 // SRS implements Sender Rewriting Scheme for envelope sender rewriting
 type SRS struct {
-	domains          []string            // List of SRS domains for rewritten addresses
-	selection        string              // Domain selection strategy: "round-robin" or "hash-sender"
-	counter          uint64              // Atomic counter for round-robin selection
-	secret           string              // Secret for HMAC hash generation
-	maxAge           int                 // Maximum age in days for SRS addresses
-	hashLength       int                 // Length of hash in characters (2-8)
-	separator        string              // Separator character (default "=")
+	domains             []string            // List of SRS domains for rewritten addresses
+	selection           string              // Domain selection strategy: "round-robin" or "hash-sender"
+	counter             uint64              // Atomic counter for round-robin selection
+	secret              string              // Secret for HMAC hash generation
+	maxAge              int                 // Maximum age in days for SRS addresses
+	hashLength          int                 // Length of hash in characters (2-8)
+	separator           string              // Separator character (default "=")
 	skipDomains         map[string]struct{} // Destination domains that bypass SRS rewriting
 	skipIfDKIMPass      bool                // Skip rewriting when caller reports DKIM=pass
 	skipIfSameDomain    bool                // Skip rewriting when sender and recipient share a domain
@@ -120,13 +120,13 @@ func NewSRS(domains []string, selection, secret string, maxAge, hashLength int, 
 	}
 
 	return &SRS{
-		domains:          normalizedDomains,
-		selection:        selection,
-		counter:          0,
-		secret:           secret,
-		maxAge:           maxAge,
-		hashLength:       hashLength,
-		separator:        separator,
+		domains:             normalizedDomains,
+		selection:           selection,
+		counter:             0,
+		secret:              secret,
+		maxAge:              maxAge,
+		hashLength:          hashLength,
+		separator:           separator,
 		skipDomains:         skipDomainsMap,
 		skipIfDKIMPass:      skipIfDKIMPass,
 		skipIfSameDomain:    skipIfSameDomain,

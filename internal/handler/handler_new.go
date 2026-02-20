@@ -3,8 +3,10 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -89,18 +91,32 @@ type MessageRequest struct {
 	InboundAuth        *delivery.InboundAuthResults `json:"inbound_auth,omitempty"`         // Auth results from the previous hop (forwarding only); nil for normal outbound
 }
 
+// generateTraceID generates a random 16-character hex trace ID for a delivery session.
+func generateTraceID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fallback: use timestamp-based ID (unlikely to fail, but safe)
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // HandleDeliver handles synchronous message delivery requests.
 // Supports two modes:
 // 1. JSON mode: Content-Type: application/json with MessageRequest body
 // 2. Header mode: Content-Type: message/rfc822 with raw RFC822 body and HTTP headers
 func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
+	// Generate a unique trace ID for this delivery session.
+	traceID := generateTraceID()
+
 	h.logger.Debug("received delivery request",
+		"trace_id", traceID,
 		"remote_addr", r.RemoteAddr,
 		"method", r.Method,
 		"url", r.URL.String())
 
 	if r.Method != http.MethodPost {
-		h.logger.Debug("method not allowed", "method", r.Method)
+		h.logger.Debug("method not allowed", "method", r.Method, "trace_id", traceID)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -110,11 +126,11 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(token), []byte(h.config.Inbound.AuthToken)) != 1 {
-			h.logger.Warn("authentication failed", "remote_addr", r.RemoteAddr)
+			h.logger.Warn("authentication failed", "remote_addr", r.RemoteAddr, "trace_id", traceID)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		h.logger.Debug("authentication successful", "remote_addr", r.RemoteAddr)
+		h.logger.Debug("authentication successful", "remote_addr", r.RemoteAddr, "trace_id", traceID)
 	}
 
 	// 2. Determine mode based on Content-Type
@@ -156,6 +172,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 
 	// Log incoming delivery request at INFO level
 	h.logger.Info("delivery request received",
+		"trace_id", traceID,
 		"from", req.From,
 		"to", req.To,
 		"remote_addr", r.RemoteAddr)
@@ -263,13 +280,15 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		// Leave all ARC params as empty strings
 	}
 
-	// 6. Create context with timeout
+	// 6. Create context with timeout and trace ID
 	timeout := time.Duration(h.config.Outbound.DeliveryTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	ctx = delivery.WithTraceID(ctx, traceID)
 
 	// 7. Synchronous Delivery
 	h.logger.Debug("starting synchronous delivery",
+		"trace_id", traceID,
 		"from", req.From,
 		"to", req.To,
 		"has_arc_key", arcPrivateKey != "",
@@ -277,6 +296,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		"arc_domain", arcDomain)
 	result := h.deliveryEngine.DeliverMessage(ctx, req.From, req.To, rawMessage, dkimPrivateKey, dkimSelector, dkimDomain, skipDKIMValidation, arcPrivateKey, arcSelector, arcDomain, req.InboundAuth)
 	h.logger.Debug("delivery attempt finished",
+		"trace_id", traceID,
 		"status", result.Status,
 		"mx", result.MXHost,
 		"source_ip", result.SourceIP,

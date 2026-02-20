@@ -685,7 +685,7 @@ func TestForward_DynamicSubdomain_MultipleSenders(t *testing.T) {
 	srs, _ := NewSRS([]string{"srs.example.com"}, "round-robin", "my-secret-key-123456", 21, 4, "=", nil, false, false, true)
 
 	cases := []struct {
-		sender    string
+		sender     string
 		wantSuffix string
 	}{
 		{"user@gmail.com", "@gmail-com.srs.example.com"},
