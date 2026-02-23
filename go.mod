@@ -17,7 +17,7 @@ require (
 	golang.org/x/crypto v0.42.0
 )
 
-replace github.com/emersion/go-smtp => github.com/dejanstrbac/go-smtp v0.0.0-20260125220600-805de26d9875
+replace github.com/emersion/go-smtp => github.com/dejanstrbac/go-smtp v0.0.0-20260223173016-822ae132f99a
 
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.1 // indirect
