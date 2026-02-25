@@ -78,6 +78,11 @@ func main() {
 
 	logger.Info("starting fune SMTP delivery service", "version", version, "config", *configPath)
 
+	// Warn if auth_token is not configured
+	if tempCfg.Inbound.AuthToken == "" {
+		logger.Warn("WARNING: no auth_token configured - API is unauthenticated! Set [inbound] auth_token in production.")
+	}
+
 	// Load reloadable config
 	reloadableCfg, err := config.NewReloadableConfig(*configPath, logger)
 	if err != nil {
@@ -164,7 +169,7 @@ func main() {
 	if cfg.TLS.Enabled {
 		// Initialize TLS with timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		tlsManager, err = tlsmanager.NewManager(ctx, &cfg.TLS, nil, logger) // No gossip
+		tlsManager, err = tlsmanager.NewManager(ctx, &cfg.TLS, logger)
 		cancel()
 		if err != nil {
 			logger.Error("failed to initialize TLS manager", "error", err)

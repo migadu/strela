@@ -10,11 +10,12 @@ import (
 
 // CertSyncWorker manages periodic synchronization of certificates from local cache to S3.
 type CertSyncWorker struct {
-	fallbackCache *FallbackCache
-	syncInterval  time.Duration
-	logger        *slog.Logger
-	stopCh        chan struct{}
-	doneCh        chan struct{}
+	fallbackCache    *FallbackCache
+	syncInterval     time.Duration
+	logger           *slog.Logger
+	stopCh           chan struct{}
+	doneCh           chan struct{}
+	consecutiveFails int // Tracks consecutive sync failures for log escalation
 }
 
 // NewCertSyncWorker creates a new certificate sync worker.
@@ -67,13 +68,33 @@ func (w *CertSyncWorker) Stop(timeout time.Duration) {
 	}
 }
 
-// runSync performs a single sync operation.
+// runSync performs a single sync operation with escalating severity on
+// consecutive failures so persistent S3 issues are impossible to miss.
 func (w *CertSyncWorker) runSync() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	w.logger.Debug("running certificate sync")
 	if err := w.fallbackCache.SyncAllToS3(ctx); err != nil {
-		w.logger.Error("certificate sync failed", "error", err)
+		w.consecutiveFails++
+
+		switch {
+		case w.consecutiveFails <= 3:
+			w.logger.Error("certificate sync failed", "error", err,
+				"consecutive_failures", w.consecutiveFails)
+		default:
+			// After 3+ consecutive failures, add prominent warning that
+			// certificates may not be replicated to S3.
+			w.logger.Error("PERSISTENT SYNC FAILURE: certificates are NOT being replicated to S3 — investigate S3 connectivity/credentials",
+				"error", err,
+				"consecutive_failures", w.consecutiveFails,
+				"sync_interval", w.syncInterval)
+		}
+	} else {
+		if w.consecutiveFails > 0 {
+			w.logger.Info("certificate sync recovered after failures",
+				"previous_consecutive_failures", w.consecutiveFails)
+		}
+		w.consecutiveFails = 0
 	}
 }

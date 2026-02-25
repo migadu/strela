@@ -45,43 +45,68 @@ func NewMXLookup(dnsCfg *config.DNSConfig, logger *slog.Logger) *MXLookup {
 }
 
 // Lookup performs MX record lookup for a domain with in-memory caching.
-// It mitigates cache stampedes using singleflight.
+// It mitigates cache stampedes using singleflight. The caller's context is
+// respected: if it is cancelled while waiting for a shared singleflight lookup,
+// Lookup returns immediately with the context error. The underlying DNS query
+// uses context.Background() so that one caller's cancellation does not abort
+// the lookup for other waiters.
 func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, error) {
+	// Fast path: check context before doing any work.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Try cache first
 	if cached, ok := m.getFromCache(domain); ok {
 		m.logger.Debug("MX cache hit", "domain", domain, "records", len(cached))
 		return cached, nil
 	}
 
-	// Cache miss - join singleflight
+	// Cache miss - join singleflight.
+	// The singleflight's do() blocks until the shared lookup finishes.
+	// We run it in a goroutine so we can also select on ctx.Done(), allowing
+	// the caller to bail out early without abandoning the shared lookup.
 	m.logger.Debug("MX cache miss, performing DNS lookup", "domain", domain)
 
-	// Use context.Background() to ensure one client cancelling doesn't abort the lookup for others.
-	// The resolver enforces its own timeout confguration.
-	result, err := m.sf.do(domain, func() ([]*MXRecord, error) {
-		m.logger.Debug("executing singleflight DNS lookup", "domain", domain)
+	type sfResult struct {
+		records []*MXRecord
+		err     error
+	}
+	ch := make(chan sfResult, 1)
+	go func() {
+		result, err := m.sf.do(domain, func() ([]*MXRecord, error) {
+			m.logger.Debug("executing singleflight DNS lookup", "domain", domain)
 
-		records, err := m.lookupDNS(context.Background(), domain)
-		if err != nil {
-			m.logger.Debug("MX lookup failed", "domain", domain, "error", err)
-			// Cache negative result
-			m.storeInCache(domain, nil, m.negativeTTL)
-			return nil, err
-		}
+			// Use context.Background() to ensure one client cancelling doesn't
+			// abort the lookup for others. The resolver enforces its own timeout.
+			records, err := m.lookupDNS(context.Background(), domain)
+			if err != nil {
+				m.logger.Debug("MX lookup failed", "domain", domain, "error", err)
+				// Cache negative result
+				m.storeInCache(domain, nil, m.negativeTTL)
+				return nil, err
+			}
 
-		// Sort by priority (lower is higher priority)
-		sort.Slice(records, func(i, j int) bool {
-			return records[i].Priority < records[j].Priority
+			// Sort by priority (lower is higher priority)
+			sort.Slice(records, func(i, j int) bool {
+				return records[i].Priority < records[j].Priority
+			})
+
+			// Store in cache
+			m.storeInCache(domain, records, m.cacheTTL)
+
+			m.logger.Info("MX lookup successful", "domain", domain, "records", len(records))
+			return records, nil
 		})
+		ch <- sfResult{records: result, err: err}
+	}()
 
-		// Store in cache
-		m.storeInCache(domain, records, m.cacheTTL)
-
-		m.logger.Info("MX lookup successful", "domain", domain, "records", len(records))
-		return records, nil
-	})
-
-	return result, err
+	select {
+	case r := <-ch:
+		return r.records, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // lookupDNS performs the actual DNS MX lookup.

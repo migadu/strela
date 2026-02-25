@@ -20,7 +20,7 @@ go build -o fune-server cmd/fune-server/main.go
 
 ### Send Email (Composed Mode)
 ```bash
-curl -X POST http://localhost:8025/v1/deliver \
+curl -X POST http://localhost:8025/deliver \
   -H "Content-Type: application/json" \
   -d '{
     "from": "sender@example.com",
@@ -37,7 +37,7 @@ curl -X POST http://localhost:8025/v1/deliver \
 For email forwarding scenarios, send the complete RFC822 message:
 
 ```bash
-curl -X POST http://localhost:8025/v1/deliver \
+curl -X POST http://localhost:8025/deliver \
   -H "Content-Type: application/json" \
   -d '{
     "from": "sender@example.com",
@@ -62,7 +62,7 @@ curl -X POST http://localhost:8025/v1/deliver \
 
 **Dynamic ARC/DKIM Keys (Multi-Tenant Support):**
 ```bash
-curl -X POST http://localhost:8025/v1/deliver \
+curl -X POST http://localhost:8025/deliver \
   -H "Content-Type: application/json" \
   -d '{
     "from": "sender@tenant1.com",
@@ -111,7 +111,7 @@ skip_validation = false
 Once configured, all messages are automatically signed:
 
 ```bash
-curl -X POST http://localhost:8025/v1/deliver \
+curl -X POST http://localhost:8025/deliver \
   -H "Content-Type: application/json" \
   -d '{
     "from": "sender@example.com",
@@ -126,7 +126,7 @@ curl -X POST http://localhost:8025/v1/deliver \
 Override config defaults or provide DKIM parameters per-request:
 
 ```bash
-curl -X POST http://localhost:8025/v1/deliver \
+curl -X POST http://localhost:8025/deliver \
   -H "Content-Type: application/json" \
   -d '{
     "from": "sender@example.com",

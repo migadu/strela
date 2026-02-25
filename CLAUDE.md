@@ -42,7 +42,7 @@ make coverage                           # Generate coverage report (opens in bro
 
 ### Request Flow
 ```
-HTTP POST /v1/deliver
+HTTP POST /deliver
   ↓
 Panic Recovery Middleware (catches all panics, returns 500, server continues)
   ↓
@@ -131,7 +131,7 @@ Return JSON response immediately:
 ### Core Packages (`internal/`)
 
 #### `handler/`
-- HTTP API for message submission (`POST /v1/deliver`)
+- HTTP API for message submission (`POST /deliver`)
 - Request validation, authentication (bearer token)
 - Middleware stack for security, metrics, rate limiting, panic recovery
 - **Key files**:
@@ -396,7 +396,7 @@ go test -race ./...  # Always run race detector!
 1. **HTTP Handlers**:
    - `handler.PanicRecoveryMiddleware()` wraps all HTTP endpoints
    - Catches panics, logs stack trace, returns 500 to client
-   - Applied to `/v1/deliver` and `/health` endpoints
+   - Applied to `/deliver` and `/health` endpoints
 
 2. **Goroutines**:
    - Use `recovery.SafeGo(logger, "context", fn)` for ALL new goroutines

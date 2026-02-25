@@ -208,9 +208,8 @@ func TestValidatePrivateKey_Invalid(t *testing.T) {
 	}
 }
 
-func TestValidatePrivateKey_WrongSize(t *testing.T) {
-	// Try to generate 4096-bit key (unsupported by our validator)
-	// Note: Modern Go doesn't allow 512-bit keys, so we use 4096-bit instead
+func TestValidatePrivateKey_LargerKeys(t *testing.T) {
+	// Test that 4096-bit keys are now accepted
 	privateKey, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
@@ -222,12 +221,12 @@ func TestValidatePrivateKey_WrongSize(t *testing.T) {
 		Bytes: privateKeyBytes,
 	})
 
-	_, err = ValidatePrivateKey(string(privateKeyPEM))
-	if err == nil {
-		t.Error("Expected error for 4096-bit key, got nil")
+	keySize, err := ValidatePrivateKey(string(privateKeyPEM))
+	if err != nil {
+		t.Errorf("Expected valid 4096-bit key, got error: %v", err)
 	}
-	if err != nil && !strings.Contains(err.Error(), "unsupported RSA key size") {
-		t.Errorf("Expected 'unsupported RSA key size' error, got: %v", err)
+	if keySize != 4096 {
+		t.Errorf("Expected key size 4096, got %d", keySize)
 	}
 }
 

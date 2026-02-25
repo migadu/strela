@@ -668,7 +668,7 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, tr
 		if client != nil {
 			logger.Debug("using pooled connection", "mx", mxHost)
 
-			result := d.performDeliveryTransaction(logger, traceID, client, from, to, msg, mxHost, sourceIP, true, inboundAuth)
+			result := d.performDeliveryTransaction(ctx, logger, traceID, client, from, to, msg, mxHost, sourceIP, true, inboundAuth)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
 				return result
 			}
@@ -692,16 +692,36 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, tr
 	}
 
 	// 3. Deliver message logic
-	return d.performDeliveryTransaction(logger, traceID, client, from, to, msg, mxHost, sourceIP, false, inboundAuth)
+	return d.performDeliveryTransaction(ctx, logger, traceID, client, from, to, msg, mxHost, sourceIP, false, inboundAuth)
 }
 
-func (d *Deliverer) performDeliveryTransaction(logger *slog.Logger, traceID string, client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool, inboundAuth *InboundAuthResults) DeliveryResult {
+func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog.Logger, traceID string, client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool, inboundAuth *InboundAuthResults) DeliveryResult {
+	// Check context before starting transaction
+	if ctx.Err() != nil {
+		client.Close()
+		return DeliveryResult{TraceID: traceID, Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "context cancelled before delivery transaction"}
+	}
+
+	// Tighten client timeouts to remaining context deadline so SMTP commands
+	// do not outlive the caller's deadline.
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			if remaining < client.CommandTimeout {
+				client.CommandTimeout = remaining
+			}
+			if remaining < client.SubmissionTimeout {
+				client.SubmissionTimeout = remaining
+			}
+		}
+	}
+
 	logger.Debug("starting delivery transaction",
 		"mx", mxHost,
 		"source_ip", sourceIP,
 		"reused", reused)
 
-	smtpMsg, err := d.deliverPayload(logger, client, from, to, msg, inboundAuth)
+	smtpMsg, err := d.deliverPayload(ctx, logger, client, from, to, msg, inboundAuth)
 	if err != nil {
 		// If error occurred on a reused connection, it might be stale.
 		// We could retry? For now, we fail and let client retry.
@@ -739,7 +759,7 @@ func (d *Deliverer) shouldSkipSRS(from, to string, inboundAuth *InboundAuthResul
 	return d.srs.ShouldSkip(from, to, dkimResult)
 }
 
-func (d *Deliverer) deliverPayload(logger *slog.Logger, client *smtp.Client, from, to string, msg []byte, inboundAuth *InboundAuthResults) (string, error) {
+func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, client *smtp.Client, from, to string, msg []byte, inboundAuth *InboundAuthResults) (string, error) {
 	// MAIL FROM
 	mailFrom := from
 	if d.srs != nil {
@@ -767,10 +787,20 @@ func (d *Deliverer) deliverPayload(logger *slog.Logger, client *smtp.Client, fro
 		}
 	}
 
+	// Check context before MAIL FROM
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("context cancelled before MAIL FROM: %w", err)
+	}
+
 	logger.Debug("sending MAIL FROM", "from", mailFrom)
 	if err := client.Mail(mailFrom, mailOpts); err != nil {
 		logger.Debug("MAIL FROM failed", "error", err)
 		return "", err
+	}
+
+	// Check context before RCPT TO
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("context cancelled before RCPT TO: %w", err)
 	}
 
 	// RCPT TO
@@ -778,6 +808,11 @@ func (d *Deliverer) deliverPayload(logger *slog.Logger, client *smtp.Client, fro
 	if err := client.Rcpt(to, nil); err != nil {
 		logger.Debug("RCPT TO failed", "error", err)
 		return "", err
+	}
+
+	// Check context before DATA
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("context cancelled before DATA: %w", err)
 	}
 
 	// DATA

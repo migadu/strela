@@ -9,7 +9,7 @@ Send JSON with Content-Type: `application/json`
 ### Basic Example
 
 ```bash
-curl -X POST http://localhost:8080/v1/deliver \
+curl -X POST http://localhost:8080/deliver \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-token-here" \
   -d '{
@@ -22,7 +22,7 @@ curl -X POST http://localhost:8080/v1/deliver \
 ### JSON with DKIM/ARC Parameters
 
 ```bash
-curl -X POST http://localhost:8080/v1/deliver \
+curl -X POST http://localhost:8080/deliver \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-token-here" \
   -d '{
@@ -64,7 +64,7 @@ Send raw RFC822 message with Content-Type: `message/rfc822` and parameters in HT
 ### Basic Example
 
 ```bash
-curl -X POST http://localhost:8080/v1/deliver \
+curl -X POST http://localhost:8080/deliver \
   -H "Content-Type: message/rfc822" \
   -H "Authorization: Bearer your-token-here" \
   -H "X-Envelope-From: sender@example.com" \
@@ -81,7 +81,7 @@ curl -X POST http://localhost:8080/v1/deliver \
 DKIM_KEY_B64=$(cat dkim-key.pem | base64 -w 0)  # Linux: -w 0
 # DKIM_KEY_B64=$(cat dkim-key.pem | base64)     # macOS: no -w flag needed
 
-curl -X POST http://localhost:8080/v1/deliver \
+curl -X POST http://localhost:8080/deliver \
   -H "Content-Type: message/rfc822" \
   -H "Authorization: Bearer your-token-here" \
   -H "X-Envelope-From: sender@example.com" \
@@ -103,7 +103,7 @@ const rawEmail = readFileSync('message.eml', 'utf-8');
 // Base64 encode the private key for HTTP header
 const dkimKeyB64 = Buffer.from(dkimPrivateKey).toString('base64');
 
-const response = await fetch('http://localhost:8080/v1/deliver', {
+const response = await fetch('http://localhost:8080/deliver', {
   method: 'POST',
   headers: {
     'Content-Type': 'message/rfc822',
@@ -121,7 +121,7 @@ const response = await fetch('http://localhost:8080/v1/deliver', {
 ### Header Mode Example with Inline Message
 
 ```bash
-curl -X POST http://localhost:8080/v1/deliver \
+curl -X POST http://localhost:8080/deliver \
   -H "Content-Type: message/rfc822" \
   -H "Authorization: Bearer your-token-here" \
   -H "X-Envelope-From: sender@example.com" \

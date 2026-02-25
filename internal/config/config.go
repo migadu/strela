@@ -200,7 +200,7 @@ func (c *Config) SetDefaults() {
 		c.Inbound.ReadTimeoutSecs = 30
 	}
 	if c.Inbound.WriteTimeoutSecs == 0 {
-		c.Inbound.WriteTimeoutSecs = 30
+		c.Inbound.WriteTimeoutSecs = 90 // Must exceed delivery_timeout_seconds (default 30s) + margin
 	}
 	if c.Inbound.IdleTimeoutSecs == 0 {
 		c.Inbound.IdleTimeoutSecs = 120

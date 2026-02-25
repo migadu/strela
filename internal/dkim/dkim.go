@@ -67,10 +67,10 @@ func SignMessage(rawMessage []byte, privateKeyPEM, selector, domain string) ([]b
 		return nil, fmt.Errorf("failed to parse DKIM private key: %w", err)
 	}
 
-	// Validate key size (1024 or 2048 bits)
+	// Validate key size (1024, 2048, 3072, or 4096 bits)
 	keySize := privateKey.N.BitLen()
-	if keySize != 1024 && keySize != 2048 {
-		return nil, fmt.Errorf("unsupported RSA key size: %d bits (must be 1024 or 2048)", keySize)
+	if keySize < 1024 || keySize > 4096 {
+		return nil, fmt.Errorf("unsupported RSA key size: %d bits (must be between 1024 and 4096)", keySize)
 	}
 
 	// Set up DKIM options
@@ -146,8 +146,8 @@ func ValidatePrivateKey(privateKeyPEM string) (int, error) {
 	}
 
 	keySize := privateKey.N.BitLen()
-	if keySize != 1024 && keySize != 2048 {
-		return keySize, fmt.Errorf("unsupported RSA key size: %d bits (must be 1024 or 2048)", keySize)
+	if keySize < 1024 || keySize > 4096 {
+		return keySize, fmt.Errorf("unsupported RSA key size: %d bits (must be between 1024 and 4096)", keySize)
 	}
 
 	return keySize, nil

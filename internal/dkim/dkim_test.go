@@ -53,20 +53,19 @@ func TestValidatePrivateKey_ValidKeys(t *testing.T) {
 	}
 }
 
-func TestValidatePrivateKey_InvalidKeySize(t *testing.T) {
-	// Test with 4096-bit key (unsupported, we only accept 1024 or 2048)
+func TestValidatePrivateKey_LargerKeys(t *testing.T) {
+	// Test with 4096-bit key (now supported)
 	keyPEM, err := generateRSAKey(4096)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
 
-	_, err = ValidatePrivateKey(keyPEM)
-	if err == nil {
-		t.Error("Expected error for 4096-bit key, got nil")
+	size, err := ValidatePrivateKey(keyPEM)
+	if err != nil {
+		t.Errorf("Expected valid 4096-bit key, got error: %v", err)
 	}
-
-	if !strings.Contains(err.Error(), "unsupported RSA key size") {
-		t.Errorf("Expected 'unsupported RSA key size' error, got: %v", err)
+	if size != 4096 {
+		t.Errorf("Expected key size 4096, got %d", size)
 	}
 }
 
@@ -174,21 +173,25 @@ func TestSignMessage_InvalidKey(t *testing.T) {
 	}
 }
 
-func TestSignMessage_UnsupportedKeySize(t *testing.T) {
+func TestSignMessage_4096BitKey(t *testing.T) {
 	keyPEM, err := generateRSAKey(4096)
 	if err != nil {
 		t.Fatalf("Failed to generate test key: %v", err)
 	}
 
-	rawMessage := []byte("From: sender@example.com\r\nSubject: Test\r\n\r\nBody\r\n")
+	rawMessage := []byte("From: sender@example.com\r\n" +
+		"To: recipient@example.com\r\n" +
+		"Subject: Test 4096\r\n" +
+		"\r\n" +
+		"Body\r\n")
 
-	_, err = SignMessage(rawMessage, keyPEM, "default", "example.com")
-	if err == nil {
-		t.Error("Expected error for 4096-bit key, got nil")
+	signed, err := SignMessage(rawMessage, keyPEM, "default", "example.com")
+	if err != nil {
+		t.Errorf("Expected successful signing with 4096-bit key, got error: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "unsupported RSA key size") {
-		t.Errorf("Expected 'unsupported RSA key size' error, got: %v", err)
+	if !strings.Contains(string(signed), "DKIM-Signature:") {
+		t.Error("Expected DKIM-Signature header in signed message")
 	}
 }
 

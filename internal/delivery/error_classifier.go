@@ -53,6 +53,11 @@ func (e *DeliveryError) Error() string {
 	return fmt.Sprintf("%s error: %s", e.Category, e.Message)
 }
 
+// Unwrap returns the original error, enabling errors.Is() and errors.As() chains.
+func (e *DeliveryError) Unwrap() error {
+	return e.OriginalErr
+}
+
 // ClassifyError determines the error category from SMTP response codes or network errors.
 // It first checks for network-level errors (DNS, connection failures), then examines SMTP
 // response codes and messages to classify the error. Reputation errors are detected by

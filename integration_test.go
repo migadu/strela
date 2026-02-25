@@ -50,7 +50,7 @@ func createTestServer(t *testing.T, cfg *config.Config) *httptest.Server {
 		apiHandler = handler.ConcurrencyLimitMiddleware(cfg.Inbound.MaxConcurrentRequests)(apiHandler)
 	}
 
-	mux.Handle("/v1/deliver", apiHandler)
+	mux.Handle("/deliver", apiHandler)
 
 	return httptest.NewServer(mux)
 }
@@ -70,7 +70,7 @@ func postMessage(t *testing.T, serverURL string, msg map[string]interface{}) (*h
 	t.Helper()
 
 	body, _ := json.Marshal(msg)
-	resp, err := http.Post(serverURL+"/v1/deliver", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(serverURL+"/deliver", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST request failed: %v", err)
 	}
@@ -577,7 +577,7 @@ func TestContextCancellation(t *testing.T) {
 	msg := createTestMessage("test@example.com")
 	body, _ := json.Marshal(msg)
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", server.URL+"/v1/deliver", bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", server.URL+"/deliver", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
@@ -693,7 +693,7 @@ func TestInvalidRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body, _ := json.Marshal(tt.payload)
-			resp, err := http.Post(server.URL+"/v1/deliver", "application/json", bytes.NewReader(body))
+			resp, err := http.Post(server.URL+"/deliver", "application/json", bytes.NewReader(body))
 			if err != nil {
 				t.Fatalf("POST failed: %v", err)
 			}

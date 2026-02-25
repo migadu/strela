@@ -51,7 +51,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"io"
+	"os"
 	"strings"
 
 	"github.com/emersion/go-msgauth/authres"
@@ -87,10 +87,10 @@ func SignMessage(rawMessage []byte, config *SignConfig) ([]byte, error) {
 		return nil, fmt.Errorf("failed to parse ARC private key: %w", err)
 	}
 
-	// Validate key size
+	// Validate key size (1024-4096 bits)
 	keySize := privateKey.N.BitLen()
-	if keySize != 1024 && keySize != 2048 {
-		return nil, fmt.Errorf("unsupported RSA key size: %d bits (must be 1024 or 2048)", keySize)
+	if keySize < 1024 || keySize > 4096 {
+		return nil, fmt.Errorf("unsupported RSA key size: %d bits (must be between 1024 and 4096)", keySize)
 	}
 
 	// Determine canonicalization algorithms
@@ -364,8 +364,8 @@ func ValidatePrivateKey(privateKeyPEM string) (int, error) {
 	}
 
 	keySize := privateKey.N.BitLen()
-	if keySize != 1024 && keySize != 2048 {
-		return keySize, fmt.Errorf("unsupported RSA key size: %d bits (must be 1024 or 2048)", keySize)
+	if keySize < 1024 || keySize > 4096 {
+		return keySize, fmt.Errorf("unsupported RSA key size: %d bits (must be between 1024 and 4096)", keySize)
 	}
 
 	return keySize, nil
@@ -373,7 +373,7 @@ func ValidatePrivateKey(privateKeyPEM string) (int, error) {
 
 // LoadPrivateKeyFromFile reads and validates a PEM-encoded private key from disk
 func LoadPrivateKeyFromFile(path string) (string, error) {
-	data, err := io.ReadAll(nil) // Placeholder - will be implemented with actual file reading
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to read private key file: %w", err)
 	}

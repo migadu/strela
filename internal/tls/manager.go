@@ -32,14 +32,8 @@ type Manager struct {
 	tlsConfig       *tls.Config             // Cached TLS config with wrapped GetCertificate
 }
 
-type gossipService interface{} // Placeholder or remove if unused
-
-// IsLeaderFunc is a function that returns true if this node is the cluster leader.
-// Used for cluster-aware certificate management.
-type IsLeaderFunc func() bool
-
 // NewManager creates a new TLS manager.
-func NewManager(ctx context.Context, cfg *config.TLSConfig, _ gossipService, logger *slog.Logger) (*Manager, error) {
+func NewManager(ctx context.Context, cfg *config.TLSConfig, logger *slog.Logger) (*Manager, error) {
 	if !cfg.Enabled || cfg.Provider != "letsencrypt" {
 		return nil, nil
 	}
@@ -348,7 +342,14 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 				"attempt", attempt+1,
 				"max_retries", maxRetries,
 				"backoff", backoff)
-			time.Sleep(backoff)
+
+			// Context-aware sleep: bail out early if the init context is cancelled
+			// instead of sleeping the full backoff duration.
+			select {
+			case <-time.After(backoff):
+			case <-initCtx.Done():
+				return nil, fmt.Errorf("S3 bucket validation cancelled during retry backoff: %w", initCtx.Err())
+			}
 		}
 
 		_, err = s3Client.HeadBucket(initCtx, &s3.HeadBucketInput{

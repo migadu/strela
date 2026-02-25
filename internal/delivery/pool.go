@@ -110,50 +110,55 @@ func poolKey(mxHost, sourceIP string) string {
 // Get retrieves an idle connection from the pool if available.
 // Returns nil if no valid connection is found.
 func (p *ConnectionPool) Get(mxHost, sourceIP string) *smtp.Client {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	key := poolKey(mxHost, sourceIP)
-	conns := p.connections[key]
 
-	if len(conns) == 0 {
-		p.logger.Debug("connection pool miss", "mx", mxHost, "source_ip", sourceIP)
-		return nil
-	}
-
-	// Iterate backwards to get most recent (LIFO) - actually standard slice pop is fine
-	// But we need to filter expired ones.
-	now := time.Now()
-
-	for len(conns) > 0 {
-		// Pop last
-		lastIdx := len(conns) - 1
-		conn := conns[lastIdx]
-		conns[lastIdx] = nil // Avoid leak
-		conns = conns[:lastIdx]
-
-		// Update map
-		p.connections[key] = conns
-
-		// Check expiry
-		if now.Sub(conn.timestamp) > p.ttl {
-			// Expired, close it and try next
-			p.logger.Debug("closing expired pooled connection", "mx", mxHost, "source_ip", sourceIP, "age", now.Sub(conn.timestamp))
-			conn.client.Close() // Best effort close
-			continue
+	for {
+		candidate := p.popCandidate(key, mxHost, sourceIP)
+		if candidate == nil {
+			return nil
 		}
 
-		// Verify connection is still alive with NOOP
-		if err := conn.client.Noop(); err != nil {
+		// Verify connection is still alive with NOOP (outside the lock to avoid
+		// blocking all pool operations during a network round-trip)
+		if err := candidate.Noop(); err != nil {
 			p.logger.Debug("pooled connection no longer alive", "mx", mxHost, "source_ip", sourceIP, "error", err)
-			conn.client.Close()
+			candidate.Close()
 			continue
 		}
 
 		p.logger.Debug("connection pool hit", "mx", mxHost, "source_ip", sourceIP)
+		return candidate
+	}
+}
+
+// popCandidate removes and returns the most recent non-expired connection from the pool.
+// Returns nil if no valid candidate is found.
+func (p *ConnectionPool) popCandidate(key, mxHost, sourceIP string) *smtp.Client {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	conns := p.connections[key]
+	now := time.Now()
+
+	for len(conns) > 0 {
+		// Pop last (LIFO - most recent)
+		lastIdx := len(conns) - 1
+		conn := conns[lastIdx]
+		conns[lastIdx] = nil // Avoid leak
+		conns = conns[:lastIdx]
+		p.connections[key] = conns
+
+		// Check expiry
+		if now.Sub(conn.timestamp) > p.ttl {
+			p.logger.Debug("closing expired pooled connection", "mx", mxHost, "source_ip", sourceIP, "age", now.Sub(conn.timestamp))
+			conn.client.Close()
+			continue
+		}
+
 		return conn.client
 	}
 
+	p.logger.Debug("connection pool miss", "mx", mxHost, "source_ip", sourceIP)
 	return nil
 }
 

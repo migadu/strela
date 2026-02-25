@@ -92,8 +92,8 @@ func TestSetDefaults(t *testing.T) {
 		t.Errorf("Expected default read_timeout_seconds 30, got %d", config.Inbound.ReadTimeoutSecs)
 	}
 
-	if config.Inbound.WriteTimeoutSecs != 30 {
-		t.Errorf("Expected default write_timeout_seconds 30, got %d", config.Inbound.WriteTimeoutSecs)
+	if config.Inbound.WriteTimeoutSecs != 90 {
+		t.Errorf("Expected default write_timeout_seconds 90, got %d", config.Inbound.WriteTimeoutSecs)
 	}
 
 	if config.Inbound.IdleTimeoutSecs != 120 {

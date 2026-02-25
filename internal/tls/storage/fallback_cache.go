@@ -27,15 +27,16 @@ import (
 // S3 Circuit Breaker: If S3 operations fail, the cache stops trying S3 for
 // a configurable interval (default 30s) to avoid repeated timeouts.
 type FallbackCache struct {
-	primary       autocert.Cache // S3 cache (source of truth)
-	fallback      autocert.Cache // Local filesystem cache (autocert.DirCache)
-	fallbackDir   string         // Local cache directory path
-	logger        *slog.Logger
-	mu            sync.RWMutex  // Protects sync operations
-	s3Mu          sync.RWMutex  // Protects S3 availability state
-	s3Available   bool          // Is S3 currently reachable?
-	lastS3Check   time.Time     // When did we last check S3?
-	checkInterval time.Duration // How often to retry S3 after failure (default 30s)
+	primary          autocert.Cache // S3 cache (source of truth)
+	fallback         autocert.Cache // Local filesystem cache (autocert.DirCache)
+	fallbackDir      string         // Local cache directory path
+	logger           *slog.Logger
+	mu               sync.RWMutex  // Protects sync operations
+	s3Mu             sync.RWMutex  // Protects S3 availability state
+	s3Available      bool          // Is S3 currently reachable?
+	lastS3Check      time.Time     // When did we last check S3?
+	checkInterval    time.Duration // How often to retry S3 after failure (default 30s)
+	consecutiveFails int           // Consecutive S3 failure count (protected by s3Mu)
 }
 
 // NewFallbackCache creates a new two-tier cache with S3 as primary.
@@ -75,28 +76,47 @@ func (f *FallbackCache) isS3Available() bool {
 	return true
 }
 
-// markS3Unavailable marks S3 as unavailable and records the time.
+// markS3Unavailable marks S3 as unavailable, records the time, and tracks
+// consecutive failures. Escalates log severity when failures persist.
 func (f *FallbackCache) markS3Unavailable() {
 	f.s3Mu.Lock()
 	defer f.s3Mu.Unlock()
 
-	if f.s3Available {
-		f.logger.Warn("S3 certificate cache unavailable - operations will use local cache only",
-			"retry_after", f.checkInterval)
-	}
+	f.consecutiveFails++
 	f.s3Available = false
 	f.lastS3Check = time.Now()
+
+	// Escalate log severity based on consecutive failure count.
+	// This ensures persistent S3 outages are impossible to miss in logs.
+	switch {
+	case f.consecutiveFails == 1:
+		f.logger.Warn("S3 certificate cache unavailable - operations will use local cache only",
+			"retry_after", f.checkInterval,
+			"consecutive_failures", f.consecutiveFails)
+	case f.consecutiveFails <= 5:
+		f.logger.Warn("S3 certificate cache still unavailable",
+			"consecutive_failures", f.consecutiveFails,
+			"retry_after", f.checkInterval)
+	default:
+		// After 5+ consecutive failures, log at Error level — this likely
+		// requires operator attention (misconfigured credentials, network partition, etc.)
+		f.logger.Error("PERSISTENT S3 FAILURE: certificate cache has been unavailable for an extended period — certificates are only stored locally and NOT replicated",
+			"consecutive_failures", f.consecutiveFails,
+			"retry_after", f.checkInterval)
+	}
 }
 
-// markS3Available marks S3 as available again.
+// markS3Available marks S3 as available again and resets the failure counter.
 func (f *FallbackCache) markS3Available() {
 	f.s3Mu.Lock()
 	defer f.s3Mu.Unlock()
 
 	if !f.s3Available {
-		f.logger.Info("S3 certificate cache restored - resuming S3 operations")
+		f.logger.Info("S3 certificate cache restored - resuming S3 operations",
+			"was_unavailable_for_failures", f.consecutiveFails)
 	}
 	f.s3Available = true
+	f.consecutiveFails = 0
 }
 
 // Get retrieves a certificate, trying local cache first (fast), then S3 (slow).
@@ -216,7 +236,7 @@ func (f *FallbackCache) syncToS3(key string, data []byte) {
 	defer cancel()
 
 	if err := f.primary.Put(ctx, key, data); err != nil {
-		f.logger.Debug("background S3 sync failed (will retry on periodic sync)", "name", key, "error", err)
+		f.logger.Warn("background S3 sync failed - certificate only stored locally (will retry on periodic sync)", "name", key, "error", err)
 		f.markS3Unavailable()
 	} else {
 		f.logger.Info("certificate synced from fallback cache to S3 (background)", "name", key)
@@ -242,9 +262,16 @@ func (f *FallbackCache) Delete(ctx context.Context, key string) error {
 	// Also delete from fallback cache
 	fallbackErr := f.fallback.Delete(ctx, key)
 
-	// Return error only if both failed
+	// If both failed, return combined error
 	if s3Err != nil && fallbackErr != nil {
 		return fmt.Errorf("both S3 and fallback cache delete failed - S3 error: %w, fallback error: %v", s3Err, fallbackErr)
+	}
+
+	// If S3 failed but fallback succeeded, warn that S3 is now inconsistent
+	// (the certificate still exists in S3 but has been removed locally)
+	if s3Err != nil {
+		f.logger.Warn("certificate deleted from local cache but S3 delete failed — S3 may retain stale certificate",
+			"name", key, "s3_error", s3Err)
 	}
 
 	return nil

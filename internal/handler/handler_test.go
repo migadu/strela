@@ -147,7 +147,7 @@ It preserves all original headers.`
 	}
 
 	bodyBytes, _ := json.Marshal(reqBody)
-	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -233,7 +233,7 @@ func TestHandleDeliver_ModeValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bodyBytes, _ := json.Marshal(tt.req)
-			req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+			req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 			req.Header.Set("Content-Type", "application/json")
 			rr := httptest.NewRecorder()
 
@@ -331,7 +331,7 @@ func TestHandleDeliver_DKIMConfigDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bodyBytes, _ := json.Marshal(tt.req)
-			req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+			req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 			req.Header.Set("Content-Type", "application/json")
 			rr := httptest.NewRecorder()
 
@@ -410,7 +410,7 @@ This is a forwarded message with original headers intact.
 	}
 
 	bodyBytes, _ := json.Marshal(req)
-	httpReq := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	httpReq := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 	httpReq.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -491,7 +491,7 @@ func TestHandleDeliver_DynamicARCKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bodyBytes, _ := json.Marshal(tt.req)
-			req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+			req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 			req.Header.Set("Content-Type", "application/json")
 			rr := httptest.NewRecorder()
 
@@ -540,7 +540,7 @@ func TestHandleDeliver_DKIMARCDisabledIgnoresAPIParams(t *testing.T) {
 	}
 
 	bodyBytes, _ := json.Marshal(req)
-	httpReq := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	httpReq := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 	httpReq.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
@@ -578,7 +578,7 @@ Content-Type: text/plain; charset=utf-8
 This is the email body sent via header mode.
 `
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req := httptest.NewRequest(http.MethodPost, "/deliver", strings.NewReader(rawEmail))
 	req.Header.Set("Content-Type", "message/rfc822")
 	req.Header.Set("X-Envelope-From", "sender@example.com")
 	req.Header.Set("X-Envelope-To", "recipient@example.com")
@@ -634,7 +634,7 @@ Test body
 
 	testKey := "-----BEGIN RSA PRIVATE KEY-----\ntest-key\n-----END RSA PRIVATE KEY-----"
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req := httptest.NewRequest(http.MethodPost, "/deliver", strings.NewReader(rawEmail))
 	req.Header.Set("Content-Type", "message/rfc822")
 	req.Header.Set("X-Envelope-From", "sender@example.com")
 	req.Header.Set("X-Envelope-To", "recipient@example.com")
@@ -670,7 +670,7 @@ Subject: Test
 Body
 `
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req := httptest.NewRequest(http.MethodPost, "/deliver", strings.NewReader(rawEmail))
 	req.Header.Set("Content-Type", "message/rfc822")
 	// Missing X-Envelope-From and X-Envelope-To headers
 
@@ -720,7 +720,7 @@ Test body content
 					RawMessage: rawEmail,
 				}
 				bodyBytes, _ := json.Marshal(reqBody)
-				req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+				req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 				req.Header.Set("Content-Type", "application/json")
 				return req
 			},
@@ -729,7 +729,7 @@ Test body content
 		{
 			name: "Header mode",
 			setupReq: func() *http.Request {
-				req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+				req := httptest.NewRequest(http.MethodPost, "/deliver", strings.NewReader(rawEmail))
 				req.Header.Set("Content-Type", "message/rfc822")
 				req.Header.Set("X-Envelope-From", "sender@example.com")
 				req.Header.Set("X-Envelope-To", "recipient@example.com")
@@ -792,7 +792,7 @@ Test body
 	dkimKeyB64 := base64.StdEncoding.EncodeToString([]byte(dkimKey))
 	arcKeyB64 := base64.StdEncoding.EncodeToString([]byte(arcKey))
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", strings.NewReader(rawEmail))
+	req := httptest.NewRequest(http.MethodPost, "/deliver", strings.NewReader(rawEmail))
 	req.Header.Set("Content-Type", "message/rfc822")
 	req.Header.Set("X-Envelope-From", "sender@example.com")
 	req.Header.Set("X-Envelope-To", "recipient@example.com")
@@ -892,7 +892,7 @@ func TestTimeoutResponse(t *testing.T) {
 		Text:    "Body",
 	}
 	bodyBytes, _ := json.Marshal(reqBody)
-	req := httptest.NewRequest(http.MethodPost, "/v1/deliver", bytes.NewReader(bodyBytes))
+	req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 

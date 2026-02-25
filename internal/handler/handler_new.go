@@ -133,7 +133,14 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		h.logger.Debug("authentication successful", "remote_addr", r.RemoteAddr, "trace_id", traceID)
 	}
 
-	// 2. Determine mode based on Content-Type
+	// 2. Enforce request body size limit
+	maxBody := h.config.Inbound.MaxBodySizeBytes
+	if maxBody <= 0 {
+		maxBody = 35 * 1024 * 1024 // 35MB default
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
+	// 3. Determine mode based on Content-Type
 	contentType := r.Header.Get("Content-Type")
 	isHeaderMode := strings.HasPrefix(contentType, "message/rfc822")
 
@@ -147,7 +154,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		h.logger.Debug("using JSON mode")
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.logger.Debug("failed to decode JSON payload", "error", err, "remote_addr", r.RemoteAddr)
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			http.Error(w, "Invalid JSON or request body too large", http.StatusBadRequest)
 			return
 		}
 	}
@@ -163,10 +170,23 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		"arc_selector", req.ARCSelector,
 		"arc_domain", req.ARCDomain)
 
-	// 3. Validation
+	// 4. Validation
 	if req.From == "" || req.To == "" {
 		h.logger.Debug("missing required fields", "from", req.From, "to", req.To)
 		http.Error(w, "Missing 'from' or 'to' fields", http.StatusBadRequest)
+		return
+	}
+
+	// Validate email address format before passing to SMTP layer.
+	// From allows null sender (<>) for bounce/DSN messages.
+	if err := validateEmailAddress(req.From, "from", true); err != nil {
+		h.logger.Debug("invalid 'from' address", "from", req.From, "error", err, "trace_id", traceID)
+		http.Error(w, fmt.Sprintf("Invalid 'from' address: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := validateEmailAddress(req.To, "to", false); err != nil {
+		h.logger.Debug("invalid 'to' address", "to", req.To, "error", err, "trace_id", traceID)
+		http.Error(w, fmt.Sprintf("Invalid 'to' address: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -193,7 +213,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Prepare message payload
+	// 5. Prepare message payload
 	var rawMessage []byte
 	var err error
 
@@ -211,7 +231,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		h.logger.Debug("MIME message built", "size", len(rawMessage))
 	}
 
-	// 5. Apply DKIM config (respects enabled flag)
+	// 6. Apply DKIM config (respects enabled flag)
 	var dkimPrivateKey, dkimSelector, dkimDomain string
 	var skipDKIMValidation bool
 
@@ -280,13 +300,13 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		// Leave all ARC params as empty strings
 	}
 
-	// 6. Create context with timeout and trace ID
+	// 7. Create context with timeout and trace ID
 	timeout := time.Duration(h.config.Outbound.DeliveryTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	ctx = delivery.WithTraceID(ctx, traceID)
 
-	// 7. Synchronous Delivery
+	// 8. Synchronous Delivery
 	h.logger.Debug("starting synchronous delivery",
 		"trace_id", traceID,
 		"from", req.From,
@@ -302,7 +322,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		"source_ip", result.SourceIP,
 		"duration_ms", result.AttemptDurationMs)
 
-	// 8. Map result to HTTP status
+	// 9. Map result to HTTP status
 	statusCode := mapDeliveryStatusToHTTP(result.Status)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -372,13 +392,21 @@ func (h *Handler) buildRawMessage(req *MessageRequest) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			createPart(iw, "text/plain", req.Text)
-			createPart(iw, "text/html", req.HTML)
+			if err := createPart(iw, "text/plain", req.Text); err != nil {
+				return nil, fmt.Errorf("failed to create text part: %w", err)
+			}
+			if err := createPart(iw, "text/html", req.HTML); err != nil {
+				return nil, fmt.Errorf("failed to create HTML part: %w", err)
+			}
 			iw.Close()
 		} else if req.HTML != "" {
-			createPart(mw, "text/html", req.HTML)
+			if err := createPart(mw, "text/html", req.HTML); err != nil {
+				return nil, fmt.Errorf("failed to create HTML part: %w", err)
+			}
 		} else if req.Text != "" {
-			createPart(mw, "text/plain", req.Text)
+			if err := createPart(mw, "text/plain", req.Text); err != nil {
+				return nil, fmt.Errorf("failed to create text part: %w", err)
+			}
 		}
 
 		// Handle attachments
@@ -559,6 +587,103 @@ func (h *Handler) decodeBase64Header(value string) string {
 	}
 
 	return string(decoded)
+}
+
+// validateEmailAddress validates an email address for SMTP delivery.
+// It performs structural validation per RFC 5321 to catch malformed addresses
+// before they reach the SMTP layer (which would produce cryptic errors).
+//
+// Accepted forms:
+//   - user@domain.tld            (standard)
+//   - "quoted local"@domain.tld  (quoted local-part)
+//   - <>                         (null sender / bounce, from only)
+//
+// This is intentionally not a full RFC 5322 parser — it validates the
+// minimum structure needed for SMTP MAIL FROM / RCPT TO to succeed.
+func validateEmailAddress(addr string, fieldName string, allowNull bool) error {
+	// Handle null sender (<> or empty) — valid for bounce/DSN messages
+	if allowNull && (addr == "<>" || addr == "") {
+		return nil
+	}
+
+	// Strip angle brackets if present: <user@domain> → user@domain
+	if len(addr) >= 2 && addr[0] == '<' && addr[len(addr)-1] == '>' {
+		addr = addr[1 : len(addr)-1]
+	}
+
+	if addr == "" {
+		return fmt.Errorf("%s: address is empty", fieldName)
+	}
+
+	// Must contain exactly one @
+	atIdx := strings.LastIndex(addr, "@")
+	if atIdx < 0 {
+		return fmt.Errorf("%s: missing '@' separator in %q", fieldName, addr)
+	}
+
+	localPart := addr[:atIdx]
+	domain := addr[atIdx+1:]
+
+	// Local part validation
+	if localPart == "" {
+		return fmt.Errorf("%s: empty local part in %q", fieldName, addr)
+	}
+	if len(localPart) > 64 {
+		return fmt.Errorf("%s: local part exceeds 64 characters in %q", fieldName, addr)
+	}
+
+	// Domain validation
+	if domain == "" {
+		return fmt.Errorf("%s: empty domain in %q", fieldName, addr)
+	}
+	if len(domain) > 255 {
+		return fmt.Errorf("%s: domain exceeds 255 characters in %q", fieldName, addr)
+	}
+
+	// Domain must contain at least one dot (no bare hostnames)
+	// Exception: localhost and IP literals [x.x.x.x] (but we don't support those for delivery)
+	if !strings.Contains(domain, ".") {
+		return fmt.Errorf("%s: domain %q has no TLD (expected domain.tld format)", fieldName, domain)
+	}
+
+	// Domain must not start or end with a dot or hyphen
+	if domain[0] == '.' || domain[0] == '-' {
+		return fmt.Errorf("%s: domain %q starts with invalid character", fieldName, domain)
+	}
+	if domain[len(domain)-1] == '.' || domain[len(domain)-1] == '-' {
+		return fmt.Errorf("%s: domain %q ends with invalid character", fieldName, domain)
+	}
+
+	// Check for consecutive dots in domain
+	if strings.Contains(domain, "..") {
+		return fmt.Errorf("%s: domain %q contains consecutive dots", fieldName, domain)
+	}
+
+	// Domain labels: each part between dots must be 1-63 characters, alphanumeric + hyphen
+	labels := strings.Split(domain, ".")
+	for _, label := range labels {
+		if len(label) == 0 {
+			return fmt.Errorf("%s: domain %q has empty label", fieldName, domain)
+		}
+		if len(label) > 63 {
+			return fmt.Errorf("%s: domain label %q exceeds 63 characters", fieldName, label)
+		}
+		for _, c := range label {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+				// Allow non-ASCII for internationalized domain names (IDN)
+				if c <= 127 {
+					return fmt.Errorf("%s: domain %q contains invalid character %q", fieldName, domain, string(c))
+				}
+			}
+		}
+	}
+
+	// Total address length check (RFC 5321: max 256 for forward-path)
+	if len(addr) > 254 {
+		return fmt.Errorf("%s: address exceeds 254 characters", fieldName)
+	}
+
+	return nil
 }
 
 // Helper methods for validation could go here
