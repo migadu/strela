@@ -36,11 +36,14 @@ func (w *CertSyncWorker) Start() {
 	recovery.SafeGo(w.logger, "cert-sync-worker", func() {
 		defer close(w.doneCh)
 
+		// One-time startup sync: push local certs to S3 if they're missing there.
+		// This covers the case where S3 was wiped or certs exist only locally.
+		// Unlike periodic syncs, this always runs to ensure S3 has all certs.
+		w.logger.Info("certificate sync worker: running startup sync from local cache to S3")
+		w.runStartupSync()
+
 		ticker := time.NewTicker(w.syncInterval)
 		defer ticker.Stop()
-
-		// Run initial sync immediately
-		w.runSync()
 
 		for {
 			select {
@@ -52,6 +55,20 @@ func (w *CertSyncWorker) Start() {
 			}
 		}
 	})
+}
+
+// runStartupSync runs an initial sync on startup, always comparing with S3
+// to ensure all local certs are uploaded. This is different from periodic syncs
+// which only run when needsSync is true.
+func (w *CertSyncWorker) runStartupSync() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	if err := w.fallbackCache.SyncAllToS3(ctx); err != nil {
+		w.logger.Warn("certificate sync worker: startup sync had errors", "error", err)
+	} else {
+		w.logger.Info("certificate sync worker: startup sync complete")
+	}
 }
 
 // Stop gracefully shuts down the sync worker.
@@ -70,7 +87,16 @@ func (w *CertSyncWorker) Stop(timeout time.Duration) {
 
 // runSync performs a single sync operation with escalating severity on
 // consecutive failures so persistent S3 issues are impossible to miss.
+// Only syncs when there are local-only certs that need to be pushed to S3
+// to avoid downloading all certs from S3 on every tick just to compare them.
 func (w *CertSyncWorker) runSync() {
+	// Only sync when there are local-only certs that need to be pushed to S3.
+	// This avoids downloading all certs from S3 on every tick just to compare them.
+	if !w.fallbackCache.NeedsSync() {
+		w.logger.Debug("certificate sync: no sync needed, skipping")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
