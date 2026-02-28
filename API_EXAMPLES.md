@@ -172,7 +172,9 @@ Both API modes return the same JSON response format:
 }
 ```
 
-### Temporary Failure (422 Unprocessable Entity)
+### Temporary Failure (429 Too Many Requests)
+
+**SMTP 4xx errors** → HTTP 429 (temporary failure, retry with backoff)
 
 ```json
 {
@@ -186,7 +188,9 @@ Both API modes return the same JSON response format:
 }
 ```
 
-### Hard Bounce (400 Bad Request)
+### Hard Bounce (554 Transaction Failed)
+
+**SMTP 5xx errors** → HTTP 554 (permanent failure, do not retry)
 
 ```json
 {
@@ -196,6 +200,18 @@ Both API modes return the same JSON response format:
   "mx_host": "mx1.example.com",
   "source_ip": "192.0.2.1",
   "attempt_duration_ms": 1567
+}
+```
+
+**Note**: HTTP 554 indicates permanent SMTP failures (user unknown, domain rejected, reputation blocks, etc.). Do not retry these deliveries.
+
+### Malformed Request (400 Bad Request)
+
+Invalid RFC822 message, missing required headers, or validation errors:
+
+```json
+{
+  "error": "Invalid 'to' address: missing '@' separator"
 }
 ```
 
@@ -213,13 +229,23 @@ Both API modes return the same JSON response format:
 }
 ```
 
+### HTTP Status Code Summary
+
+| HTTP Code | SMTP Equivalent | Retry? | Description |
+|-----------|----------------|--------|-------------|
+| **200** | 2xx | N/A | Message delivered successfully |
+| **400** | N/A | No | Malformed request (bad RFC822, missing headers) |
+| **429** | 4xx | Yes | Temporary failure (greylisting, rate limits, transient errors) |
+| **504** | N/A | Yes | Delivery timeout exceeded |
+| **554** | 5xx | No | Permanent failure (user unknown, reputation block, policy rejection) |
+
 ### Status Values
 
-- `delivered` - Message successfully delivered (250)
-- `temp_fail` - Temporary failure, retry later (4xx codes)
-- `hard_bounce` - Permanent failure, do not retry (5xx codes)
-- `timeout` - Delivery timeout exceeded
-- `error` - Internal error occurred
+- `delivered` - Message successfully delivered (SMTP 2xx → HTTP 200)
+- `temp_fail` - Temporary failure, retry later (SMTP 4xx → HTTP 429)
+- `hard_bounce` - Permanent failure, do not retry (SMTP 5xx → HTTP 554)
+- `timeout` - Delivery timeout exceeded (HTTP 504)
+- `error` - Internal error occurred (HTTP 500)
 
 ---
 

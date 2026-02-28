@@ -241,8 +241,8 @@ func TestDeliveryTimeout(t *testing.T) {
 		t.Errorf("Expected timeout/temp_fail/error status, got: %s", result.Status)
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusGatewayTimeout && resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Errorf("Expected 200/504/422, got: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusGatewayTimeout && resp.StatusCode != 429 {
+		t.Errorf("Expected 200/504/429, got: %d", resp.StatusCode)
 	}
 }
 
@@ -321,8 +321,8 @@ func TestSMTPConnectionTimeout(t *testing.T) {
 
 	t.Logf("Connection timeout result: status=%s, duration=%v", result.Status, duration)
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity && resp.StatusCode != http.StatusInternalServerError {
-		t.Errorf("Expected 200/422/500, got: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != 429 && resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected 200/429/500, got: %d", resp.StatusCode)
 	}
 }
 
@@ -632,7 +632,7 @@ func TestDeliveryResultFormat(t *testing.T) {
 	resp, result := postMessage(t, server.URL, msg)
 
 	// Should get valid response
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity && resp.StatusCode != http.StatusBadRequest {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != 429 && resp.StatusCode != 554 {
 		t.Errorf("Unexpected status code: %d", resp.StatusCode)
 	}
 

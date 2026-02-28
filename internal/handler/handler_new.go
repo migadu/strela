@@ -335,17 +335,17 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 func mapDeliveryStatusToHTTP(status string) int {
 	switch status {
 	case "delivered":
-		return http.StatusOK
+		return http.StatusOK // 200 - success
 	case "temp_fail":
-		return http.StatusUnprocessableEntity // 422 - usually means retry later
+		return 429 // 429 Too Many Requests - temporary failure, retry with backoff (SMTP 4xx)
 	case "rate_limit":
 		return http.StatusTooManyRequests // 429 - retry later (Fail Fast)
 	case "hard_bounce":
-		return http.StatusBadRequest // 400 - permanent failure
+		return 554 // 554 Transaction Failed - permanent failure, do not retry (SMTP 5xx)
 	case "timeout":
-		return http.StatusGatewayTimeout // 504
+		return http.StatusGatewayTimeout // 504 - delivery timeout exceeded
 	case "error":
-		return http.StatusInternalServerError // 500
+		return http.StatusInternalServerError // 500 - internal error
 	default:
 		return http.StatusInternalServerError
 	}
