@@ -211,6 +211,31 @@ func TestS3PrefixNormalization(t *testing.T) {
 			input:    "fune/prod/",
 			expected: "fune/prod/",
 		},
+		{
+			name:     "prefix with leading slash",
+			input:    "/myapp",
+			expected: "myapp/",
+		},
+		{
+			name:     "prefix with leading and trailing slash",
+			input:    "/myapp/",
+			expected: "myapp/",
+		},
+		{
+			name:     "prefix with multiple leading slashes",
+			input:    "///myapp",
+			expected: "myapp/",
+		},
+		{
+			name:     "nested prefix with leading slash",
+			input:    "/fune/prod",
+			expected: "fune/prod/",
+		},
+		{
+			name:     "only slashes becomes empty",
+			input:    "///",
+			expected: "",
+		},
 	}
 
 	for _, tt := range tests {

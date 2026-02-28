@@ -55,7 +55,8 @@ enabled = false
 # region = "us-east-1"
 # endpoint = ""                                  # Optional: Custom S3 endpoint (e.g., "https://s3.us-west-004.backblazeb2.com" for Backblaze B2)
 # prefix = ""                                    # Base prefix for all S3 keys (e.g., "myapp" or "myapp/" → myapp/certs/, myapp/stats/, myapp/connections/)
-#                                                # Trailing slash is optional - will be added automatically if missing
+#                                                # Leading slashes are stripped, trailing slash is added automatically
+#                                                # Examples: "myapp", "/myapp", "myapp/" all become "myapp/"
 #                                                # Subdirectories are appended automatically. Do NOT use "certs/" here — it would create "certs/certs/"
 # access_key = "AKIAIOSFODNN7EXAMPLE"
 # secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"

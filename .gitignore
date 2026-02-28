@@ -23,3 +23,5 @@ test-config.toml
 ./fune-server
 ./fune-admin
 bin/
+fune-admin
+fune-server

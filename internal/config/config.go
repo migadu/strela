@@ -232,9 +232,16 @@ func (c *Config) SetDefaults() {
 	if c.TLS.LetsEncrypt.CacheDir == "" {
 		c.TLS.LetsEncrypt.CacheDir = "./letsencrypt-cache"
 	}
-	// Normalize S3 prefix: ensure it ends with "/" if not empty
-	if c.TLS.LetsEncrypt.S3.Prefix != "" && c.TLS.LetsEncrypt.S3.Prefix[len(c.TLS.LetsEncrypt.S3.Prefix)-1] != '/' {
-		c.TLS.LetsEncrypt.S3.Prefix = c.TLS.LetsEncrypt.S3.Prefix + "/"
+	// Normalize S3 prefix: strip leading slashes and ensure trailing slash
+	if c.TLS.LetsEncrypt.S3.Prefix != "" {
+		// Strip leading slashes
+		for len(c.TLS.LetsEncrypt.S3.Prefix) > 0 && c.TLS.LetsEncrypt.S3.Prefix[0] == '/' {
+			c.TLS.LetsEncrypt.S3.Prefix = c.TLS.LetsEncrypt.S3.Prefix[1:]
+		}
+		// Add trailing slash if not empty after stripping
+		if c.TLS.LetsEncrypt.S3.Prefix != "" && c.TLS.LetsEncrypt.S3.Prefix[len(c.TLS.LetsEncrypt.S3.Prefix)-1] != '/' {
+			c.TLS.LetsEncrypt.S3.Prefix = c.TLS.LetsEncrypt.S3.Prefix + "/"
+		}
 	}
 	if c.Outbound.MXCacheTTLSeconds == 0 {
 		c.Outbound.MXCacheTTLSeconds = 3600
