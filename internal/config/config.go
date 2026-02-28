@@ -90,6 +90,7 @@ type S3Config struct {
 	Bucket    string `toml:"bucket"`
 	Region    string `toml:"region"`
 	Endpoint  string `toml:"endpoint"` // Custom S3 endpoint (e.g., for Backblaze B2)
+	Prefix    string `toml:"prefix"`   // Base prefix for all S3 keys (e.g., "myapp/" → myapp/certs/, myapp/stats/, etc.)
 	AccessKey string `toml:"access_key"`
 	SecretKey string `toml:"secret_key"`
 }
@@ -230,6 +231,10 @@ func (c *Config) SetDefaults() {
 	}
 	if c.TLS.LetsEncrypt.CacheDir == "" {
 		c.TLS.LetsEncrypt.CacheDir = "./letsencrypt-cache"
+	}
+	// Normalize S3 prefix: ensure it ends with "/" if not empty
+	if c.TLS.LetsEncrypt.S3.Prefix != "" && c.TLS.LetsEncrypt.S3.Prefix[len(c.TLS.LetsEncrypt.S3.Prefix)-1] != '/' {
+		c.TLS.LetsEncrypt.S3.Prefix = c.TLS.LetsEncrypt.S3.Prefix + "/"
 	}
 	if c.Outbound.MXCacheTTLSeconds == 0 {
 		c.Outbound.MXCacheTTLSeconds = 3600

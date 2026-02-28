@@ -179,3 +179,49 @@ func TestLoadConfigInvalidTOML(t *testing.T) {
 		t.Error("Expected error for invalid TOML, got nil")
 	}
 }
+
+func TestS3PrefixNormalization(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty prefix",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "prefix without trailing slash",
+			input:    "myapp",
+			expected: "myapp/",
+		},
+		{
+			name:     "prefix with trailing slash",
+			input:    "myapp/",
+			expected: "myapp/",
+		},
+		{
+			name:     "nested prefix without trailing slash",
+			input:    "fune/prod",
+			expected: "fune/prod/",
+		},
+		{
+			name:     "nested prefix with trailing slash",
+			input:    "fune/prod/",
+			expected: "fune/prod/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{}
+			cfg.TLS.LetsEncrypt.S3.Prefix = tt.input
+			cfg.SetDefaults()
+
+			if cfg.TLS.LetsEncrypt.S3.Prefix != tt.expected {
+				t.Errorf("Expected prefix '%s', got '%s'", tt.expected, cfg.TLS.LetsEncrypt.S3.Prefix)
+			}
+		})
+	}
+}

@@ -561,6 +561,7 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig) (*storage.
 	return &storage.S3Cache{
 		S3Client: s3Client,
 		Bucket:   cfg.S3.Bucket,
+		Prefix:   cfg.S3.Prefix,
 		Logger:   logger,
 	}, nil
 }

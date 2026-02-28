@@ -68,6 +68,7 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, logger *slog.Logger)
 		logger.Info("using hybrid file+S3 certificate cache with periodic sync",
 			"local_cache_dir", cacheDir,
 			"s3_bucket", cfg.LetsEncrypt.S3.Bucket,
+			"prefix", cfg.LetsEncrypt.S3.Prefix,
 			"sync_interval", syncInterval)
 
 	case "file":
@@ -374,6 +375,7 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 	return &storage.S3Cache{
 		S3Client: s3Client,
 		Bucket:   cfg.S3.Bucket,
+		Prefix:   cfg.S3.Prefix,
 		Logger:   logger,
 	}, nil
 }

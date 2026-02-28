@@ -25,6 +25,7 @@ type S3API interface {
 type S3Cache struct {
 	S3Client S3API
 	Bucket   string
+	Prefix   string // Base prefix for all S3 keys (e.g., "myapp/")
 	Logger   *slog.Logger
 }
 
@@ -33,9 +34,11 @@ func (s *S3Cache) Get(ctx context.Context, key string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	fullKey := s.Prefix + key
+
 	resp, err := s.S3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.Bucket),
-		Key:    aws.String(key),
+		Key:    aws.String(fullKey),
 	})
 	if err != nil {
 		var nsk *types.NoSuchKey
@@ -63,9 +66,11 @@ func (s *S3Cache) Put(ctx context.Context, key string, data []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	fullKey := s.Prefix + key
+
 	_, err := s.S3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.Bucket),
-		Key:    aws.String(key),
+		Key:    aws.String(fullKey),
 		Body:   bytes.NewReader(data),
 	})
 	if err != nil {
@@ -82,9 +87,11 @@ func (s *S3Cache) Delete(ctx context.Context, key string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	fullKey := s.Prefix + key
+
 	_, err := s.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.Bucket),
-		Key:    aws.String(key),
+		Key:    aws.String(fullKey),
 	})
 	if err != nil {
 		s.Logger.Error("failed to delete certificate from S3", "key", key, "error", err)
