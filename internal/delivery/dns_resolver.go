@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"fune/internal/config"
+	"strela/internal/config"
 )
 
 // DNSResolver handles DNS queries with custom resolvers, round-robin distribution,

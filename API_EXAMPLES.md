@@ -1,6 +1,6 @@
-# Fune API Examples
+# Strela API Examples
 
-The Fune SMTP delivery gateway supports two API modes for submitting messages:
+The Strela SMTP delivery gateway supports two API modes for submitting messages:
 
 ## 1. JSON Mode (Legacy)
 

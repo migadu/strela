@@ -1,4 +1,4 @@
-module fune
+module strela
 
 go 1.24.0
 

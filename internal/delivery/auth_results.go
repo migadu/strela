@@ -2,7 +2,7 @@ package delivery
 
 // InboundAuthResults carries authentication results reported by the caller for
 // the original incoming message. This is only relevant for forwarding scenarios
-// where the message was scanned before being submitted to fune for re-delivery.
+// where the message was scanned before being submitted to strela for re-delivery.
 // For normal outbound sends this should be nil.
 type InboundAuthResults struct {
 	DKIM  string `json:"dkim,omitempty"`  // e.g. "pass", "fail", "none"

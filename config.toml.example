@@ -1,11 +1,11 @@
-# Fune v2.0 Configuration Example
+# Strela v2.0 Configuration Example
 # Synchronous SMTP Delivery Gateway
 # Copy to config.toml and adjust as needed.
 #
 # IMPORTANT: v2.0 is a synchronous delivery model
 # - HTTP requests block until SMTP delivery completes (or times out)
 # - Caller MUST implement queue + retry logic
-# - No database/queue managed by Fune
+# - No database/queue managed by Strela
 
 [logging]
 output = "stderr"    # stderr, stdout, syslog, or /path/to/file.log
@@ -43,7 +43,7 @@ enabled = false
 # email = "admin@example.com"
 # domains = ["mail.example.com"]
 # storage_provider = "file"              # "file" (single node) or "s3" (hybrid local+S3 for cluster)
-# cache_dir = "/var/lib/fune/letsencrypt" # Local cache directory (required for both "file" and "s3" modes)
+# cache_dir = "/var/lib/strela/letsencrypt" # Local cache directory (required for both "file" and "s3" modes)
 # sync_interval_minutes = 5               # Sync local cache to S3 every N minutes (default: 5, only for storage_provider="s3")
                                           # Only changed/missing certificates are uploaded (smart sync)
 
@@ -51,7 +51,7 @@ enabled = false
 # Required for storage_provider = "s3"
 # When using S3, certificates are stored locally for fast TLS handshakes
 # and periodically synced to S3 for backup and cluster sharing
-# bucket = "fune-letsencrypt"
+# bucket = "strela-letsencrypt"
 # region = "us-east-1"
 # endpoint = ""                                  # Optional: Custom S3 endpoint (e.g., "https://s3.us-west-004.backblazeb2.com" for Backblaze B2)
 # prefix = ""                                    # Base prefix for all S3 keys (e.g., "myapp" or "myapp/" → myapp/certs/, myapp/stats/, myapp/connections/)
@@ -135,7 +135,7 @@ enabled = false
 enabled = false
 # selector = "default"                           # DNS selector for DKIM public key (e.g., "default", "mail")
 # domain = "example.com"                         # Domain for DKIM signing (e.g., "example.com")
-# private_key_path = "/etc/fune/dkim-private.key" # Path to RSA private key in PEM format (1024 or 2048 bits)
+# private_key_path = "/etc/strela/dkim-private.key" # Path to RSA private key in PEM format (1024 or 2048 bits)
 # skip_validation = false                        # Skip DNS validation of DKIM record (default: false, faster but less safe)
 # header_canon = "relaxed"                       # Header canonicalization: "relaxed" or "simple" (default: relaxed)
 # body_canon = "relaxed"                         # Body canonicalization: "relaxed" or "simple" (default: relaxed)
@@ -152,7 +152,7 @@ enabled = false
 enabled = false
 # selector = "arc"
 # domain = "example.com"
-# private_key_path = "/etc/fune/arc-private.key"
+# private_key_path = "/etc/strela/arc-private.key"
 # header_canon = "relaxed"                       # Header canonicalization (default: relaxed)
 # body_canon = "relaxed"                         # Body canonicalization (default: relaxed)
 

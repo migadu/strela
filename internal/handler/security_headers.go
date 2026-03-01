@@ -5,7 +5,7 @@ import "net/http"
 // SecurityHeadersMiddleware adds security headers to all HTTP responses.
 //
 // This middleware implements defense-in-depth security by adding standard HTTP
-// security headers to protect against common web vulnerabilities. Although Fune
+// security headers to protect against common web vulnerabilities. Although Strela
 // is designed as a trusted backend service (not a public web application), these
 // headers provide additional protection layers.
 //

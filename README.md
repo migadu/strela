@@ -1,6 +1,6 @@
-# Fune - Synchronous SMTP Delivery Gateway
+# Strela - Synchronous SMTP Delivery Gateway
 
-Fune is a high-performance, stateless SMTP delivery service written in Go.
+Strela is a high-performance, stateless SMTP delivery service written in Go.
 It accepts email messages via HTTP API and delivers them synchronously to
 recipient MX servers with intelligent source IP rotation and reputation management.
 
@@ -14,8 +14,8 @@ recipient MX servers with intelligent source IP rotation and reputation manageme
 
 ### Build and Run
 ```bash
-go build -o fune-server cmd/fune-server/main.go
-./fune-server
+go build -o strela-server cmd/strela-server/main.go
+./strela-server
 ```
 
 ### Send Email (Composed Mode)
@@ -25,13 +25,13 @@ curl -X POST http://localhost:8025/deliver \
   -d '{
     "from": "sender@example.com",
     "to": "recipient@example.com",
-    "subject": "Hello Fune",
-    "text": "This is a test email sent via Fune.",
+    "subject": "Hello Strela",
+    "text": "This is a test email sent via Strela.",
     "message_id": "<unique-id@example.com>"
   }'
 ```
 
-**Note**: The `message_id` field is optional. If not provided, Fune automatically generates a unique Message-ID header to prevent the email from being flagged as spam.
+**Note**: The `message_id` field is optional. If not provided, Strela automatically generates a unique Message-ID header to prevent the email from being flagged as spam.
 
 ### Forward Email (Raw Message Mode)
 For email forwarding scenarios, send the complete RFC822 message:
@@ -104,7 +104,7 @@ Configure DKIM in `config.toml` to automatically sign all outbound messages:
 enabled = true
 selector = "default"
 domain = "example.com"
-private_key_path = "/etc/fune/dkim-private.key"
+private_key_path = "/etc/strela/dkim-private.key"
 skip_validation = false
 ```
 
@@ -116,7 +116,7 @@ curl -X POST http://localhost:8025/deliver \
   -d '{
     "from": "sender@example.com",
     "to": "recipient@example.com",
-    "subject": "Hello Fune",
+    "subject": "Hello Strela",
     "text": "This email will be automatically signed with DKIM."
   }'
 ```
@@ -131,8 +131,8 @@ curl -X POST http://localhost:8025/deliver \
   -d '{
     "from": "sender@example.com",
     "to": "recipient@example.com",
-    "subject": "Hello Fune",
-    "text": "This is a test email sent via Fune with DKIM.",
+    "subject": "Hello Strela",
+    "text": "This is a test email sent via Strela with DKIM.",
     "dkim_private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----",
     "dkim_selector": "default",
     "dkim_domain": "example.com"
@@ -144,7 +144,7 @@ curl -X POST http://localhost:8025/deliver \
 - API request parameters override config defaults (when enabled)
 - **If config `enabled = false`**: All DKIM parameters ignored (logged as warning)
 
-**DKIM Validation**: By default, Fune validates that:
+**DKIM Validation**: By default, Strela validates that:
 1. A DKIM TXT record exists at `selector._domainkey.domain`
 2. The public key in DNS matches the provided private key
 
@@ -168,14 +168,14 @@ per_domain_interval_seconds = 2
 enabled = true
 selector = "default"
 domain = "example.com"
-private_key_path = "/etc/fune/dkim-private.key"
+private_key_path = "/etc/strela/dkim-private.key"
 
 # For email forwarding scenarios
 [arc]
 enabled = true
 selector = "arc"
 domain = "mail.example.com"
-private_key_path = "/etc/fune/arc-private.key"
+private_key_path = "/etc/strela/arc-private.key"
 
 [srs]
 enabled = true
@@ -185,7 +185,7 @@ secret = "your-secure-secret-min-16-chars"
 
 ### Email Forwarding Configuration
 
-When using Fune as an email forwarder with `raw_message` mode:
+When using Strela as an email forwarder with `raw_message` mode:
 
 1. **DKIM Signing** (optional but recommended):
    - Signs the forwarded message with your domain's credentials
@@ -206,7 +206,7 @@ When using Fune as an email forwarder with `raw_message` mode:
    - Requires a strong secret (minimum 16 characters)
    - **Applied to all messages (raw and composed) automatically**
 
-**Important**: All three features work seamlessly with `raw_message` mode. When you POST a raw RFC822 message, Fune will:
+**Important**: All three features work seamlessly with `raw_message` mode. When you POST a raw RFC822 message, Strela will:
 - Preserve all original headers
 - Add DKIM-Signature header (if DKIM enabled)
 - Prepend ARC headers (if ARC enabled)
@@ -215,10 +215,10 @@ When using Fune as an email forwarder with `raw_message` mode:
 
 ## Architecture
 
-Fune acts as a gateway between your application and external SMTP servers.
+Strela acts as a gateway between your application and external SMTP servers.
 
 ```
-HTTP Request -> Fune -> MX Lookup -> SMTP Delivery -> HTTP Response
+HTTP Request -> Strela -> MX Lookup -> SMTP Delivery -> HTTP Response
 ```
 
 It handles:

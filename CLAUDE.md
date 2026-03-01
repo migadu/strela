@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Fune is a production-ready, **synchronous** SMTP delivery gateway written in Go. It accepts email messages via HTTP API and delivers them **immediately** to recipient MX servers, returning the SMTP result as a JSON response. No queuing, no async processing, no callbacks.
+Strela is a production-ready, **synchronous** SMTP delivery gateway written in Go. It accepts email messages via HTTP API and delivers them **immediately** to recipient MX servers, returning the SMTP result as a JSON response. No queuing, no async processing, no callbacks.
 
 **Version**: v2.0.0 (Synchronous Architecture)
 **Previous Version**: v1.x used async queue-based architecture (now deprecated)
@@ -13,11 +13,11 @@ Fune is a production-ready, **synchronous** SMTP delivery gateway written in Go.
 
 ### Building
 ```bash
-make build           # Build fune-server
+make build           # Build strela-server
 make clean          # Remove build artifacts
 
 # Or manually:
-go build -o fune-server cmd/fune-server/main.go
+go build -o strela-server cmd/strela-server/main.go
 ```
 
 ### Testing
@@ -33,9 +33,9 @@ make coverage                           # Generate coverage report (opens in bro
 
 ### Running
 ```bash
-./fune-server                           # Run server (uses config.toml)
-./fune-server -config custom.toml       # Run with custom config
-./fune-server -version                  # Show version information
+./strela-server                           # Run server (uses config.toml)
+./strela-server -config custom.toml       # Run with custom config
+./strela-server -version                  # Show version information
 ```
 
 ## Architecture Overview (v2.0 - Synchronous)
@@ -94,7 +94,7 @@ Return JSON response immediately:
 
 4. **Context Propagation**: All operations accept `context.Context` for timeout and cancellation.
    - `delivery_timeout_seconds` enforced via context deadline
-   - Timeout cascade: Client → Load Balancer → Fune → SMTP
+   - Timeout cascade: Client → Load Balancer → Strela → SMTP
 
 5. **IPv6/IPv4 Dual-Stack with Preference**:
    - Separate IPv4 and IPv6 source IP pools
@@ -115,18 +115,18 @@ Return JSON response immediately:
      - Type assertions: Domain rate limiters, MX cache entries
 
 7. **Caller Responsibilities** (IMPORTANT):
-   - ⚠️ **Caller MUST implement queue** (Fune is stateless)
+   - ⚠️ **Caller MUST implement queue** (Strela is stateless)
    - ⚠️ **Caller MUST implement retry logic** (exponential backoff)
-   - ⚠️ **Caller MUST track message IDs** (no idempotency in Fune)
+   - ⚠️ **Caller MUST track message IDs** (no idempotency in Strela)
    - ⚠️ **Caller MUST handle delivery results** (success/temp_fail/hard_bounce)
 
 ## Package Structure
 
 ### Commands (`cmd/`)
-- **fune-server**: Main SMTP delivery gateway (only binary in v2.0)
+- **strela-server**: Main SMTP delivery gateway (only binary in v2.0)
 
 **Removed in v2.0:**
-- ~~fune-admin~~ - Admin CLI tool (no queue to manage)
+- ~~strela-admin~~ - Admin CLI tool (no queue to manage)
 
 ### Core Packages (`internal/`)
 
@@ -221,10 +221,10 @@ Return JSON response immediately:
 #### `metrics/`
 - Prometheus metrics exposition
 - **Key metrics for v2.0**:
-  - `fune_active_deliveries` - Current concurrent deliveries
-  - `fune_deliveries_total` - Total deliveries by status
-  - `fune_delivery_duration_seconds` - Histogram of delivery times
-  - `fune_http_requests_rejected_capacity_total` - Concurrency rejections
+  - `strela_active_deliveries` - Current concurrent deliveries
+  - `strela_deliveries_total` - Total deliveries by status
+  - `strela_delivery_duration_seconds` - Histogram of delivery times
+  - `strela_http_requests_rejected_capacity_total` - Concurrency rejections
   - DNS cache hit/miss rates
   - IP reputation tracking
 
@@ -265,7 +265,7 @@ Return JSON response immediately:
   - **Removed:** `domain` (single domain, replaced by `domains` list)
 
 ### Hot Reloadable Settings
-Trigger with: `kill -HUP <pid>` or `systemctl reload fune`
+Trigger with: `kill -HUP <pid>` or `systemctl reload strela`
 
 **Reloadable:**
 - Source IPs (`source_ips_v4`, `source_ips_v6`)
@@ -519,7 +519,7 @@ Major dependencies (see `go.mod`):
 - ❌ Circuit breaker (`internal/delivery/circuit_breaker.go`)
 - ❌ Retry scheduler (`internal/delivery/retry_scheduler.go`)
 - ❌ Idempotency support (`internal/handler/idempotency.go`)
-- ❌ `fune-admin` CLI tool (`cmd/fune-admin/`)
+- ❌ `strela-admin` CLI tool (`cmd/strela-admin/`)
 
 ### What Was Added
 - ✅ Synchronous delivery with immediate JSON response
@@ -607,24 +607,24 @@ keepalive_timeout 90s;
 ## Troubleshooting Common Issues
 
 ### High Timeout Rate
-- Check `fune_deliveries_total{status="timeout"}` metric
+- Check `strela_deliveries_total{status="timeout"}` metric
 - Increase `delivery_timeout_seconds` if needed
 - Check DNS resolver health
 - Check target MX server response times
 
 ### Concurrency Rejections (503)
-- Check `fune_http_requests_rejected_capacity_total` metric
+- Check `strela_http_requests_rejected_capacity_total` metric
 - Increase `max_concurrent_requests`
-- Add more Fune instances (horizontal scaling)
+- Add more Strela instances (horizontal scaling)
 
 ### High Latency
-- Check `fune_delivery_duration_seconds` histogram
+- Check `strela_delivery_duration_seconds` histogram
 - P95 should be < 5s, P99 < 10s
 - Check DNS cache hit rate
 - Check per-domain rate limiting (may queue requests)
 
 ### Degraded IP Reputation
-- Check `fune_ip_reputation_degraded` metric
+- Check `strela_ip_reputation_degraded` metric
 - Review reputation alert webhook logs
 - Investigate blacklisting (use online blacklist checkers)
 - Rotate to different source IPs
@@ -694,5 +694,6 @@ When receiving SIGINT/SIGTERM:
 
 ---
 
-**Last Updated**: 2026-02-11 (v2.0.6 - Multi-domain SRS support for Gmail rate limiting mitigation)
+**Last Updated**: 2026-03-01 (Project renamed from "Fune" to "Strela")
+**Previous Update**: 2026-02-11 (v2.0.6 - Multi-domain SRS support for Gmail rate limiting mitigation)
 **Next Review**: After load testing and operational documentation

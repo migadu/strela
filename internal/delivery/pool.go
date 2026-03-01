@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"fune/internal/recovery"
+	"strela/internal/recovery"
 
 	"github.com/emersion/go-smtp"
 )

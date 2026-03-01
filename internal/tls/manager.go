@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"fune/internal/config"
-	"fune/internal/tls/storage"
+	"strela/internal/config"
+	"strela/internal/tls/storage"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"

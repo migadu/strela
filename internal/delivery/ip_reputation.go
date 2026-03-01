@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"fune/internal/config"
-	"fune/internal/recovery"
+	"strela/internal/config"
+	"strela/internal/recovery"
 )
 
 // IPState represents the health state of a source IP address.

@@ -1,19 +1,19 @@
-.PHONY: all clean build fune-server fune-admin install test coverage build-linux freebsd help
+.PHONY: all clean build strela-server strela-admin install test coverage build-linux freebsd help
 
 # ====================================================================================
 # Variables
 # ====================================================================================
 
 # Binary names
-FUNE_SERVER_BIN ?= fune-server
-FUNE_ADMIN_BIN ?= fune-admin
+STRELA_SERVER_BIN ?= strela-server
+STRELA_ADMIN_BIN ?= strela-admin
 
 # Target directories
 BIN_DIR ?= ./bin
 
 # Go source paths
-FUNE_SERVER_SRC = ./cmd/fune-server
-FUNE_ADMIN_SRC = ./cmd/fune-admin
+STRELA_SERVER_SRC = ./cmd/strela-server
+STRELA_ADMIN_SRC = ./cmd/strela-admin
 
 # Version Information
 # Override with: make build VERSION=v1.0.0
@@ -27,10 +27,10 @@ LDFLAGS = -ldflags="${LDFLAGS_VARS}"
 
 # Cross-compilation binaries
 BIN_DIR ?= bin
-FUNE_SERVER_LINUX_BINARY ?= fune-linux-amd64
-FUNE_SERVER_FREEBSD_BINARY ?= fune-freebsd-amd64
-FUNE_ADMIN_LINUX_BINARY ?= fune-admin-linux-amd64
-FUNE_ADMIN_FREEBSD_BINARY ?= fune-admin-freebsd-amd64
+STRELA_SERVER_LINUX_BINARY ?= strela-linux-amd64
+STRELA_SERVER_FREEBSD_BINARY ?= strela-freebsd-amd64
+STRELA_ADMIN_LINUX_BINARY ?= strela-admin-linux-amd64
+STRELA_ADMIN_FREEBSD_BINARY ?= strela-admin-freebsd-amd64
 
 
 # ====================================================================================
@@ -43,28 +43,28 @@ all: build
 # Build Targets
 # ====================================================================================
 
-build: fune-server fune-admin
+build: strela-server strela-admin
 
-fune-server:
-	go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_SERVER_BIN) $(FUNE_SERVER_SRC)
+strela-server:
+	go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_SERVER_BIN) $(STRELA_SERVER_SRC)
 
-fune-admin:
-	go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_ADMIN_BIN) $(FUNE_ADMIN_SRC)
+strela-admin:
+	go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_ADMIN_BIN) $(STRELA_ADMIN_SRC)
 
 # ====================================================================================
 # Installation and Cleanup
 # ====================================================================================
 
 install:
-	go install $(FUNE_SERVER_SRC)
+	go install $(STRELA_SERVER_SRC)
 
 clean:
-	rm -f $(BIN_DIR)/$(FUNE_SERVER_BIN)
-	rm -f $(BIN_DIR)/$(FUNE_ADMIN_BIN)
-	rm -f $(BIN_DIR)/$(FUNE_SERVER_LINUX_BINARY)
-	rm -f $(BIN_DIR)/$(FUNE_SERVER_FREEBSD_BINARY)
-	rm -f $(BIN_DIR)/$(FUNE_ADMIN_LINUX_BINARY)
-	rm -f $(BIN_DIR)/$(FUNE_ADMIN_FREEBSD_BINARY)
+	rm -f $(BIN_DIR)/$(STRELA_SERVER_BIN)
+	rm -f $(BIN_DIR)/$(STRELA_ADMIN_BIN)
+	rm -f $(BIN_DIR)/$(STRELA_SERVER_LINUX_BINARY)
+	rm -f $(BIN_DIR)/$(STRELA_SERVER_FREEBSD_BINARY)
+	rm -f $(BIN_DIR)/$(STRELA_ADMIN_LINUX_BINARY)
+	rm -f $(BIN_DIR)/$(STRELA_ADMIN_FREEBSD_BINARY)
 	rm -f coverage.out
 
 # ====================================================================================
@@ -88,13 +88,13 @@ security-scan:
 
 build-linux:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(FUNE_SERVER_LINUX_BINARY) $(FUNE_SERVER_SRC)
-	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(FUNE_ADMIN_LINUX_BINARY) $(FUNE_ADMIN_SRC)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(STRELA_SERVER_LINUX_BINARY) $(STRELA_SERVER_SRC)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="${LDFLAGS_VARS}" -o $(BIN_DIR)/$(STRELA_ADMIN_LINUX_BINARY) $(STRELA_ADMIN_SRC)
 
 freebsd:
 	@mkdir -p $(BIN_DIR)
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_SERVER_FREEBSD_BINARY) $(FUNE_SERVER_SRC)
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(FUNE_ADMIN_FREEBSD_BINARY) $(FUNE_ADMIN_SRC)
+	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_SERVER_FREEBSD_BINARY) $(STRELA_SERVER_SRC)
+	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_ADMIN_FREEBSD_BINARY) $(STRELA_ADMIN_SRC)
 
 # ====================================================================================
 # Help
@@ -104,10 +104,10 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all                Build fune-server and fune-admin (default)"
-	@echo "  build              Build fune-server and fune-admin"
-	@echo "  fune-server        Build the fune-server binary"
-	@echo "  fune-admin         Build the fune-admin binary"
+	@echo "  all                Build strela-server and strela-admin (default)"
+	@echo "  build              Build strela-server and strela-admin"
+	@echo "  strela-server      Build the strela-server binary"
+	@echo "  strela-admin       Build the strela-admin binary"
 	@echo "  install            Install binary to GOPATH/bin"
 	@echo "  clean              Remove build artifacts"
 	@echo "  test               Run tests"

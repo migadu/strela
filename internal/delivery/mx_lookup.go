@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"fune/internal/config"
+	"strela/internal/config"
 )
 
 // MXLookup handles MX record lookups with in-memory caching.

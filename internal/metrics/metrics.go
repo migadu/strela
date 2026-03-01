@@ -28,7 +28,7 @@ func NewMetrics() *Metrics {
 		// Delivery attempts by outcome
 		DeliveryAttempts: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "fune_delivery_attempts_total",
+				Name: "strela_delivery_attempts_total",
 				Help: "Total number of delivery attempts by outcome",
 			},
 			[]string{"outcome"},
@@ -37,7 +37,7 @@ func NewMetrics() *Metrics {
 		// Delivery duration histogram
 		DeliveryDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "fune_delivery_duration_seconds",
+				Name:    "strela_delivery_duration_seconds",
 				Help:    "Time taken for delivery attempts",
 				Buckets: []float64{.1, .5, 1, 2, 5, 10, 30, 60, 120},
 			},
@@ -47,7 +47,7 @@ func NewMetrics() *Metrics {
 		// Active deliveries
 		ActiveDeliveries: promauto.NewGauge(
 			prometheus.GaugeOpts{
-				Name: "fune_active_deliveries",
+				Name: "strela_active_deliveries",
 				Help: "Number of active SMTP deliveries",
 			},
 		),
@@ -55,7 +55,7 @@ func NewMetrics() *Metrics {
 		// HTTP requests by method and status code
 		HTTPRequests: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "fune_http_requests_total",
+				Name: "strela_http_requests_total",
 				Help: "Total number of HTTP requests by method and status code",
 			},
 			[]string{"method", "path", "status"},
@@ -64,7 +64,7 @@ func NewMetrics() *Metrics {
 		// HTTP request duration histogram
 		HTTPDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "fune_http_request_duration_seconds",
+				Name:    "strela_http_request_duration_seconds",
 				Help:    "HTTP request latency",
 				Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
 			},
@@ -74,7 +74,7 @@ func NewMetrics() *Metrics {
 		// HTTP requests rejected due to capacity (concurrency limit)
 		HTTPRequestsRejectedCapacity: promauto.NewCounter(
 			prometheus.CounterOpts{
-				Name: "fune_http_requests_rejected_capacity_total",
+				Name: "strela_http_requests_rejected_capacity_total",
 				Help: "Total HTTP requests rejected due to concurrency limit",
 			},
 		),
@@ -82,7 +82,7 @@ func NewMetrics() *Metrics {
 		// IP reputation - number of degraded IPs by source IP
 		IPReputationDegraded: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "fune_ip_reputation_degraded",
+				Name: "strela_ip_reputation_degraded",
 				Help: "IP reputation status (1=degraded, 0=healthy) by source IP",
 			},
 			[]string{"source_ip"},
@@ -91,7 +91,7 @@ func NewMetrics() *Metrics {
 		// IP reputation events (degraded, recovered)
 		IPReputationEvents: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "fune_ip_reputation_events_total",
+				Name: "strela_ip_reputation_events_total",
 				Help: "Total number of IP reputation events by event type and source IP",
 			},
 			[]string{"event_type", "source_ip"},

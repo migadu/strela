@@ -1,4 +1,4 @@
-// Package config provides TOML-based configuration management for the Fune SMTP delivery service.
+// Package config provides TOML-based configuration management for the Strela SMTP delivery service.
 package config
 
 import (

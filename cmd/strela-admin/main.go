@@ -14,8 +14,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"fune/internal/config"
-	"fune/internal/tls/storage"
+	"strela/internal/config"
+	"strela/internal/tls/storage"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -71,10 +71,10 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `fune-admin - Administration tool for Fune SMTP delivery gateway
+	fmt.Fprintf(os.Stderr, `strela-admin - Administration tool for Strela SMTP delivery gateway
 
 Usage:
-  fune-admin [flags] <command>
+  strela-admin [flags] <command>
 
 Commands:
   tls                Manage TLS certificates (list, delete, clean, sync)
@@ -85,18 +85,18 @@ Flags:
   -version           Show version information
 
 Examples:
-  fune-admin version
-  fune-admin tls list
-  fune-admin tls delete example.com
-  fune-admin tls clean
-  fune-admin tls sync
-  fune-admin -config /etc/fune/config.toml tls list
+  strela-admin version
+  strela-admin tls list
+  strela-admin tls delete example.com
+  strela-admin tls clean
+  strela-admin tls sync
+  strela-admin -config /etc/strela/config.toml tls list
 
 `)
 }
 
 func cmdVersion() {
-	fmt.Printf("fune-admin %s\n", version)
+	fmt.Printf("strela-admin %s\n", version)
 	fmt.Printf("  commit: %s\n", commit)
 	fmt.Printf("  built:  %s\n", date)
 }
@@ -132,7 +132,7 @@ func printTLSUsage() {
 	fmt.Fprintf(os.Stderr, `TLS Certificate Management
 
 Usage:
-  fune-admin tls <subcommand> [arguments]
+  strela-admin tls <subcommand> [arguments]
 
 Subcommands:
   list, ls           List all certificates in storage
@@ -142,10 +142,10 @@ Subcommands:
   help               Show this help message
 
 Examples:
-  fune-admin tls list
-  fune-admin tls delete example.com
-  fune-admin tls clean
-  fune-admin tls sync
+  strela-admin tls list
+  strela-admin tls delete example.com
+  strela-admin tls clean
+  strela-admin tls sync
 
 Notes:
   - Commands require a valid config.toml with TLS configuration
@@ -249,8 +249,8 @@ func handleTLSList(ctx context.Context) {
 func handleTLSDelete(ctx context.Context) {
 	if flag.NArg() < 3 {
 		fmt.Fprintln(os.Stderr, "Error: delete requires a domain argument")
-		fmt.Fprintln(os.Stderr, "Usage: fune-admin tls delete <domain>")
-		fmt.Fprintln(os.Stderr, "Example: fune-admin tls delete example.com")
+		fmt.Fprintln(os.Stderr, "Usage: strela-admin tls delete <domain>")
+		fmt.Fprintln(os.Stderr, "Example: strela-admin tls delete example.com")
 		os.Exit(1)
 	}
 

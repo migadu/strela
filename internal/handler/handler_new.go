@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"fune/internal/config"
-	"fune/internal/delivery"
-	"fune/internal/dkim"
+	"strela/internal/config"
+	"strela/internal/delivery"
+	"strela/internal/dkim"
 
 	"github.com/emersion/go-message/mail"
 )
@@ -69,8 +69,8 @@ type Attachment struct {
 
 // MessageRequest represents the JSON request body for message submission.
 // Supports two modes:
-// 1. Composed mode: Provide from, to, subject, text/html (Fune builds MIME message)
-// 2. Raw mode: Provide from, to, raw_message (Fune forwards pre-built RFC822 message)
+// 1. Composed mode: Provide from, to, subject, text/html (Strela builds MIME message)
+// 2. Raw mode: Provide from, to, raw_message (Strela forwards pre-built RFC822 message)
 type MessageRequest struct {
 	From               string                       `json:"from"`
 	To                 string                       `json:"to"`

@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"fune/internal/config"
-	"fune/internal/delivery"
-	"fune/internal/handler"
+	"strela/internal/config"
+	"strela/internal/delivery"
+	"strela/internal/handler"
 )
 
 // Helper to create a test server with given config
@@ -727,7 +727,7 @@ func TestDNSFailure(t *testing.T) {
 	defer server.Close()
 
 	// Domain with no MX records (very unlikely to exist)
-	msg := createTestMessage("user@nonexistent-domain-12345-fune-test.invalid")
+	msg := createTestMessage("user@nonexistent-domain-12345-strela-test.invalid")
 	resp, result := postMessage(t, server.URL, msg)
 
 	// Should return error status

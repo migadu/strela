@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"fune/internal/config"
-	"fune/internal/srs"
+	"strela/internal/config"
+	"strela/internal/srs"
 )
 
 func TestNewDeliverer(t *testing.T) {

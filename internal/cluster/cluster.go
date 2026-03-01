@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"fune/internal/recovery"
+	"strela/internal/recovery"
 
 	"github.com/hashicorp/memberlist"
 )
@@ -85,7 +85,7 @@ func NewCluster(cfg Config) (*Cluster, error) {
 	// Set event delegate for membership changes (triggers leader recalculation)
 	mlConfig.Events = cluster
 
-	// Minimal delegate (no custom gossip messages needed for fune)
+	// Minimal delegate (no custom gossip messages needed for strela)
 	mlConfig.Delegate = cluster
 
 	// Disable memberlist's built-in logging (route to slog)

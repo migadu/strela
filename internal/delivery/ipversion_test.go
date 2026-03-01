@@ -3,7 +3,7 @@ package delivery
 import (
 	"testing"
 
-	"fune/internal/config"
+	"strela/internal/config"
 )
 
 func TestIPRotator_OnlyIPv4(t *testing.T) {

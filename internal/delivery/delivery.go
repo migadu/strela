@@ -15,11 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"fune/internal/arc"
-	"fune/internal/config"
-	"fune/internal/dkim"
-	"fune/internal/recovery"
-	"fune/internal/srs"
+	"strela/internal/arc"
+	"strela/internal/config"
+	"strela/internal/dkim"
+	"strela/internal/recovery"
+	"strela/internal/srs"
 
 	"github.com/emersion/go-smtp"
 )

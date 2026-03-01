@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"fune/internal/config"
+	"strela/internal/config"
 
 	"github.com/emersion/go-smtp"
 )

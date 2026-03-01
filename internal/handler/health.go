@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"fune/internal/delivery"
+	"strela/internal/delivery"
 )
 
 // HealthHandler provides health and status information.

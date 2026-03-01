@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"fune/internal/config"
+	"strela/internal/config"
 
 	"log/slog"
 	"os"

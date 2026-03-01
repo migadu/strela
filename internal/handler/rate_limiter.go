@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"fune/internal/recovery"
+	"strela/internal/recovery"
 )
 
 // RateLimiter implements a token bucket rate limiter per client IP address.

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"fune/internal/config"
-	"fune/internal/delivery"
+	"strela/internal/config"
+	"strela/internal/delivery"
 )
 
 func TestBuildRawMessage_MessageID(t *testing.T) {

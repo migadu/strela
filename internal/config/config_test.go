@@ -203,13 +203,13 @@ func TestS3PrefixNormalization(t *testing.T) {
 		},
 		{
 			name:     "nested prefix without trailing slash",
-			input:    "fune/prod",
-			expected: "fune/prod/",
+			input:    "strela/prod",
+			expected: "strela/prod/",
 		},
 		{
 			name:     "nested prefix with trailing slash",
-			input:    "fune/prod/",
-			expected: "fune/prod/",
+			input:    "strela/prod/",
+			expected: "strela/prod/",
 		},
 		{
 			name:     "prefix with leading slash",
@@ -228,8 +228,8 @@ func TestS3PrefixNormalization(t *testing.T) {
 		},
 		{
 			name:     "nested prefix with leading slash",
-			input:    "/fune/prod",
-			expected: "fune/prod/",
+			input:    "/strela/prod",
+			expected: "strela/prod/",
 		},
 		{
 			name:     "only slashes becomes empty",

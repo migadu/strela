@@ -1,15 +1,15 @@
 [Unit]
-Description=Fune v2.0 SMTP Delivery Gateway (Synchronous)
+Description=Strela v2.0 SMTP Delivery Gateway (Synchronous)
 After=network-online.target
 Wants=network-online.target
-Documentation=https://github.com/migadu/fune
+Documentation=https://github.com/migadu/strela
 
 [Service]
 Type=simple
-User=fune
-Group=fune
-WorkingDirectory=/opt/fune
-ExecStart=/opt/fune/bin/fune-server --config /etc/fune/config.toml
+User=strela
+Group=strela
+WorkingDirectory=/opt/strela
+ExecStart=/opt/strela/bin/strela-server --config /etc/strela/config.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10s
@@ -40,12 +40,12 @@ RestrictRealtime=true
 RestrictNamespaces=true
 
 # v2.0: Only need write access for Let's Encrypt cache (if using file storage)
-ReadWritePaths=/var/lib/fune
+ReadWritePaths=/var/lib/strela
 
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=fune
+SyslogIdentifier=strela
 
 # Watchdog (optional - requires systemd notify support in code)
 # WatchdogSec=30s

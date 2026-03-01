@@ -1,10 +1,10 @@
 # Build artifacts
-./fune-server
-./fune-admin
-./fune-linux-amd64
-./fune-admin-linux-amd64
-./fune-freebsd-amd64
-./fune-admin-freebsd-amd64
+./strela-server
+./strela-admin
+./strela-linux-amd64
+./strela-admin-linux-amd64
+./strela-freebsd-amd64
+./strela-admin-freebsd-amd64
 bin/*
 
 # Runtime files
@@ -20,6 +20,6 @@ config.toml
 *.pem
 *.key
 test-config.toml
-./fune-server
-./fune-admin
+./strela-server
+./strela-admin
 bin/

@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"fune/internal/cluster"
-	"fune/internal/config"
-	"fune/internal/delivery"
-	"fune/internal/handler"
-	"fune/internal/metrics"
-	"fune/internal/recovery"
-	tlsmanager "fune/internal/tls"
+	"strela/internal/cluster"
+	"strela/internal/config"
+	"strela/internal/delivery"
+	"strela/internal/handler"
+	"strela/internal/metrics"
+	"strela/internal/recovery"
+	tlsmanager "strela/internal/tls"
 
 	"log/slog"
 
@@ -48,7 +48,7 @@ func basicAuthMiddleware(next http.Handler, username, password string, logger *s
 }
 
 func cmdVersion() {
-	fmt.Printf("fune-server %s\n", version)
+	fmt.Printf("strela-server %s\n", version)
 	fmt.Printf("  commit: %s\n", commit)
 	fmt.Printf("  built:  %s\n", date)
 }
@@ -77,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("starting fune SMTP delivery service", "version", version, "config", *configPath)
+	logger.Info("starting strela SMTP delivery service", "version", version, "config", *configPath)
 
 	// Warn if auth_token is not configured
 	if tempCfg.Inbound.AuthToken == "" {

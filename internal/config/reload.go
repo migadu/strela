@@ -14,7 +14,7 @@ import (
 //
 // This type enables runtime configuration updates without service restart.
 // Configuration changes are triggered by sending a SIGHUP signal to the process
-// (typically via `kill -HUP <pid>` or `pkill -HUP fune-server`).
+// (typically via `kill -HUP <pid>` or `pkill -HUP strela-server`).
 //
 // The reload process:
 //  1. Load new config from disk

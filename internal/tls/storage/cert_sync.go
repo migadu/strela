@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"fune/internal/recovery"
+	"strela/internal/recovery"
 )
 
 // CertSyncWorker manages periodic synchronization of certificates from local cache to S3.
