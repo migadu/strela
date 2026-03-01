@@ -105,9 +105,7 @@ Flags:
   -version           Show version information
 
 Authentication:
-  strela-admin reads HTTP Basic Auth credentials from config.toml.
-  [health] credentials are used for the health command.
-  [metrics] credentials are used for the stats command.
+  strela-admin reads HTTP Basic Auth credentials from config.toml [admin] section.
   If no credentials are configured, requests are sent without authentication.
 
 Examples:
@@ -139,20 +137,21 @@ func loadConfigSilent() *config.Config {
 	return cfg
 }
 
-// resolveServerURL determines the server URL from flag, config, or default.
+// resolveServerURL determines the admin server URL from flag, config, or default.
+// The admin server (health + metrics) runs on health.listen_addr, separate from the main API.
 func resolveServerURL(cfg *config.Config) string {
 	if serverURL != "" {
 		return serverURL
 	}
-	if cfg != nil && cfg.Inbound.Listen != "" {
-		listen := cfg.Inbound.Listen
+	if cfg != nil && cfg.Admin.ListenAddr != "" {
+		listen := cfg.Admin.ListenAddr
 		// If it starts with ":", add localhost
 		if strings.HasPrefix(listen, ":") {
 			return "http://localhost" + listen
 		}
 		return "http://" + listen
 	}
-	return "http://localhost:8080"
+	return "http://127.0.0.1:8080"
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -180,8 +179,8 @@ func cmdHealth() {
 
 	var username, password string
 	if cfg != nil {
-		username = cfg.Health.Username
-		password = cfg.Health.Password
+		username = cfg.Admin.Username
+		password = cfg.Admin.Password
 	}
 
 	body, err := httpGetWithAuth(url+"/health", username, password)
@@ -230,8 +229,8 @@ func cmdStats() {
 	var username, password string
 	var metricsPath string
 	if cfg != nil {
-		username = cfg.Metrics.Username
-		password = cfg.Metrics.Password
+		username = cfg.Admin.Username
+		password = cfg.Admin.Password
 		metricsPath = cfg.Metrics.Path
 	}
 	if metricsPath == "" {

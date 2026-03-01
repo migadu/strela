@@ -70,13 +70,15 @@ cache_negative_ttl_seconds = 60             # Cache failed MX lookups (1 minute)
 
 [metrics]
 enabled = true
-path = "/metrics"                           # Prometheus metrics endpoint
+path = "/metrics"                           # Prometheus metrics endpoint path (served on admin server)
+
+[admin]
+# Admin server: serves /health and /metrics on a separate localhost-only listener.
+# Not exposed publicly — use strela-admin to query from the local machine.
+enabled = true
+listen_addr = "127.0.0.1:8080"             # Localhost-only admin server (health + metrics)
 # username = "admin"                        # Optional basic auth
 # password = "secure-password"
-
-[health]
-enabled = true
-listen_addr = ":8080"                       # Health check endpoint (separate from main API)
 
 [outbound]
 # Source IP configuration - supports individual IPs and CIDR subnets

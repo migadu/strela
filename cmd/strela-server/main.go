@@ -37,9 +37,10 @@ func basicAuthMiddleware(next http.Handler, username, password string, logger *s
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != username || pass != password {
-			logger.Warn("metrics endpoint unauthorized access attempt",
-				"remote_addr", r.RemoteAddr)
-			w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
+			logger.Warn("admin endpoint unauthorized access attempt",
+				"remote_addr", r.RemoteAddr,
+				"path", r.URL.Path)
+			w.Header().Set("WWW-Authenticate", `Basic realm="Admin"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -146,25 +147,42 @@ func main() {
 
 	mux.Handle("/deliver", apiHandler)
 
-	// Metrics Endpoint
-	if m != nil && cfg.Metrics.Path != "" {
-		metricsHandler := promhttp.Handler()
-		if cfg.Metrics.Username != "" && cfg.Metrics.Password != "" {
-			metricsHandler = basicAuthMiddleware(metricsHandler, cfg.Metrics.Username, cfg.Metrics.Password, logger)
-		}
-		mux.Handle(cfg.Metrics.Path, metricsHandler)
-	}
+	// Admin server (health + metrics) on separate localhost-only listener
+	var adminServer *http.Server
+	if cfg.Admin.Enabled {
+		adminMux := http.NewServeMux()
 
-	// Health Endpoint
-	if cfg.Health.Enabled {
-		healthHandler := handler.NewHealthHandler(deliverer, logger)
-		var finalHealthHandler http.Handler = healthHandler
-		if cfg.Health.Username != "" && cfg.Health.Password != "" {
-			finalHealthHandler = basicAuthMiddleware(healthHandler, cfg.Health.Username, cfg.Health.Password, logger)
+		// Health Endpoint
+		adminMux.Handle("/health", handler.NewHealthHandler(deliverer, logger))
+
+		// Metrics Endpoint (served on admin port alongside health)
+		if m != nil && cfg.Metrics.Path != "" {
+			adminMux.Handle(cfg.Metrics.Path, promhttp.Handler())
 		}
-		// Add panic recovery to health endpoint
-		finalHealthHandler = handler.PanicRecoveryMiddleware(finalHealthHandler, logger)
-		mux.Handle("/health", finalHealthHandler)
+
+		// Apply admin-level auth and panic recovery to all admin endpoints
+		var adminHandler http.Handler = adminMux
+		if cfg.Admin.Username != "" && cfg.Admin.Password != "" {
+			adminHandler = basicAuthMiddleware(adminMux, cfg.Admin.Username, cfg.Admin.Password, logger)
+		}
+		adminHandler = handler.PanicRecoveryMiddleware(adminHandler, logger)
+
+		adminServer = &http.Server{
+			Addr:         cfg.Admin.ListenAddr,
+			Handler:      adminHandler,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  30 * time.Second,
+			ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
+		}
+
+		recovery.SafeGo(logger, "admin-server", func() {
+			logger.Info("admin server starting (health + metrics)", "addr", cfg.Admin.ListenAddr)
+			if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("admin server failed", "error", err)
+				os.Exit(1)
+			}
+		})
 	}
 
 	// Initialize cluster for leader election (if enabled)
@@ -273,6 +291,14 @@ func main() {
 		logger.Error("HTTP server shutdown error", "error", err)
 	}
 	logger.Info("HTTP server stopped")
+
+	// 1b. Stop admin server (health + metrics)
+	if adminServer != nil {
+		if err := adminServer.Shutdown(ctx); err != nil {
+			logger.Error("admin server shutdown error", "error", err)
+		}
+		logger.Info("admin server stopped")
+	}
 
 	// 2. Stop rate limiter cleanup goroutine
 	if rateLimiter != nil {

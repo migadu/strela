@@ -17,7 +17,7 @@ type Config struct {
 	TLS        TLSConfig        `toml:"tls"`
 	DNS        DNSConfig        `toml:"dns"`
 	Metrics    MetricsConfig    `toml:"metrics"`
-	Health     HealthConfig     `toml:"health"`
+	Admin      AdminConfig      `toml:"admin"`
 	Outbound   OutboundConfig   `toml:"outbound"`
 	Reputation ReputationConfig `toml:"reputation"`
 	Cluster    ClusterConfig    `toml:"cluster"`
@@ -51,18 +51,17 @@ type InboundConfig struct {
 	MaxConcurrentRequests int `toml:"max_concurrent_requests"` // Maximum concurrent HTTP requests (0 = unlimited)
 }
 
-// MetricsConfig configures the Prometheus metrics endpoint.
+// MetricsConfig configures the Prometheus metrics endpoint (served on the admin server).
 type MetricsConfig struct {
-	Enabled  bool   `toml:"enabled"`  // Enable Prometheus metrics endpoint (default: true)
-	Path     string `toml:"path"`     // Path for metrics endpoint (default: /metrics)
-	Username string `toml:"username"` // HTTP Basic Auth username (optional, secure in production)
-	Password string `toml:"password"` // HTTP Basic Auth password (optional, use strong password)
+	Enabled bool   `toml:"enabled"` // Enable Prometheus metrics endpoint (default: true)
+	Path    string `toml:"path"`    // Path for metrics endpoint (default: /metrics)
 }
 
-// HealthConfig configures the health check endpoint.
-type HealthConfig struct {
-	Enabled    bool   `toml:"enabled"`     // Enable health check endpoint (default: true)
-	ListenAddr string `toml:"listen_addr"` // Address to listen on (default: :8080)
+// AdminConfig configures the admin server (health + metrics endpoints).
+// This server listens on a separate localhost-only address to avoid public exposure.
+type AdminConfig struct {
+	Enabled    bool   `toml:"enabled"`     // Enable admin server with health + metrics (default: true)
+	ListenAddr string `toml:"listen_addr"` // Address for admin server (default: 127.0.0.1:8080)
 	Username   string `toml:"username"`    // HTTP Basic Auth username (optional)
 	Password   string `toml:"password"`    // HTTP Basic Auth password (optional)
 }
@@ -247,9 +246,9 @@ func (c *Config) SetDefaults() {
 		c.Metrics.Path = "/metrics"
 	}
 
-	// Health defaults
-	if c.Health.ListenAddr == "" {
-		c.Health.ListenAddr = ":8080"
+	// Admin server defaults (localhost-only for security)
+	if c.Admin.ListenAddr == "" {
+		c.Admin.ListenAddr = "127.0.0.1:8080"
 	}
 
 	if c.TLS.Provider == "" {
