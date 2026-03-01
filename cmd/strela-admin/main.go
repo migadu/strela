@@ -5,12 +5,18 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"math"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -21,6 +27,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -32,11 +40,15 @@ var (
 )
 
 var (
+	serverURL   string
+	timeout     time.Duration
 	configFile  string
 	showVersion bool
 )
 
 func init() {
+	flag.StringVar(&serverURL, "server", "", "Strela server URL (default: from config or http://localhost:8080)")
+	flag.DurationVar(&timeout, "timeout", 10*time.Second, "Request timeout")
 	flag.StringVar(&configFile, "config", "config.toml", "Path to config file")
 	flag.BoolVar(&showVersion, "version", false, "Show version information")
 }
@@ -59,6 +71,10 @@ func main() {
 	command := flag.Arg(0)
 
 	switch command {
+	case "health":
+		cmdHealth()
+	case "stats":
+		cmdStats()
 	case "tls":
 		cmdTLS()
 	case "version", "-version", "--version":
@@ -77,20 +93,33 @@ Usage:
   strela-admin [flags] <command>
 
 Commands:
+  health             Show server health status and system information
+  stats              Show delivery and request statistics (from Prometheus metrics)
   tls                Manage TLS certificates (list, delete, clean, sync)
   version            Show version information
 
 Flags:
+  -server string     Strela server URL (default: from config or http://localhost:8080)
+  -timeout duration  Request timeout (default 10s)
   -config string     Path to config file (default "config.toml")
   -version           Show version information
 
+Authentication:
+  strela-admin reads HTTP Basic Auth credentials from config.toml.
+  [health] credentials are used for the health command.
+  [metrics] credentials are used for the stats command.
+  If no credentials are configured, requests are sent without authentication.
+
 Examples:
   strela-admin version
+  strela-admin health
+  strela-admin stats
+  strela-admin -server http://mail.example.com:8080 health
+  strela-admin -config /etc/strela/config.toml stats
   strela-admin tls list
   strela-admin tls delete example.com
   strela-admin tls clean
   strela-admin tls sync
-  strela-admin -config /etc/strela/config.toml tls list
 
 `)
 }
@@ -100,6 +129,463 @@ func cmdVersion() {
 	fmt.Printf("  commit: %s\n", commit)
 	fmt.Printf("  built:  %s\n", date)
 }
+
+// loadConfigSilent loads config for credentials, returning nil on error.
+func loadConfigSilent() *config.Config {
+	cfg, err := config.LoadConfig(configFile)
+	if err != nil {
+		return nil
+	}
+	return cfg
+}
+
+// resolveServerURL determines the server URL from flag, config, or default.
+func resolveServerURL(cfg *config.Config) string {
+	if serverURL != "" {
+		return serverURL
+	}
+	if cfg != nil && cfg.Inbound.Listen != "" {
+		listen := cfg.Inbound.Listen
+		// If it starts with ":", add localhost
+		if strings.HasPrefix(listen, ":") {
+			return "http://localhost" + listen
+		}
+		return "http://" + listen
+	}
+	return "http://localhost:8080"
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Health command
+// ──────────────────────────────────────────────────────────────────────────────
+
+// HealthResponse represents the health check response from the server.
+type HealthResponse struct {
+	Status    string       `json:"status"`
+	Timestamp string       `json:"timestamp"`
+	Uptime    string       `json:"uptime"`
+	System    SystemHealth `json:"system"`
+}
+
+type SystemHealth struct {
+	GoVersion     string `json:"go_version"`
+	Goroutines    int    `json:"goroutines"`
+	MemoryMB      uint64 `json:"memory_mb"`
+	MemoryAllocMB uint64 `json:"memory_alloc_mb"`
+}
+
+func cmdHealth() {
+	cfg := loadConfigSilent()
+	url := resolveServerURL(cfg)
+
+	var username, password string
+	if cfg != nil {
+		username = cfg.Health.Username
+		password = cfg.Health.Password
+	}
+
+	body, err := httpGetWithAuth(url+"/health", username, password)
+	if err != nil {
+		fatal("Failed to get health status: %v", err)
+	}
+
+	var health HealthResponse
+	if err := json.Unmarshal(body, &health); err != nil {
+		fatal("Failed to parse health response: %v", err)
+	}
+
+	// Overall status
+	statusIcon := "✓"
+	if health.Status != "healthy" {
+		statusIcon = "✗"
+	}
+	fmt.Printf("%s Status: %s\n", statusIcon, strings.ToUpper(health.Status))
+	fmt.Println()
+
+	// Server info
+	fmt.Println("Server")
+	fmt.Println("──────")
+	fmt.Printf("  %-22s %s\n", "Timestamp:", health.Timestamp)
+	fmt.Printf("  %-22s %s\n", "Uptime:", health.Uptime)
+	fmt.Println()
+
+	// System info
+	fmt.Println("System")
+	fmt.Println("──────")
+	fmt.Printf("  %-22s %s\n", "Go version:", health.System.GoVersion)
+	fmt.Printf("  %-22s %d\n", "Goroutines:", health.System.Goroutines)
+	fmt.Printf("  %-22s %d MB\n", "Memory (sys):", health.System.MemoryMB)
+	fmt.Printf("  %-22s %d MB\n", "Memory (alloc):", health.System.MemoryAllocMB)
+	fmt.Println()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Stats command
+// ──────────────────────────────────────────────────────────────────────────────
+
+func cmdStats() {
+	cfg := loadConfigSilent()
+	url := resolveServerURL(cfg)
+
+	var username, password string
+	var metricsPath string
+	if cfg != nil {
+		username = cfg.Metrics.Username
+		password = cfg.Metrics.Password
+		metricsPath = cfg.Metrics.Path
+	}
+	if metricsPath == "" {
+		metricsPath = "/metrics"
+	}
+
+	body, err := httpGetWithAuth(url+metricsPath, username, password)
+	if err != nil {
+		fatal("Failed to get metrics: %v", err)
+	}
+
+	// Parse Prometheus exposition format
+	parser := expfmt.TextParser{}
+	families, err := parser.TextToMetricFamilies(strings.NewReader(string(body)))
+	if err != nil {
+		fatal("Failed to parse metrics: %v", err)
+	}
+
+	printDeliveryStats(families)
+	printHTTPStats(families)
+	printIPReputationStats(families)
+}
+
+func printDeliveryStats(families map[string]*dto.MetricFamily) {
+	fmt.Println("Delivery Statistics")
+	fmt.Println("===================")
+	fmt.Println()
+
+	// Active deliveries
+	if fam, ok := families["strela_active_deliveries"]; ok {
+		for _, m := range fam.GetMetric() {
+			fmt.Printf("  Active deliveries:      %.0f\n", m.GetGauge().GetValue())
+		}
+		fmt.Println()
+	}
+
+	// Delivery attempts by outcome
+	if fam, ok := families["strela_delivery_attempts_total"]; ok {
+		type outcomeEntry struct {
+			outcome string
+			count   float64
+		}
+		var entries []outcomeEntry
+		var total float64
+
+		for _, m := range fam.GetMetric() {
+			outcome := getLabelValue(m, "outcome")
+			count := m.GetCounter().GetValue()
+			entries = append(entries, outcomeEntry{outcome, count})
+			total += count
+		}
+
+		if len(entries) > 0 {
+			// Sort by count descending
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].count > entries[j].count
+			})
+
+			fmt.Println("  Delivery Attempts by Outcome")
+			fmt.Println("  ────────────────────────────")
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "  OUTCOME\tCOUNT\tPERCENT")
+
+			for _, e := range entries {
+				pct := 0.0
+				if total > 0 {
+					pct = e.count / total * 100
+				}
+				fmt.Fprintf(w, "  %s\t%.0f\t%5.1f%%\n", e.outcome, e.count, pct)
+			}
+			fmt.Fprintf(w, "  %s\t%.0f\t\n", "TOTAL", total)
+			w.Flush()
+			fmt.Println()
+		}
+	}
+
+	// Delivery duration summary
+	if fam, ok := families["strela_delivery_duration_seconds"]; ok {
+		type durationEntry struct {
+			outcome string
+			count   uint64
+			sum     float64
+		}
+		var entries []durationEntry
+
+		for _, m := range fam.GetMetric() {
+			outcome := getLabelValue(m, "outcome")
+			h := m.GetHistogram()
+			if h.GetSampleCount() > 0 {
+				entries = append(entries, durationEntry{outcome, h.GetSampleCount(), h.GetSampleSum()})
+			}
+		}
+
+		if len(entries) > 0 {
+			fmt.Println("  Delivery Duration (average)")
+			fmt.Println("  ───────────────────────────")
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "  OUTCOME\tCOUNT\tAVG DURATION")
+
+			for _, e := range entries {
+				avg := e.sum / float64(e.count)
+				fmt.Fprintf(w, "  %s\t%d\t%s\n", e.outcome, e.count, formatDuration(avg))
+			}
+			w.Flush()
+			fmt.Println()
+		}
+	}
+}
+
+func printHTTPStats(families map[string]*dto.MetricFamily) {
+	fmt.Println("HTTP Request Statistics")
+	fmt.Println("=======================")
+	fmt.Println()
+
+	// HTTP requests by method, path, status
+	if fam, ok := families["strela_http_requests_total"]; ok {
+		type requestEntry struct {
+			method string
+			path   string
+			status string
+			count  float64
+		}
+		var entries []requestEntry
+		var total float64
+
+		for _, m := range fam.GetMetric() {
+			method := getLabelValue(m, "method")
+			path := getLabelValue(m, "path")
+			status := getLabelValue(m, "status")
+			count := m.GetCounter().GetValue()
+			entries = append(entries, requestEntry{method, path, status, count})
+			total += count
+		}
+
+		if len(entries) > 0 {
+			// Sort by count descending
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].count > entries[j].count
+			})
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "  METHOD\tPATH\tSTATUS\tCOUNT")
+			fmt.Fprintln(w, "  ──────\t────\t──────\t─────")
+
+			for _, e := range entries {
+				fmt.Fprintf(w, "  %s\t%s\t%s\t%.0f\n", e.method, e.path, e.status, e.count)
+			}
+			fmt.Fprintf(w, "  \t\tTOTAL\t%.0f\n", total)
+			w.Flush()
+			fmt.Println()
+		}
+	}
+
+	// Rejected due to capacity
+	if fam, ok := families["strela_http_requests_rejected_capacity_total"]; ok {
+		for _, m := range fam.GetMetric() {
+			count := m.GetCounter().GetValue()
+			if count > 0 {
+				fmt.Printf("  Rejected (capacity):    %.0f\n", count)
+				fmt.Println()
+			}
+		}
+	}
+
+	// HTTP duration summary
+	if fam, ok := families["strela_http_request_duration_seconds"]; ok {
+		type durationEntry struct {
+			method string
+			path   string
+			count  uint64
+			sum    float64
+		}
+		var entries []durationEntry
+
+		for _, m := range fam.GetMetric() {
+			method := getLabelValue(m, "method")
+			path := getLabelValue(m, "path")
+			h := m.GetHistogram()
+			if h.GetSampleCount() > 0 {
+				entries = append(entries, durationEntry{method, path, h.GetSampleCount(), h.GetSampleSum()})
+			}
+		}
+
+		if len(entries) > 0 {
+			fmt.Println("  Request Duration (average)")
+			fmt.Println("  ──────────────────────────")
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "  METHOD\tPATH\tCOUNT\tAVG DURATION")
+
+			for _, e := range entries {
+				avg := e.sum / float64(e.count)
+				fmt.Fprintf(w, "  %s\t%s\t%d\t%s\n", e.method, e.path, e.count, formatDuration(avg))
+			}
+			w.Flush()
+			fmt.Println()
+		}
+	}
+}
+
+func printIPReputationStats(families map[string]*dto.MetricFamily) {
+	// Check if there's any IP reputation data
+	degradedFam, hasDegraded := families["strela_ip_reputation_degraded"]
+	eventsFam, hasEvents := families["strela_ip_reputation_events_total"]
+
+	if !hasDegraded && !hasEvents {
+		return
+	}
+
+	fmt.Println("IP Reputation")
+	fmt.Println("=============")
+	fmt.Println()
+
+	// Degraded status per IP
+	if hasDegraded {
+		type ipStatus struct {
+			ip       string
+			degraded bool
+		}
+		var statuses []ipStatus
+
+		for _, m := range degradedFam.GetMetric() {
+			ip := getLabelValue(m, "source_ip")
+			isDegraded := m.GetGauge().GetValue() > 0
+			statuses = append(statuses, ipStatus{ip, isDegraded})
+		}
+
+		if len(statuses) > 0 {
+			// Sort: degraded first, then alphabetically
+			sort.Slice(statuses, func(i, j int) bool {
+				if statuses[i].degraded != statuses[j].degraded {
+					return statuses[i].degraded
+				}
+				return statuses[i].ip < statuses[j].ip
+			})
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "  SOURCE IP\tSTATUS")
+			fmt.Fprintln(w, "  ─────────\t──────")
+
+			for _, s := range statuses {
+				status := "✓ healthy"
+				if s.degraded {
+					status = "✗ degraded"
+				}
+				fmt.Fprintf(w, "  %s\t%s\n", s.ip, status)
+			}
+			w.Flush()
+			fmt.Println()
+		}
+	}
+
+	// Reputation events
+	if hasEvents {
+		type eventEntry struct {
+			ip        string
+			eventType string
+			count     float64
+		}
+		var entries []eventEntry
+
+		for _, m := range eventsFam.GetMetric() {
+			ip := getLabelValue(m, "source_ip")
+			eventType := getLabelValue(m, "event_type")
+			count := m.GetCounter().GetValue()
+			entries = append(entries, eventEntry{ip, eventType, count})
+		}
+
+		if len(entries) > 0 {
+			sort.Slice(entries, func(i, j int) bool {
+				if entries[i].ip != entries[j].ip {
+					return entries[i].ip < entries[j].ip
+				}
+				return entries[i].eventType < entries[j].eventType
+			})
+
+			fmt.Println("  Reputation Events")
+			fmt.Println("  ─────────────────")
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "  SOURCE IP\tEVENT\tCOUNT")
+
+			for _, e := range entries {
+				fmt.Fprintf(w, "  %s\t%s\t%.0f\n", e.ip, e.eventType, e.count)
+			}
+			w.Flush()
+			fmt.Println()
+		}
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Prometheus helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+func getLabelValue(m *dto.Metric, name string) string {
+	for _, l := range m.GetLabel() {
+		if l.GetName() == name {
+			return l.GetValue()
+		}
+	}
+	return ""
+}
+
+func formatDuration(seconds float64) string {
+	if seconds < 0.001 {
+		return fmt.Sprintf("%.0fµs", seconds*1_000_000)
+	}
+	if seconds < 1 {
+		return fmt.Sprintf("%.1fms", seconds*1000)
+	}
+	return fmt.Sprintf("%.2fs", math.Round(seconds*100)/100)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// HTTP helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+func httpGetWithAuth(url, username, password string) ([]byte, error) {
+	client := &http.Client{Timeout: timeout}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if username != "" {
+		req.SetBasicAuth(username, password)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Accept 200 (healthy) and 503 (unhealthy but valid response)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	return body, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TLS commands (unchanged)
+// ──────────────────────────────────────────────────────────────────────────────
 
 func cmdTLS() {
 	if flag.NArg() < 2 {
@@ -484,7 +970,9 @@ func handleTLSSync(ctx context.Context) {
 	fmt.Printf("Sync complete: %d synced, %d skipped, %d failed\n", synced, skipped, failed)
 }
 
-// Helper functions
+// ──────────────────────────────────────────────────────────────────────────────
+// TLS helper functions
+// ──────────────────────────────────────────────────────────────────────────────
 
 func initTLSCache(ctx context.Context) (*config.Config, autocert.Cache) {
 	// Load config
@@ -576,7 +1064,9 @@ func fatal(format string, args ...any) {
 	os.Exit(1)
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
 // Certificate information and parsing
+// ──────────────────────────────────────────────────────────────────────────────
 
 type CertificateInfo struct {
 	CacheKey  string
