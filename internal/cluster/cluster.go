@@ -69,6 +69,15 @@ func NewCluster(cfg Config) (*Cluster, error) {
 		mlConfig.BindPort = cfg.BindPort
 	}
 
+	// Set advertise address - use bind address as advertise address
+	// This allows memberlist to work with public IPs or when bind is 0.0.0.0
+	if cfg.BindAddr != "" {
+		mlConfig.AdvertiseAddr = cfg.BindAddr
+	}
+	if cfg.BindPort > 0 {
+		mlConfig.AdvertisePort = cfg.BindPort
+	}
+
 	// Enable gossip encryption if secret key is provided
 	if len(cfg.SecretKey) > 0 {
 		if len(cfg.SecretKey) != 32 {
@@ -130,6 +139,8 @@ func NewCluster(cfg Config) (*Cluster, error) {
 		"node_name", ml.LocalNode().Name,
 		"bind_addr", mlConfig.BindAddr,
 		"bind_port", mlConfig.BindPort,
+		"advertise_addr", mlConfig.AdvertiseAddr,
+		"advertise_port", mlConfig.AdvertisePort,
 		"members", ml.NumMembers(),
 		"leader", cluster.GetLeader(),
 		"is_leader", cluster.IsLeader())
