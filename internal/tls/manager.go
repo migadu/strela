@@ -376,12 +376,21 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 
 	logger.Info("S3 bucket validated successfully", "bucket", cfg.S3.Bucket)
 
-	return &storage.S3Cache{
+	s3Cache := &storage.S3Cache{
 		S3Client: s3Client,
 		Bucket:   cfg.S3.Bucket,
 		Prefix:   cfg.S3.Prefix,
 		Logger:   logger,
-	}, nil
+	}
+
+	// Log S3Cache creation for debugging
+	if cfg.S3.Prefix == "" {
+		logger.Warn("S3Cache created WITHOUT prefix - certificates will be stored in bucket root!", "bucket", cfg.S3.Bucket)
+	} else {
+		logger.Info("S3Cache created with prefix", "bucket", cfg.S3.Bucket, "prefix", cfg.S3.Prefix)
+	}
+
+	return s3Cache, nil
 }
 
 // isIPAddress checks if a string is an IPv4 or IPv6 address.

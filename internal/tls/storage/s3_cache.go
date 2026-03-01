@@ -68,6 +68,13 @@ func (s *S3Cache) Put(ctx context.Context, key string, data []byte) error {
 
 	fullKey := s.Prefix + key
 
+	// Log prefix usage for debugging
+	if s.Prefix == "" {
+		s.Logger.Warn("S3Cache.Put: no prefix configured - storing in bucket root", "key", key)
+	} else {
+		s.Logger.Debug("S3Cache.Put: using prefix", "prefix", s.Prefix, "key", key, "fullKey", fullKey)
+	}
+
 	_, err := s.S3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.Bucket),
 		Key:    aws.String(fullKey),
