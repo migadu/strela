@@ -65,10 +65,14 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, logger *slog.Logger)
 		syncWorker = storage.NewCertSyncWorker(fallbackCache, syncInterval, logger)
 		syncWorker.Start()
 
+		prefixInfo := cfg.LetsEncrypt.S3.Prefix
+		if prefixInfo == "" {
+			prefixInfo = "(none - bucket root)"
+		}
 		logger.Info("using hybrid file+S3 certificate cache with periodic sync",
 			"local_cache_dir", cacheDir,
 			"s3_bucket", cfg.LetsEncrypt.S3.Bucket,
-			"prefix", cfg.LetsEncrypt.S3.Prefix,
+			"s3_prefix", prefixInfo,
 			"sync_interval", syncInterval)
 
 	case "file":

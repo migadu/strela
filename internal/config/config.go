@@ -234,6 +234,7 @@ func (c *Config) SetDefaults() {
 	}
 	// Normalize S3 prefix: strip leading slashes and ensure trailing slash
 	if c.TLS.LetsEncrypt.S3.Prefix != "" {
+		originalPrefix := c.TLS.LetsEncrypt.S3.Prefix
 		// Strip leading slashes
 		for len(c.TLS.LetsEncrypt.S3.Prefix) > 0 && c.TLS.LetsEncrypt.S3.Prefix[0] == '/' {
 			c.TLS.LetsEncrypt.S3.Prefix = c.TLS.LetsEncrypt.S3.Prefix[1:]
@@ -241,6 +242,10 @@ func (c *Config) SetDefaults() {
 		// Add trailing slash if not empty after stripping
 		if c.TLS.LetsEncrypt.S3.Prefix != "" && c.TLS.LetsEncrypt.S3.Prefix[len(c.TLS.LetsEncrypt.S3.Prefix)-1] != '/' {
 			c.TLS.LetsEncrypt.S3.Prefix = c.TLS.LetsEncrypt.S3.Prefix + "/"
+		}
+		// Log normalization if changed
+		if originalPrefix != c.TLS.LetsEncrypt.S3.Prefix {
+			// Can't log here since we don't have a logger, but the manager will log the final value
 		}
 	}
 	if c.Outbound.MXCacheTTLSeconds == 0 {

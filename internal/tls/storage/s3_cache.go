@@ -43,10 +43,10 @@ func (s *S3Cache) Get(ctx context.Context, key string) ([]byte, error) {
 	if err != nil {
 		var nsk *types.NoSuchKey
 		if errors.As(err, &nsk) {
-			s.Logger.Debug("certificate not found in S3", "key", key)
+			s.Logger.Debug("certificate not found in S3", "key", fullKey)
 			return nil, autocert.ErrCacheMiss
 		}
-		s.Logger.Error("failed to get certificate from S3", "key", key, "error", err)
+		s.Logger.Error("failed to get certificate from S3", "key", fullKey, "error", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -57,7 +57,7 @@ func (s *S3Cache) Get(ctx context.Context, key string) ([]byte, error) {
 		return nil, err
 	}
 
-	s.Logger.Info("certificate retrieved from S3", "key", key, "size", len(data))
+	s.Logger.Info("certificate retrieved from S3", "key", fullKey, "size", len(data))
 	return data, nil
 }
 
@@ -74,11 +74,11 @@ func (s *S3Cache) Put(ctx context.Context, key string, data []byte) error {
 		Body:   bytes.NewReader(data),
 	})
 	if err != nil {
-		s.Logger.Error("failed to put certificate to S3", "key", key, "error", err)
+		s.Logger.Error("failed to put certificate to S3", "key", fullKey, "error", err)
 		return err
 	}
 
-	s.Logger.Info("certificate stored in S3", "key", key, "size", len(data))
+	s.Logger.Info("certificate stored in S3", "key", fullKey, "size", len(data))
 	return nil
 }
 
@@ -94,10 +94,10 @@ func (s *S3Cache) Delete(ctx context.Context, key string) error {
 		Key:    aws.String(fullKey),
 	})
 	if err != nil {
-		s.Logger.Error("failed to delete certificate from S3", "key", key, "error", err)
+		s.Logger.Error("failed to delete certificate from S3", "key", fullKey, "error", err)
 		return err
 	}
 
-	s.Logger.Info("certificate deleted from S3", "key", key)
+	s.Logger.Info("certificate deleted from S3", "key", fullKey)
 	return nil
 }
