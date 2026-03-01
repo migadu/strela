@@ -168,7 +168,7 @@ func main() {
 		adminHandler = handler.PanicRecoveryMiddleware(adminHandler, logger)
 
 		adminServer = &http.Server{
-			Addr:         cfg.Admin.ListenAddr,
+			Addr:         cfg.Admin.Bind,
 			Handler:      adminHandler,
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 10 * time.Second,
@@ -177,7 +177,7 @@ func main() {
 		}
 
 		recovery.SafeGo(logger, "admin-server", func() {
-			logger.Info("admin server starting (health + metrics)", "addr", cfg.Admin.ListenAddr)
+			logger.Info("admin server starting (health + metrics)", "addr", cfg.Admin.Bind)
 			if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("admin server failed", "error", err)
 				os.Exit(1)

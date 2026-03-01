@@ -143,8 +143,8 @@ func resolveServerURL(cfg *config.Config) string {
 	if serverURL != "" {
 		return serverURL
 	}
-	if cfg != nil && cfg.Admin.ListenAddr != "" {
-		listen := cfg.Admin.ListenAddr
+	if cfg != nil && cfg.Admin.Bind != "" {
+		listen := cfg.Admin.Bind
 		// If it starts with ":", add localhost
 		if strings.HasPrefix(listen, ":") {
 			return "http://localhost" + listen

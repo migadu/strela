@@ -60,10 +60,10 @@ type MetricsConfig struct {
 // AdminConfig configures the admin server (health + metrics endpoints).
 // This server listens on a separate localhost-only address to avoid public exposure.
 type AdminConfig struct {
-	Enabled    bool   `toml:"enabled"`     // Enable admin server with health + metrics (default: true)
-	ListenAddr string `toml:"listen_addr"` // Address for admin server (default: 127.0.0.1:8080)
-	Username   string `toml:"username"`    // HTTP Basic Auth username (optional)
-	Password   string `toml:"password"`    // HTTP Basic Auth password (optional)
+	Enabled  bool   `toml:"enabled"`  // Enable admin server with health + metrics (default: true)
+	Bind     string `toml:"bind"`     // Bind address for admin server (default: 127.0.0.1:8080)
+	Username string `toml:"username"` // HTTP Basic Auth username (optional)
+	Password string `toml:"password"` // HTTP Basic Auth password (optional)
 }
 
 // TLSConfig configures TLS/SSL certificate handling for HTTPS.
@@ -247,8 +247,8 @@ func (c *Config) SetDefaults() {
 	}
 
 	// Admin server defaults (localhost-only for security)
-	if c.Admin.ListenAddr == "" {
-		c.Admin.ListenAddr = "127.0.0.1:8080"
+	if c.Admin.Bind == "" {
+		c.Admin.Bind = "127.0.0.1:8080"
 	}
 
 	if c.TLS.Provider == "" {
