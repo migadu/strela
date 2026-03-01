@@ -461,7 +461,7 @@ func TestSetMetrics(t *testing.T) {
 	}
 
 	// Test recordMetrics doesn't panic
-	d.recordMetrics(DeliveryResult{Status: "delivered", AttemptDurationMs: 100})
+	d.recordMetrics(DeliveryResult{Status: "delivered", AttemptDurationMs: 100}, "example.com")
 	if mock.lastOutcome != "delivered" {
 		t.Errorf("Expected outcome 'delivered', got %q", mock.lastOutcome)
 	}
@@ -472,7 +472,7 @@ type mockMetrics struct {
 	lastDuration float64
 }
 
-func (m *mockMetrics) RecordDeliveryAttempt(outcome string, duration float64) {
+func (m *mockMetrics) RecordDeliveryAttempt(outcome, recipientDomain string, duration float64) {
 	m.lastOutcome = outcome
 	m.lastDuration = duration
 }

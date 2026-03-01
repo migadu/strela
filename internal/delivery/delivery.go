@@ -81,7 +81,7 @@ type domainRateLimiter struct {
 
 // DeliveryMetrics defines the interface for recording delivery metrics.
 type DeliveryMetrics interface {
-	RecordDeliveryAttempt(outcome string, duration float64)
+	RecordDeliveryAttempt(outcome, recipientDomain string, duration float64)
 }
 
 // NewDeliverer creates a new delivery engine.
@@ -457,7 +457,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Return immediately for definitive results (don't try other MX servers)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
-				d.recordMetrics(result)
+				d.recordMetrics(result, domain)
 				d.logDeliveryResult(logger, from, to, result)
 				return result
 			}
@@ -469,7 +469,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				result = d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, inboundAuth)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
-					d.recordMetrics(result)
+					d.recordMetrics(result, domain)
 					d.logDeliveryResult(logger, from, to, result)
 					return result
 				}
@@ -481,7 +481,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, inboundAuth)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
-				d.recordMetrics(result)
+				d.recordMetrics(result, domain)
 				d.logDeliveryResult(logger, from, to, result)
 				return result
 			}
@@ -493,7 +493,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				result = d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, true, start, inboundAuth)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
-					d.recordMetrics(result)
+					d.recordMetrics(result, domain)
 					d.logDeliveryResult(logger, from, to, result)
 					return result
 				}
@@ -507,7 +507,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
-				d.recordMetrics(result)
+				d.recordMetrics(result, domain)
 				d.logDeliveryResult(logger, from, to, result)
 				return result
 			}
@@ -519,7 +519,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	}
 
 	lastResult.AttemptDurationMs = time.Since(start).Milliseconds()
-	d.recordMetrics(lastResult)
+	d.recordMetrics(lastResult, domain)
 	d.logDeliveryResult(logger, from, to, lastResult)
 	return lastResult
 }
@@ -1165,9 +1165,9 @@ func (d *Deliverer) mapSMTPError(logger *slog.Logger, traceID string, err error,
 	return res
 }
 
-func (d *Deliverer) recordMetrics(result DeliveryResult) {
+func (d *Deliverer) recordMetrics(result DeliveryResult, recipientDomain string) {
 	if d.metrics != nil {
-		d.metrics.RecordDeliveryAttempt(result.Status, float64(result.AttemptDurationMs)/1000.0)
+		d.metrics.RecordDeliveryAttempt(result.Status, recipientDomain, float64(result.AttemptDurationMs)/1000.0)
 	}
 }
 

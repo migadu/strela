@@ -160,10 +160,17 @@ func resolveServerURL(cfg *config.Config) string {
 
 // HealthResponse represents the health check response from the server.
 type HealthResponse struct {
-	Status    string       `json:"status"`
-	Timestamp string       `json:"timestamp"`
-	Uptime    string       `json:"uptime"`
-	System    SystemHealth `json:"system"`
+	Status    string         `json:"status"`
+	Timestamp string         `json:"timestamp"`
+	Uptime    string         `json:"uptime"`
+	System    SystemHealth   `json:"system"`
+	Cluster   *ClusterHealth `json:"cluster,omitempty"`
+}
+
+type ClusterHealth struct {
+	Enabled   bool   `json:"enabled"`
+	NodeCount int    `json:"node_count"`
+	Leader    string `json:"leader,omitempty"`
 }
 
 type SystemHealth struct {
@@ -216,6 +223,15 @@ func cmdHealth() {
 	fmt.Printf("  %-22s %d MB\n", "Memory (sys):", health.System.MemoryMB)
 	fmt.Printf("  %-22s %d MB\n", "Memory (alloc):", health.System.MemoryAllocMB)
 	fmt.Println()
+
+	// Cluster info (if enabled)
+	if health.Cluster != nil && health.Cluster.Enabled {
+		fmt.Println("Cluster")
+		fmt.Println("───────")
+		fmt.Printf("  %-22s %d\n", "Node count:", health.Cluster.NodeCount)
+		fmt.Printf("  %-22s %s\n", "Leader:", health.Cluster.Leader)
+		fmt.Println()
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -257,6 +273,7 @@ func cmdStats() {
 	}
 
 	printDeliveryStats(families)
+	printDomainStats(families)
 	printHTTPStats(families)
 	printIPReputationStats(families)
 }
@@ -347,6 +364,83 @@ func printDeliveryStats(families map[string]*dto.MetricFamily) {
 			fmt.Println()
 		}
 	}
+}
+
+func printDomainStats(families map[string]*dto.MetricFamily) {
+	fam, ok := families["strela_delivery_attempts_total"]
+	if !ok {
+		return
+	}
+
+	// Aggregate by recipient domain
+	type domainStats struct {
+		domain     string
+		total      float64
+		delivered  float64
+		tempFail   float64
+		hardBounce float64
+		other      float64
+	}
+	domainMap := make(map[string]*domainStats)
+
+	for _, m := range fam.GetMetric() {
+		domain := getLabelValue(m, "recipient_domain")
+		if domain == "" {
+			continue
+		}
+		outcome := getLabelValue(m, "outcome")
+		count := m.GetCounter().GetValue()
+
+		ds, exists := domainMap[domain]
+		if !exists {
+			ds = &domainStats{domain: domain}
+			domainMap[domain] = ds
+		}
+		ds.total += count
+		switch outcome {
+		case "delivered":
+			ds.delivered += count
+		case "temp_fail":
+			ds.tempFail += count
+		case "hard_bounce":
+			ds.hardBounce += count
+		default:
+			ds.other += count
+		}
+	}
+
+	if len(domainMap) == 0 {
+		return
+	}
+
+	// Sort by total descending
+	entries := make([]*domainStats, 0, len(domainMap))
+	for _, ds := range domainMap {
+		entries = append(entries, ds)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].total > entries[j].total
+	})
+
+	fmt.Println("Recipient Domains")
+	fmt.Println("=================")
+	fmt.Println()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "  DOMAIN\tTOTAL\tDELIVERED\tTEMP FAIL\tBOUNCED\tOTHER")
+	fmt.Fprintln(w, "  ──────\t─────\t─────────\t─────────\t───────\t─────")
+
+	limit := 20
+	for i, ds := range entries {
+		if i >= limit {
+			fmt.Fprintf(w, "  ... and %d more domains\t\t\t\t\t\n", len(entries)-limit)
+			break
+		}
+		fmt.Fprintf(w, "  %s\t%.0f\t%.0f\t%.0f\t%.0f\t%.0f\n",
+			ds.domain, ds.total, ds.delivered, ds.tempFail, ds.hardBounce, ds.other)
+	}
+	w.Flush()
+	fmt.Println()
 }
 
 func printHTTPStats(families map[string]*dto.MetricFamily) {

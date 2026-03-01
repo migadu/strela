@@ -10,20 +10,33 @@ import (
 	"strela/internal/delivery"
 )
 
+// ClusterInfoProvider is an optional interface for providing cluster health information.
+type ClusterInfoProvider interface {
+	GetLeader() string
+	NumMembers() int
+	LocalNodeName() string
+	IsLeader() bool
+}
+
 // HealthHandler provides health and status information.
 type HealthHandler struct {
 	deliverer *delivery.Deliverer
+	cluster   ClusterInfoProvider
 	startTime time.Time
 	logger    *slog.Logger
 }
 
 // NewHealthHandler creates a new health check HTTP handler.
-func NewHealthHandler(d *delivery.Deliverer, logger *slog.Logger) *HealthHandler {
-	return &HealthHandler{
+func NewHealthHandler(d *delivery.Deliverer, logger *slog.Logger, cluster ...ClusterInfoProvider) *HealthHandler {
+	h := &HealthHandler{
 		deliverer: d,
 		startTime: time.Now(),
 		logger:    logger,
 	}
+	if len(cluster) > 0 && cluster[0] != nil {
+		h.cluster = cluster[0]
+	}
+	return h
 }
 
 // HealthResponse represents the health check response.
@@ -70,7 +83,7 @@ func (h *HealthHandler) buildHealthResponse() HealthResponse {
 		Timestamp: time.Now().Format(time.RFC3339),
 		Uptime:    time.Since(h.startTime).String(),
 		System:    h.getSystemHealth(),
-		Cluster:   nil, // Cluster/gossip support removed
+		Cluster:   h.getClusterHealth(),
 	}
 }
 
@@ -87,6 +100,12 @@ func (h *HealthHandler) getSystemHealth() SystemHealth {
 }
 
 func (h *HealthHandler) getClusterHealth() *ClusterHealth {
-	// Cluster/gossip support removed in synchronous refactoring
-	return nil
+	if h.cluster == nil {
+		return nil
+	}
+	return &ClusterHealth{
+		Enabled:   true,
+		NodeCount: h.cluster.NumMembers(),
+		Leader:    h.cluster.GetLeader(),
+	}
 }

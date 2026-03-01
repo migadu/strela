@@ -147,45 +147,7 @@ func main() {
 
 	mux.Handle("/deliver", apiHandler)
 
-	// Admin server (health + metrics) on separate localhost-only listener
-	var adminServer *http.Server
-	if cfg.Admin.Enabled {
-		adminMux := http.NewServeMux()
-
-		// Health Endpoint
-		adminMux.Handle("/health", handler.NewHealthHandler(deliverer, logger))
-
-		// Metrics Endpoint (served on admin port alongside health)
-		if m != nil && cfg.Metrics.Path != "" {
-			adminMux.Handle(cfg.Metrics.Path, promhttp.Handler())
-		}
-
-		// Apply admin-level auth and panic recovery to all admin endpoints
-		var adminHandler http.Handler = adminMux
-		if cfg.Admin.Username != "" && cfg.Admin.Password != "" {
-			adminHandler = basicAuthMiddleware(adminMux, cfg.Admin.Username, cfg.Admin.Password, logger)
-		}
-		adminHandler = handler.PanicRecoveryMiddleware(adminHandler, logger)
-
-		adminServer = &http.Server{
-			Addr:         cfg.Admin.Bind,
-			Handler:      adminHandler,
-			ReadTimeout:  10 * time.Second,
-			WriteTimeout: 10 * time.Second,
-			IdleTimeout:  30 * time.Second,
-			ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
-		}
-
-		recovery.SafeGo(logger, "admin-server", func() {
-			logger.Info("admin server starting (health + metrics)", "addr", cfg.Admin.Bind)
-			if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Error("admin server failed", "error", err)
-				os.Exit(1)
-			}
-		})
-	}
-
-	// Initialize cluster for leader election (if enabled)
+	// Initialize cluster for leader election (if enabled) — before admin server so health can report cluster status
 	var clusterMgr *cluster.Cluster
 	if cfg.Cluster.Enabled {
 		// Decode secret key from base64
@@ -222,6 +184,48 @@ func main() {
 			os.Exit(1)
 		}
 		defer clusterMgr.Shutdown()
+	}
+
+	// Admin server (health + metrics) on separate localhost-only listener
+	var adminServer *http.Server
+	if cfg.Admin.Enabled {
+		adminMux := http.NewServeMux()
+
+		// Health Endpoint (with optional cluster info)
+		if clusterMgr != nil {
+			adminMux.Handle("/health", handler.NewHealthHandler(deliverer, logger, clusterMgr))
+		} else {
+			adminMux.Handle("/health", handler.NewHealthHandler(deliverer, logger))
+		}
+
+		// Metrics Endpoint (served on admin port alongside health)
+		if m != nil && cfg.Metrics.Path != "" {
+			adminMux.Handle(cfg.Metrics.Path, promhttp.Handler())
+		}
+
+		// Apply admin-level auth and panic recovery to all admin endpoints
+		var adminHandler http.Handler = adminMux
+		if cfg.Admin.Username != "" && cfg.Admin.Password != "" {
+			adminHandler = basicAuthMiddleware(adminMux, cfg.Admin.Username, cfg.Admin.Password, logger)
+		}
+		adminHandler = handler.PanicRecoveryMiddleware(adminHandler, logger)
+
+		adminServer = &http.Server{
+			Addr:         cfg.Admin.Bind,
+			Handler:      adminHandler,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  30 * time.Second,
+			ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
+		}
+
+		recovery.SafeGo(logger, "admin-server", func() {
+			logger.Info("admin server starting (health + metrics)", "addr", cfg.Admin.Bind)
+			if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("admin server failed", "error", err)
+				os.Exit(1)
+			}
+		})
 	}
 
 	// TLS Manager (if ACME enabled)

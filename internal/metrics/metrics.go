@@ -25,23 +25,23 @@ type Metrics struct {
 // NewMetrics creates and registers all Prometheus metrics.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		// Delivery attempts by outcome
+		// Delivery attempts by outcome and recipient domain
 		DeliveryAttempts: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "strela_delivery_attempts_total",
-				Help: "Total number of delivery attempts by outcome",
+				Help: "Total number of delivery attempts by outcome and recipient domain",
 			},
-			[]string{"outcome"},
+			[]string{"outcome", "recipient_domain"},
 		),
 
-		// Delivery duration histogram
+		// Delivery duration histogram by outcome and recipient domain
 		DeliveryDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "strela_delivery_duration_seconds",
 				Help:    "Time taken for delivery attempts",
 				Buckets: []float64{.1, .5, 1, 2, 5, 10, 30, 60, 120},
 			},
-			[]string{"outcome"},
+			[]string{"outcome", "recipient_domain"},
 		),
 
 		// Active deliveries
@@ -99,10 +99,10 @@ func NewMetrics() *Metrics {
 	}
 }
 
-// RecordDeliveryAttempt records a delivery attempt with its outcome and duration.
-func (m *Metrics) RecordDeliveryAttempt(outcome string, duration float64) {
-	m.DeliveryAttempts.WithLabelValues(outcome).Inc()
-	m.DeliveryDuration.WithLabelValues(outcome).Observe(duration)
+// RecordDeliveryAttempt records a delivery attempt with its outcome, recipient domain, and duration.
+func (m *Metrics) RecordDeliveryAttempt(outcome, recipientDomain string, duration float64) {
+	m.DeliveryAttempts.WithLabelValues(outcome, recipientDomain).Inc()
+	m.DeliveryDuration.WithLabelValues(outcome, recipientDomain).Observe(duration)
 }
 
 // RecordHTTPRequest records an HTTP request with method, path, status code, and duration.
