@@ -77,7 +77,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("starting strela SMTP delivery service", "version", version, "config", *configPath)
+	logger.Info(">>>>>>>_____________________\\`-._ ")
+	logger.Info(">>>>>>>                     /.-'   \n")
+	logger.Info("Strela SMTP delivery service", "version", version, "config", *configPath)
 
 	// Warn if auth_token is not configured
 	if tempCfg.Inbound.AuthToken == "" {
