@@ -77,8 +77,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info(">>>>>>>_____________________\\`-._ ")
-	logger.Info(">>>>>>>                     /.-'   \n")
+	logger.Info(">>>>>>>____________________\\'-._  ")
+	logger.Info(">>>>>>>                    //.-'   ")
 	logger.Info("Strela SMTP delivery service", "version", version, "config", *configPath)
 
 	// Warn if auth_token is not configured
