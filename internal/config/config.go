@@ -3,7 +3,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 
 	"github.com/BurntSushi/toml"
 )
@@ -140,11 +142,38 @@ type ReputationConfig struct {
 // ClusterConfig configures the gossip protocol for multi-node clustering.
 type ClusterConfig struct {
 	Enabled   bool     `toml:"enabled"`
-	BindAddr  string   `toml:"bind_addr"`  // IP address to bind to (default: 0.0.0.0)
-	BindPort  int      `toml:"bind_port"`  // Gossip protocol port (default: 7946)
+	Bind      string   `toml:"bind"`       // Gossip bind address, can be "IP:port" or just "IP" (default: 0.0.0.0)
+	Port      int      `toml:"port"`       // Gossip port, used if not specified in bind (default: 7946)
 	Peers     []string `toml:"peers"`      // All other cluster nodes (address:port)
 	NodeID    string   `toml:"node_id"`    // Unique node identifier (hostname recommended)
 	SecretKey string   `toml:"secret_key"` // 32-byte base64 encoded encryption key for AES-256
+}
+
+// GetBindAddr returns the bind address by parsing the bind field.
+func (c *ClusterConfig) GetBindAddr() string {
+	if c.Bind == "" {
+		return "0.0.0.0"
+	}
+	// If bind contains port, split it
+	if host, _, err := net.SplitHostPort(c.Bind); err == nil {
+		return host
+	}
+	return c.Bind
+}
+
+// GetBindPort returns the bind port from either bind or port field.
+func (c *ClusterConfig) GetBindPort() int {
+	if c.Bind != "" {
+		if _, portStr, err := net.SplitHostPort(c.Bind); err == nil {
+			if port, err := strconv.Atoi(portStr); err == nil {
+				return port
+			}
+		}
+	}
+	if c.Port > 0 {
+		return c.Port
+	}
+	return 7946
 }
 
 // DKIMConfig configures DKIM (DomainKeys Identified Mail) signing for outbound messages.
@@ -308,12 +337,7 @@ func (c *Config) SetDefaults() {
 	if c.Reputation.DegradedIPCleanupHours == 0 {
 		c.Reputation.DegradedIPCleanupHours = 168
 	}
-	if c.Cluster.BindAddr == "" {
-		c.Cluster.BindAddr = "0.0.0.0"
-	}
-	if c.Cluster.BindPort == 0 {
-		c.Cluster.BindPort = 7946
-	}
+	// Cluster defaults are handled by GetBindAddr()/GetBindPort() methods
 	if c.ARC.HeaderCanon == "" {
 		c.ARC.HeaderCanon = "relaxed"
 	}

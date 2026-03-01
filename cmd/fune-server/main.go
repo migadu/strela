@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"fune/internal/cluster"
 	"fune/internal/config"
 	"fune/internal/delivery"
 	"fune/internal/handler"
@@ -164,12 +165,56 @@ func main() {
 		mux.Handle("/health", finalHealthHandler)
 	}
 
+	// Initialize cluster for leader election (if enabled)
+	var clusterMgr *cluster.Cluster
+	if cfg.Cluster.Enabled {
+		// Decode secret key from base64
+		var secretKey []byte
+		secretKeyStr := os.Getenv("CLUSTER_SECRET_KEY")
+		if secretKeyStr == "" {
+			secretKeyStr = cfg.Cluster.SecretKey
+		}
+		if secretKeyStr != "" {
+			secretKey, err = cluster.DecodeSecretKey(secretKeyStr)
+			if err != nil {
+				logger.Error("failed to decode cluster secret key", "error", err)
+				os.Exit(1)
+			}
+		}
+
+		nodeID := cfg.Cluster.NodeID
+		if nodeID == "" {
+			if h, hErr := os.Hostname(); hErr == nil {
+				nodeID = h
+			}
+		}
+
+		clusterMgr, err = cluster.NewCluster(cluster.Config{
+			NodeName:  nodeID,
+			BindAddr:  cfg.Cluster.GetBindAddr(),
+			BindPort:  cfg.Cluster.GetBindPort(),
+			Peers:     cfg.Cluster.Peers,
+			SecretKey: secretKey,
+			Logger:    logger,
+		})
+		if err != nil {
+			logger.Error("failed to initialize cluster", "error", err)
+			os.Exit(1)
+		}
+		defer clusterMgr.Shutdown()
+	}
+
 	// TLS Manager (if ACME enabled)
 	var tlsManager *tlsmanager.Manager
 	if cfg.TLS.Enabled {
-		// Initialize TLS with timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		tlsManager, err = tlsmanager.NewManager(ctx, &cfg.TLS, logger)
+		if clusterMgr != nil {
+			// Cluster enabled: only leader can request new certs from Let's Encrypt
+			tlsManager, err = tlsmanager.NewManager(ctx, &cfg.TLS, logger, clusterMgr.IsLeader)
+		} else {
+			// Single-instance mode
+			tlsManager, err = tlsmanager.NewManager(ctx, &cfg.TLS, logger)
+		}
 		cancel()
 		if err != nil {
 			logger.Error("failed to initialize TLS manager", "error", err)
@@ -233,7 +278,13 @@ func main() {
 		logger.Info("rate limiter stopped")
 	}
 
-	// 3. Stop deliverer (stops all background cleanup goroutines, closes connection pool)
+	// 3. Stop TLS manager (stops cert sync worker)
+	if tlsManager != nil {
+		tlsManager.Stop()
+		logger.Info("TLS manager stopped")
+	}
+
+	// 4. Stop deliverer (stops all background cleanup goroutines, closes connection pool)
 	deliverer.Stop()
 
 	logger.Info("graceful shutdown complete")

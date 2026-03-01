@@ -33,7 +33,10 @@ type Manager struct {
 }
 
 // NewManager creates a new TLS manager.
-func NewManager(ctx context.Context, cfg *config.TLSConfig, logger *slog.Logger) (*Manager, error) {
+// If isLeaderF is provided and non-nil, only the cluster leader is allowed to
+// request new certificates from Let's Encrypt (prevents race conditions and
+// rate limit exhaustion across multiple instances).
+func NewManager(ctx context.Context, cfg *config.TLSConfig, logger *slog.Logger, isLeaderF ...func() bool) (*Manager, error) {
 	if !cfg.Enabled || cfg.Provider != "letsencrypt" {
 		return nil, nil
 	}
@@ -83,6 +86,18 @@ func NewManager(ctx context.Context, cfg *config.TLSConfig, logger *slog.Logger)
 
 	default:
 		return nil, fmt.Errorf("unsupported storage provider: %s", cfg.LetsEncrypt.StorageProvider)
+	}
+
+	// Wrap cache with cluster-aware leader gating if a leader function was provided.
+	// This ensures only the cluster leader can request new certificates from Let's Encrypt,
+	// preventing race conditions and rate limit exhaustion across multiple instances.
+	var leaderFunc func() bool
+	if len(isLeaderF) > 0 && isLeaderF[0] != nil {
+		leaderFunc = isLeaderF[0]
+		cache = storage.NewClusterAwareCache(cache, leaderFunc, logger)
+		logger.Info("TLS certificate cache wrapped with cluster-aware leader gating")
+	} else {
+		logger.Info("TLS running in single-instance mode (no cluster leader election)")
 	}
 
 	autocertMgr := &autocert.Manager{
