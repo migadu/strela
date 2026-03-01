@@ -243,10 +243,17 @@ func cmdStats() {
 	}
 
 	// Parse Prometheus exposition format
-	parser := expfmt.TextParser{}
-	families, err := parser.TextToMetricFamilies(strings.NewReader(string(body)))
-	if err != nil {
-		fatal("Failed to parse metrics: %v", err)
+	families := make(map[string]*dto.MetricFamily)
+	decoder := expfmt.NewDecoder(strings.NewReader(string(body)), expfmt.NewFormat(expfmt.TypeTextPlain))
+	for {
+		var mf dto.MetricFamily
+		if err := decoder.Decode(&mf); err != nil {
+			if err == io.EOF {
+				break
+			}
+			fatal("Failed to parse metrics: %v", err)
+		}
+		families[mf.GetName()] = &mf
 	}
 
 	printDeliveryStats(families)
