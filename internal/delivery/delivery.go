@@ -838,8 +838,12 @@ func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, cli
 		return "", err
 	}
 
-	logger.Debug("delivery transaction successful", "smtp_response", resp.StatusText)
-	return resp.StatusText, nil
+	// Normalize multi-line SMTP responses by replacing newlines with spaces
+	// (textproto.ReadResponse returns multi-line messages with \n separators)
+	smtpMsg := strings.ReplaceAll(resp.StatusText, "\n", " ")
+
+	logger.Debug("delivery transaction successful", "smtp_response", smtpMsg)
+	return smtpMsg, nil
 }
 
 func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, traceID string, mxHost, sourceIP string, preferIPv6 bool) (*smtp.Client, DeliveryResult, error) {
@@ -1118,7 +1122,8 @@ func (d *Deliverer) mapSMTPError(logger *slog.Logger, traceID string, err error,
 	var smtpMessage string
 	if smtpErr, ok := err.(*smtp.SMTPError); ok {
 		smtpCode = smtpErr.Code
-		smtpMessage = smtpErr.Message
+		// Normalize multi-line SMTP messages by replacing newlines with spaces
+		smtpMessage = strings.ReplaceAll(smtpErr.Message, "\n", " ")
 		res.SMTPCode = smtpCode
 		res.SMTPMessage = smtpMessage
 	}
