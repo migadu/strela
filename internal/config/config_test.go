@@ -16,7 +16,7 @@ max_concurrent_requests = 100
 [outbound]
 source_ips_v4 = ["192.168.1.100", "192.168.1.101"]
 source_ip_selection = "round-robin"
-delivery_timeout_seconds = 30
+max_total_delivery_seconds = 30
 `
 
 	tmpFile, err := os.CreateTemp("", "config_*.toml")
@@ -53,8 +53,8 @@ delivery_timeout_seconds = 30
 		t.Errorf("Expected 2 source IPv4s, got %d", len(config.Outbound.SourceIPsV4))
 	}
 
-	if config.Outbound.DeliveryTimeoutSeconds != 30 {
-		t.Errorf("Expected delivery_timeout_seconds 30, got %d", config.Outbound.DeliveryTimeoutSeconds)
+	if config.Outbound.MaxTotalDeliverySeconds != 30 {
+		t.Errorf("Expected max_total_delivery_seconds 30, got %d", config.Outbound.MaxTotalDeliverySeconds)
 	}
 }
 
@@ -75,8 +75,16 @@ func TestSetDefaults(t *testing.T) {
 		t.Errorf("Expected default smtp_timeout_seconds 60, got %d", config.Outbound.SMTPTimeoutSeconds)
 	}
 
-	if config.Outbound.DeliveryTimeoutSeconds != 30 {
-		t.Errorf("Expected default delivery_timeout_seconds 30, got %d", config.Outbound.DeliveryTimeoutSeconds)
+	if config.Outbound.BannerTimeoutSeconds != 30 {
+		t.Errorf("Expected default banner_timeout_seconds 30, got %d", config.Outbound.BannerTimeoutSeconds)
+	}
+
+	if config.Outbound.HandshakeTimeoutSeconds != 30 {
+		t.Errorf("Expected default handshake_timeout_seconds 30, got %d", config.Outbound.HandshakeTimeoutSeconds)
+	}
+
+	if config.Outbound.MaxTotalDeliverySeconds != 200 {
+		t.Errorf("Expected default max_total_delivery_seconds 200, got %d", config.Outbound.MaxTotalDeliverySeconds)
 	}
 
 	if config.Outbound.SourceIPSelection != "round-robin" {
@@ -87,13 +95,13 @@ func TestSetDefaults(t *testing.T) {
 		t.Errorf("Expected default per_domain_interval_seconds 2, got %d", config.Outbound.PerDomainIntervalSeconds)
 	}
 
-	// Check HTTP timeout defaults
+	// Check HTTP timeout defaults (v2.0.7 updated to accommodate longer delivery timeout)
 	if config.Inbound.ReadTimeoutSecs != 30 {
 		t.Errorf("Expected default read_timeout_seconds 30, got %d", config.Inbound.ReadTimeoutSecs)
 	}
 
-	if config.Inbound.WriteTimeoutSecs != 90 {
-		t.Errorf("Expected default write_timeout_seconds 90, got %d", config.Inbound.WriteTimeoutSecs)
+	if config.Inbound.WriteTimeoutSecs != 240 {
+		t.Errorf("Expected default write_timeout_seconds 240, got %d", config.Inbound.WriteTimeoutSecs)
 	}
 
 	if config.Inbound.IdleTimeoutSecs != 120 {
@@ -140,13 +148,21 @@ source_ips = ["192.168.1.100"]
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Verify defaults were applied
-	if config.Outbound.DeliveryTimeoutSeconds != 30 {
-		t.Errorf("Expected default delivery_timeout_seconds 30, got %d", config.Outbound.DeliveryTimeoutSeconds)
+	// Verify defaults were applied (v2.0.7 updated defaults)
+	if config.Outbound.MaxTotalDeliverySeconds != 200 {
+		t.Errorf("Expected default max_total_delivery_seconds 200, got %d", config.Outbound.MaxTotalDeliverySeconds)
 	}
 
 	if config.Outbound.ConnectionTimeoutSeconds != 15 {
 		t.Errorf("Expected default connection_timeout_seconds 15, got %d", config.Outbound.ConnectionTimeoutSeconds)
+	}
+
+	if config.Outbound.BannerTimeoutSeconds != 30 {
+		t.Errorf("Expected default banner_timeout_seconds 30, got %d", config.Outbound.BannerTimeoutSeconds)
+	}
+
+	if config.Outbound.HandshakeTimeoutSeconds != 30 {
+		t.Errorf("Expected default handshake_timeout_seconds 30, got %d", config.Outbound.HandshakeTimeoutSeconds)
 	}
 
 	if config.Inbound.MaxConcurrentRequests != 0 {

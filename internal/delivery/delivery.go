@@ -999,18 +999,52 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	// Trim trailing dot for TLS verification (MX records often have them)
 	host = strings.TrimSuffix(host, ".")
 
-	// Calculate remaining timeout from context
-	var commandTimeout time.Duration
+	// Calculate phased timeouts from context deadline or config defaults
+	var bannerTimeout, handshakeTimeout, deliveryTimeout time.Duration
+
 	if deadline, ok := ctx.Deadline(); ok {
-		commandTimeout = time.Until(deadline)
-		if commandTimeout <= 0 {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			conn.Close()
-			return nil, DeliveryResult{Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "context deadline exceeded"}, ctx.Err()
+			return nil, DeliveryResult{TraceID: traceID, Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "context deadline exceeded before handshake"}, ctx.Err()
+		}
+
+		// Calculate desired timeouts from config
+		desiredBanner := time.Duration(d.config.BannerTimeoutSeconds) * time.Second
+		desiredHandshake := time.Duration(d.config.HandshakeTimeoutSeconds) * time.Second
+		desiredDelivery := time.Duration(d.config.SMTPTimeoutSeconds) * time.Second
+		totalDesired := desiredBanner + desiredHandshake + desiredDelivery
+
+		// If we have less time than desired, scale proportionally
+		if remaining < totalDesired {
+			// Scale down all timeouts proportionally
+			scale := float64(remaining) / float64(totalDesired)
+			bannerTimeout = time.Duration(float64(desiredBanner) * scale)
+			handshakeTimeout = time.Duration(float64(desiredHandshake) * scale)
+			deliveryTimeout = time.Duration(float64(desiredDelivery) * scale)
+			logger.Debug("scaled timeouts due to context deadline",
+				"remaining", remaining,
+				"banner_timeout", bannerTimeout,
+				"handshake_timeout", handshakeTimeout,
+				"delivery_timeout", deliveryTimeout)
+		} else {
+			// Use full desired timeouts
+			bannerTimeout = desiredBanner
+			handshakeTimeout = desiredHandshake
+			deliveryTimeout = desiredDelivery
 		}
 	} else {
-		// Default timeout if no context deadline
-		commandTimeout = time.Duration(d.config.SMTPTimeoutSeconds) * time.Second
+		// No context deadline - use config defaults
+		bannerTimeout = time.Duration(d.config.BannerTimeoutSeconds) * time.Second
+		handshakeTimeout = time.Duration(d.config.HandshakeTimeoutSeconds) * time.Second
+		deliveryTimeout = time.Duration(d.config.SMTPTimeoutSeconds) * time.Second
 	}
+
+	logger.Debug("attempting SMTP connection with phased timeouts",
+		"mx", mxHost,
+		"banner_timeout", bannerTimeout,
+		"handshake_timeout", handshakeTimeout,
+		"delivery_timeout", deliveryTimeout)
 
 	// TLS configuration
 	tlsConfig := &tls.Config{
@@ -1019,9 +1053,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		MinVersion:         tls.VersionTLS12,
 	}
 
-	logger.Debug("attempting SMTP connection", "mx", mxHost, "timeout", commandTimeout)
-
-	// Perform SMTP handshake (EHLO) and optionally STARTTLS with timeout enforcement using goroutine
+	// Perform SMTP handshake (EHLO) and optionally STARTTLS with phased timeout enforcement
 	type clientResult struct {
 		client  *smtp.Client
 		usedTLS bool
@@ -1030,16 +1062,19 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	resultCh := make(chan clientResult, 1)
 
 	recovery.SafeGo(d.logger, "smtp-handshake", func() {
-		// Set deadline for the entire handshake
-		conn.SetDeadline(time.Now().Add(commandTimeout))
+		// Phase 1+2: Banner + Handshake (banner + EHLO + STARTTLS) with combined timeout
+		// Note: banner and handshake are combined because go-smtp doesn't expose individual control
+		handshakePhaseTimeout := bannerTimeout + handshakeTimeout
+		logger.Debug("phases 1+2: banner and handshake", "timeout", handshakePhaseTimeout)
+		conn.SetDeadline(time.Now().Add(handshakePhaseTimeout))
 		defer conn.SetDeadline(time.Time{}) // Clear deadline after handshake
 
-		// Try STARTTLS first (opportunistic)
+		// Try STARTTLS first (opportunistic) - this does banner + EHLO + STARTTLS
 		client, err := smtp.NewClientStartTLSWithName(conn, tlsConfig, d.config.HelloHostname)
 		if err == nil {
 			// STARTTLS succeeded
-			client.CommandTimeout = commandTimeout
-			client.SubmissionTimeout = commandTimeout
+			client.CommandTimeout = deliveryTimeout
+			client.SubmissionTimeout = deliveryTimeout
 			logger.Info("STARTTLS connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
 			resultCh <- clientResult{client: client, usedTLS: true, err: nil}
 			return
@@ -1053,7 +1088,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			// Close corrupted connection
 			conn.Close()
 
-			// Reconnect without STARTTLS
+			// Reconnect without STARTTLS (reuse same timeout for reconnect)
 			dialer := &net.Dialer{Timeout: connectionTimeout}
 			if sourceIP != "" {
 				ip := net.ParseIP(sourceIP)
@@ -1067,19 +1102,22 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 				return
 			}
 
-			// Set deadline on new connection
-			newConn.SetDeadline(time.Now().Add(commandTimeout))
+			// Set deadline on new connection for banner + EHLO
+			newConn.SetDeadline(time.Now().Add(handshakePhaseTimeout))
 
-			// Create plaintext client
+			// Create plaintext client (reads banner)
 			client := smtp.NewClient(newConn)
+			// Send EHLO/HELO
 			if err := client.Hello(d.config.HelloHostname); err != nil {
 				client.Close()
 				resultCh <- clientResult{err: fmt.Errorf("EHLO/HELO failed: %w", err)}
 				return
 			}
 
-			client.CommandTimeout = commandTimeout
-			client.SubmissionTimeout = commandTimeout
+			// Clear deadline and set timeouts for delivery
+			newConn.SetDeadline(time.Time{})
+			client.CommandTimeout = deliveryTimeout
+			client.SubmissionTimeout = deliveryTimeout
 			logger.Info("plaintext SMTP connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
 			resultCh <- clientResult{client: client, usedTLS: false, err: nil}
 			return

@@ -301,7 +301,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 7. Create context with timeout and trace ID
-	timeout := time.Duration(h.config.Outbound.DeliveryTimeoutSeconds) * time.Second
+	timeout := time.Duration(h.config.Outbound.MaxTotalDeliverySeconds) * time.Second
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	ctx = delivery.WithTraceID(ctx, traceID)

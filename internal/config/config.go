@@ -113,13 +113,15 @@ type OutboundConfig struct {
 	PreferIPv6        bool     `toml:"prefer_ipv6"`         // Try IPv6 first, fallback to IPv4 (default: true)
 	SourceIPSelection string   `toml:"source_ip_selection"` // "round-robin", "random", "hash-domain" (default: round-robin)
 
-	MXCacheTTLSeconds        int    `toml:"mx_cache_ttl_seconds"`        // MX record cache TTL (default: 3600s)
-	ConnectionPoolTTLSeconds int    `toml:"connection_pool_ttl_seconds"` // Max time to keep idle connection (default: 5s)
-	ConnectionTimeoutSeconds int    `toml:"connection_timeout_seconds"`  // TCP connection timeout (default: 15s)
-	SMTPTimeoutSeconds       int    `toml:"smtp_timeout_seconds"`        // SMTP command timeout (default: 60s)
-	DeliveryTimeoutSeconds   int    `toml:"delivery_timeout_seconds"`    // Maximum time to wait for SMTP delivery (default: 30s)
-	MaxIPsPerMX              int    `toml:"max_ips_per_mx"`              // Maximum number of IPs to try per MX host (default: 5)
-	HelloHostname            string `toml:"hello_hostname"`              // Hostname for EHLO greeting (default: system hostname)
+	MXCacheTTLSeconds         int    `toml:"mx_cache_ttl_seconds"`          // MX record cache TTL (default: 3600s)
+	ConnectionPoolTTLSeconds  int    `toml:"connection_pool_ttl_seconds"`   // Max time to keep idle connection (default: 5s)
+	ConnectionTimeoutSeconds  int    `toml:"connection_timeout_seconds"`    // TCP connection timeout (default: 15s)
+	BannerTimeoutSeconds      int    `toml:"banner_timeout_seconds"`        // SMTP banner (220 greeting) timeout (default: 30s)
+	HandshakeTimeoutSeconds   int    `toml:"handshake_timeout_seconds"`     // EHLO/HELO + STARTTLS timeout (default: 30s)
+	SMTPTimeoutSeconds        int    `toml:"smtp_timeout_seconds"`          // SMTP command timeout for MAIL/RCPT/DATA (default: 60s)
+	MaxTotalDeliverySeconds   int    `toml:"max_total_delivery_seconds"`    // Hard cap for entire delivery across all attempts (default: 200s)
+	MaxIPsPerMX               int    `toml:"max_ips_per_mx"`                // Maximum number of IPs to try per MX host (default: 5)
+	HelloHostname             string `toml:"hello_hostname"`                // Hostname for EHLO greeting (default: system hostname)
 
 	// Rate limiting per destination domain
 	PerDomainIntervalSeconds int      `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
@@ -229,7 +231,7 @@ func (c *Config) SetDefaults() {
 		c.Inbound.ReadTimeoutSecs = 30
 	}
 	if c.Inbound.WriteTimeoutSecs == 0 {
-		c.Inbound.WriteTimeoutSecs = 90 // Must exceed delivery_timeout_seconds (default 30s) + margin
+		c.Inbound.WriteTimeoutSecs = 240 // Must exceed max_total_delivery_seconds (default 200s) + margin
 	}
 	if c.Inbound.IdleTimeoutSecs == 0 {
 		c.Inbound.IdleTimeoutSecs = 120
@@ -285,11 +287,17 @@ func (c *Config) SetDefaults() {
 	if c.Outbound.ConnectionTimeoutSeconds == 0 {
 		c.Outbound.ConnectionTimeoutSeconds = 15
 	}
+	if c.Outbound.BannerTimeoutSeconds == 0 {
+		c.Outbound.BannerTimeoutSeconds = 30
+	}
+	if c.Outbound.HandshakeTimeoutSeconds == 0 {
+		c.Outbound.HandshakeTimeoutSeconds = 30
+	}
 	if c.Outbound.SMTPTimeoutSeconds == 0 {
 		c.Outbound.SMTPTimeoutSeconds = 60
 	}
-	if c.Outbound.DeliveryTimeoutSeconds == 0 {
-		c.Outbound.DeliveryTimeoutSeconds = 30
+	if c.Outbound.MaxTotalDeliverySeconds == 0 {
+		c.Outbound.MaxTotalDeliverySeconds = 200
 	}
 	if c.Outbound.SourceIPSelection == "" {
 		c.Outbound.SourceIPSelection = "round-robin"

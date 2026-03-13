@@ -210,7 +210,7 @@ func TestDeliveryTimeout(t *testing.T) {
 			MaxConcurrentRequests: 0,
 		},
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds:   3, // Short timeout for test
+			MaxTotalDeliverySeconds:   3, // Short timeout for test
 			ConnectionTimeoutSeconds: 2,
 			SMTPTimeoutSeconds:       2,
 		},
@@ -251,7 +251,7 @@ func TestDNSTimeout(t *testing.T) {
 	cfg := &config.Config{
 		Inbound: config.InboundConfig{},
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds:   10,
+			MaxTotalDeliverySeconds:   10,
 			ConnectionTimeoutSeconds: 5,
 			SMTPTimeoutSeconds:       5,
 		},
@@ -294,7 +294,7 @@ func TestSMTPConnectionTimeout(t *testing.T) {
 		Outbound: config.OutboundConfig{
 			ConnectionTimeoutSeconds: 2, // 2 second timeout
 			SMTPTimeoutSeconds:       2,
-			DeliveryTimeoutSeconds:   5,
+			MaxTotalDeliverySeconds:   5,
 		},
 		DNS:        config.DNSConfig{TimeoutSeconds: 2},
 		Reputation: config.ReputationConfig{},
@@ -333,7 +333,7 @@ func TestConcurrentDeliveries(t *testing.T) {
 			MaxConcurrentRequests: 0, // No limit
 		},
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds:   30,
+			MaxTotalDeliverySeconds:   30,
 			ConnectionTimeoutSeconds: 10,
 			SMTPTimeoutSeconds:       10,
 		},
@@ -397,7 +397,7 @@ func TestConcurrencyLimit(t *testing.T) {
 			MaxConcurrentRequests: 5, // Low limit for testing
 		},
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds:   30,
+			MaxTotalDeliverySeconds:   30,
 			ConnectionTimeoutSeconds: 10,
 			SMTPTimeoutSeconds:       10,
 		},
@@ -451,7 +451,7 @@ func TestPerDomainRateLimitConcurrent(t *testing.T) {
 		Inbound: config.InboundConfig{},
 		Outbound: config.OutboundConfig{
 			PerDomainIntervalSeconds: 2, // 2s between deliveries to same domain
-			DeliveryTimeoutSeconds:   30,
+			MaxTotalDeliverySeconds:   30,
 			ConnectionTimeoutSeconds: 10,
 			SMTPTimeoutSeconds:       10,
 		},
@@ -514,7 +514,7 @@ func TestPerDomainRateLimitDifferentDomains(t *testing.T) {
 		Inbound: config.InboundConfig{},
 		Outbound: config.OutboundConfig{
 			PerDomainIntervalSeconds: 2, // 2s between deliveries to SAME domain
-			DeliveryTimeoutSeconds:   5, // Short timeout for test
+			MaxTotalDeliverySeconds:   5, // Short timeout for test
 			ConnectionTimeoutSeconds: 2,
 			SMTPTimeoutSeconds:       2,
 		},
@@ -559,7 +559,7 @@ func TestContextCancellation(t *testing.T) {
 	cfg := &config.Config{
 		Inbound: config.InboundConfig{},
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds:   30,
+			MaxTotalDeliverySeconds:   30,
 			ConnectionTimeoutSeconds: 10,
 			SMTPTimeoutSeconds:       10,
 		},
@@ -617,7 +617,7 @@ func TestDeliveryResultFormat(t *testing.T) {
 	cfg := &config.Config{
 		Inbound: config.InboundConfig{},
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds:   30,
+			MaxTotalDeliverySeconds:   30,
 			ConnectionTimeoutSeconds: 10,
 			SMTPTimeoutSeconds:       10,
 		},
@@ -715,7 +715,7 @@ func TestDNSFailure(t *testing.T) {
 	cfg := &config.Config{
 		Inbound: config.InboundConfig{},
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds:   30,
+			MaxTotalDeliverySeconds:   30,
 			ConnectionTimeoutSeconds: 10,
 			SMTPTimeoutSeconds:       10,
 		},

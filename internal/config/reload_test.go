@@ -27,7 +27,7 @@ max_concurrent_requests = 100
 source_ips_v4 = ["192.168.1.100"]
 source_ip_selection = "round-robin"
 mx_cache_ttl_seconds = 3600
-delivery_timeout_seconds = 30
+max_total_delivery_seconds = 30
 `
 	if err := os.WriteFile(configPath, []byte(initialConfig), 0644); err != nil {
 		t.Fatalf("failed to write initial config: %v", err)
@@ -63,7 +63,7 @@ max_concurrent_requests = 200
 source_ips_v4 = ["192.168.1.100", "192.168.1.101", "192.168.1.102"]
 source_ip_selection = "random"
 mx_cache_ttl_seconds = 7200
-delivery_timeout_seconds = 60
+max_total_delivery_seconds = 60
 `
 	if err := os.WriteFile(configPath, []byte(updatedConfig), 0644); err != nil {
 		t.Fatalf("failed to write updated config: %v", err)
@@ -91,8 +91,8 @@ delivery_timeout_seconds = 60
 	if cfg.Inbound.MaxConcurrentRequests != 200 {
 		t.Errorf("expected max_concurrent_requests 200, got %d", cfg.Inbound.MaxConcurrentRequests)
 	}
-	if cfg.Outbound.DeliveryTimeoutSeconds != 60 {
-		t.Errorf("expected delivery_timeout_seconds 60, got %d", cfg.Outbound.DeliveryTimeoutSeconds)
+	if cfg.Outbound.MaxTotalDeliverySeconds != 60 {
+		t.Errorf("expected max_total_delivery_seconds 60, got %d", cfg.Outbound.MaxTotalDeliverySeconds)
 	}
 }
 
@@ -146,14 +146,14 @@ source_ips = ["192.168.1.100", "192.168.1.101"]
 listen = ":8080"
 [outbound]
 source_ips = []
-delivery_timeout_seconds = 30
+max_total_delivery_seconds = 30
 `,
 			updatedConfig: `
 [inbound]
 listen = ":8080"
 [outbound]
 source_ips = []
-delivery_timeout_seconds = 60
+max_total_delivery_seconds = 60
 `,
 			expectError: false,
 		},
@@ -315,7 +315,7 @@ max_concurrent_requests = 100
 [outbound]
 source_ips = ["192.168.1.100"]
 source_ip_selection = "round-robin"
-delivery_timeout_seconds = 30
+max_total_delivery_seconds = 30
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -339,7 +339,7 @@ delivery_timeout_seconds = 30
 	if outboundCfg.SourceIPSelection != "round-robin" {
 		t.Errorf("GetOutbound: expected source_ip_selection 'round-robin', got '%s'", outboundCfg.SourceIPSelection)
 	}
-	if outboundCfg.DeliveryTimeoutSeconds != 30 {
-		t.Errorf("GetOutbound: expected delivery_timeout_seconds 30, got %d", outboundCfg.DeliveryTimeoutSeconds)
+	if outboundCfg.MaxTotalDeliverySeconds != 30 {
+		t.Errorf("GetOutbound: expected max_total_delivery_seconds 30, got %d", outboundCfg.MaxTotalDeliverySeconds)
 	}
 }

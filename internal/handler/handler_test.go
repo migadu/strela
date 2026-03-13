@@ -118,7 +118,7 @@ func TestHandleDeliver_RawMessage(t *testing.T) {
 	// Create minimal config
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 	}
 
@@ -175,7 +175,7 @@ It preserves all original headers.`
 func TestHandleDeliver_ModeValidation(t *testing.T) {
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 	}
 
@@ -279,7 +279,7 @@ func TestHandleDeliver_DKIMConfigDefaults(t *testing.T) {
 	// Create config with DKIM enabled
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 		DKIM: config.DKIMConfig{
 			Enabled:        true,
@@ -383,7 +383,7 @@ func TestHandleDeliver_RawMessagePassedToDelivery(t *testing.T) {
 	// This ensures ARC/SRS signing in delivery layer works with raw messages
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 	}
 
@@ -444,7 +444,7 @@ func TestHandleDeliver_DynamicARCKey(t *testing.T) {
 	// Test that ARC parameters can be passed via API request
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 		ARC: config.ARCConfig{
 			Enabled:  true,
@@ -512,7 +512,7 @@ func TestHandleDeliver_DKIMARCDisabledIgnoresAPIParams(t *testing.T) {
 	// Test that API parameters are ignored when config explicitly disables DKIM/ARC
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 		DKIM: config.DKIMConfig{
 			Enabled: false, // Explicitly disabled
@@ -559,7 +559,7 @@ func TestHandleDeliver_HeaderMode(t *testing.T) {
 	// Test the new header mode (Content-Type: message/rfc822)
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 	}
 
@@ -614,7 +614,7 @@ func TestHandleDeliver_HeaderModeWithDKIM(t *testing.T) {
 	// Test header mode with DKIM parameters
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 		DKIM: config.DKIMConfig{
 			Enabled: true,
@@ -655,7 +655,7 @@ func TestHandleDeliver_HeaderModeMissingEnvelope(t *testing.T) {
 	// Test that header mode fails gracefully when envelope headers missing
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 	}
 
@@ -691,7 +691,7 @@ func TestHandleDeliver_BothModesWork(t *testing.T) {
 	// Test that both JSON and header modes work correctly
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 	}
 
@@ -763,7 +763,7 @@ func TestHandleDeliver_HeaderModeBase64PrivateKeys(t *testing.T) {
 	// Test that base64-encoded private keys in headers are decoded correctly
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 		DKIM: config.DKIMConfig{
 			Enabled: true,
@@ -867,7 +867,7 @@ func TestDecodeBase64Header(t *testing.T) {
 func TestTimeoutResponse(t *testing.T) {
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
-			DeliveryTimeoutSeconds: 30,
+			MaxTotalDeliverySeconds: 30,
 		},
 	}
 

@@ -16,7 +16,7 @@ func TestNewDeliverer(t *testing.T) {
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
-		DeliveryTimeoutSeconds:   1,
+		MaxTotalDeliverySeconds:   1,
 		PerDomainIntervalSeconds: 1,
 	}
 	dnsCfg := &config.DNSConfig{

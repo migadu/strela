@@ -160,7 +160,7 @@ listen = ":8025"
 max_concurrent_requests = 200
 
 [outbound]
-delivery_timeout_seconds = 30
+max_total_delivery_seconds = 200
 per_domain_interval_seconds = 2
 
 # DKIM signing for all outbound messages

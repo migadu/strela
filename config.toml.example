@@ -19,7 +19,7 @@ max_body_size_bytes = 36700160          # 35MB (maximum message size)
 
 # Timeouts - IMPORTANT for synchronous model
 read_timeout_seconds = 30               # Time to read request body
-write_timeout_seconds = 90              # MUST be > delivery_timeout_seconds + margin
+write_timeout_seconds = 240             # MUST be > max_total_delivery_seconds + margin (default: 200s)
 idle_timeout_seconds = 120              # Keep-alive timeout
 
 # Rate limiting (per source IP)
@@ -97,17 +97,27 @@ mx_cache_ttl_seconds = 3600                 # In-memory MX record cache TTL
 max_ips_per_mx = 5                          # Max IP addresses to try per MX host
 
 # SMTP connection settings
-connection_timeout_seconds = 30             # TCP connection timeout to MX server
+connection_timeout_seconds = 15             # TCP connection timeout to MX server
+banner_timeout_seconds = 30                 # Timeout for SMTP banner (220 greeting) - some MX servers are slow
+handshake_timeout_seconds = 30              # Timeout for EHLO/HELO + STARTTLS handshake
+smtp_timeout_seconds = 60                   # SMTP command timeout for MAIL/RCPT/DATA commands
 connection_pool_ttl_seconds = 5             # Max time to keep idle connection for reuse
-smtp_timeout_seconds = 60                   # SMTP command/response timeout
 hello_hostname = "mail.example.com"         # Hostname for EHLO greeting (default: system hostname)
 
-# v2.0 SYNCHRONOUS DELIVERY TIMEOUT - CRITICAL SETTING
-delivery_timeout_seconds = 30               # Maximum time for entire delivery attempt
-                                            # Includes: DNS lookup + TCP connect + SMTP handshake + delivery
+# v2.0.7 TOTAL DELIVERY TIMEOUT - CRITICAL SETTING
+max_total_delivery_seconds = 200            # HARD CAP for entire delivery operation across ALL attempts
+                                            # Includes: DNS + all MX servers + all source IPs + retries
                                             # HTTP response will block for up to this duration
-                                            # Recommended: 30-60s for production
+                                            # Recommended: 120-300s for production (some MX servers are very slow)
                                             # NOTE: inbound.write_timeout_seconds must be > this value
+                                            #
+                                            # Per-attempt phase timeouts (will be scaled if remaining time is less):
+                                            #   - TCP connection: 15s (connection_timeout_seconds)
+                                            #   - SMTP banner: 30s (banner_timeout_seconds)
+                                            #   - Handshake: 30s (handshake_timeout_seconds)
+                                            #   - Delivery: 60s (smtp_timeout_seconds)
+                                            # Single attempt ideal: 135s
+                                            # Multiple MX/IPs could exceed → max_total_delivery_seconds caps it
 
 # Per-domain rate limiting - CRITICAL for preventing MX server abuse
 per_domain_interval_seconds = 2             # Minimum seconds between deliveries to same domain

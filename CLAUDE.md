@@ -92,9 +92,16 @@ Return JSON response immediately:
    - Optional concurrency limit via middleware (`max_concurrent_requests`)
    - Per-domain rate limiting prevents hammering same MX server
 
-4. **Context Propagation**: All operations accept `context.Context` for timeout and cancellation.
-   - `delivery_timeout_seconds` enforced via context deadline
-   - Timeout cascade: Client → Load Balancer → Strela → SMTP
+4. **Context Propagation & Phased Timeouts** (v2.0.7+): All operations accept `context.Context` for timeout and cancellation.
+   - `max_total_delivery_seconds` enforced via context deadline (total timeout cap)
+   - **Phased timeout breakdown** for handling slow MX servers:
+     - `connection_timeout_seconds`: TCP connection establishment (default: 15s)
+     - `banner_timeout_seconds`: SMTP 220 greeting banner (default: 30s) - some MX servers are very slow
+     - `handshake_timeout_seconds`: EHLO/HELO + STARTTLS negotiation (default: 30s)
+     - `smtp_timeout_seconds`: MAIL/RCPT/DATA delivery commands (default: 60s)
+   - Phases are **combined** (banner + handshake) due to go-smtp library limitations
+   - If remaining context time < total desired, timeouts are **scaled proportionally**
+   - Timeout cascade: Client → Load Balancer → Strela → SMTP phases
 
 5. **IPv6/IPv4 Dual-Stack with Preference**:
    - Separate IPv4 and IPv6 source IP pools
@@ -250,7 +257,8 @@ Return JSON response immediately:
 - `[inbound]` → `InboundConfig` (HTTP API settings)
   - **New in v2.0:** `max_concurrent_requests` - Concurrency limit
 - `[outbound]` → `OutboundConfig` (SMTP delivery settings)
-  - **New in v2.0:** `delivery_timeout_seconds` - Delivery timeout
+  - **New in v2.0:** `max_total_delivery_seconds` - Total delivery timeout (default: 200s)
+  - **New in v2.0.7:** `banner_timeout_seconds`, `handshake_timeout_seconds` - Phased timeouts for slow MX servers
   - **New in v2.0.4:** `source_ips_v4`, `source_ips_v6`, `prefer_ipv6` - IPv6/IPv4 dual-stack
   - **Removed:** `source_ips` (replaced by v4/v6 specific), circuit breaker, retry settings
 - `[dns]` → `DNSConfig`
@@ -275,7 +283,7 @@ Trigger with: `kill -HUP <pid>` or `systemctl reload strela`
 - DNS settings (resolvers, cache TTL)
 - TLS certificates (file-based auto-reload)
 - HTTP timeouts
-- Delivery timeout (`delivery_timeout_seconds`)
+- Delivery timeouts (`max_total_delivery_seconds`, `banner_timeout_seconds`, `handshake_timeout_seconds`, `smtp_timeout_seconds`)
 - Concurrency limit (`max_concurrent_requests`)
 
 **Note**: CIDR subnet expansion happens on startup, not during hot reload
@@ -327,7 +335,12 @@ source_ips_v6 = ["2001:db8::1", "2001:db8::/124"]  # IPv6 IPs/subnets
 max_concurrent_requests = 200    # Limit concurrent HTTP requests (0 = unlimited)
 
 [outbound]
-delivery_timeout_seconds = 30    # Maximum time for SMTP delivery
+# Phased timeout configuration (v2.0.7+)
+connection_timeout_seconds = 15    # TCP connection timeout
+banner_timeout_seconds = 30        # SMTP banner (220 greeting) timeout - for slow MX servers
+handshake_timeout_seconds = 30     # EHLO/HELO + STARTTLS timeout
+smtp_timeout_seconds = 60          # MAIL/RCPT/DATA command timeout
+max_total_delivery_seconds = 200     # Total maximum time (hard cap across all phases)
 ```
 
 ## Testing Conventions
@@ -345,7 +358,7 @@ cfg := &config.OutboundConfig{
     SourceIPsV6: []string{"2001:db8::1"},
     PreferIPv6: true,
     SourceIPSelection: "round-robin",
-    DeliveryTimeoutSeconds: 30,
+    MaxTotalDeliverySeconds: 30,
 }
 
 // Expanded IPs for NewDeliverer
@@ -524,7 +537,8 @@ Major dependencies (see `go.mod`):
 ### What Was Added
 - ✅ Synchronous delivery with immediate JSON response
 - ✅ HTTP concurrency limiting middleware
-- ✅ Configurable delivery timeout
+- ✅ Configurable delivery timeout with phased breakdown (v2.0.7)
+- ✅ Phased timeout support for slow MX servers (banner, handshake, delivery) (v2.0.7)
 - ✅ DeliveryResult struct with comprehensive status info
 - ✅ Stateless architecture (no database)
 - ✅ IPv6/IPv4 dual-stack with preference (v2.0.4)
@@ -599,7 +613,7 @@ LimitNOFILE=65536  # High for concurrent connections
 
 **Example load balancer (nginx):**
 ```nginx
-proxy_read_timeout 90s;  # Must exceed delivery_timeout_seconds
+proxy_read_timeout 90s;  # Must exceed max_total_delivery_seconds
 proxy_connect_timeout 5s;
 keepalive_timeout 90s;
 ```
@@ -608,7 +622,7 @@ keepalive_timeout 90s;
 
 ### High Timeout Rate
 - Check `strela_deliveries_total{status="timeout"}` metric
-- Increase `delivery_timeout_seconds` if needed
+- Increase `max_total_delivery_seconds` if needed
 - Check DNS resolver health
 - Check target MX server response times
 
@@ -644,7 +658,7 @@ keepalive_timeout 90s;
 1. **Always run tests with race detector**: `go test -race ./...`
 2. **Panic recovery is MANDATORY**: Use `recovery.SafeGo()` for all goroutines, check all type assertions
 3. **Caller is responsible for**: Queue, retry logic, message ID tracking, idempotency
-4. **Load balancer timeout** must exceed `delivery_timeout_seconds`
+4. **Load balancer timeout** must exceed `max_total_delivery_seconds`
 5. **Stateless architecture**: State lost on restart (DNS cache, IP reputation, CIDR expansion)
 6. **No backwards compatibility**: v2.0 is breaking change from v1.x
 7. **STARTTLS is enabled**: Messages encrypted in transit when supported by MX server
@@ -652,6 +666,7 @@ keepalive_timeout 90s;
 9. **IPv6/IPv4 configuration**: Use `source_ips_v4` and `source_ips_v6` (legacy `source_ips` removed in v2.0.4)
 10. **CIDR expansion on startup**: Subnets expanded once at startup, hot reload doesn't re-expand
 11. **Multi-domain SRS (v2.0.6)**: Use multiple SRS domains to avoid Gmail rate limiting - see troubleshooting section
+12. **Phased timeouts (v2.0.7)**: Separate timeouts for banner, handshake, and delivery phases accommodate slow MX servers - default total: 200s
 
 ---
 
@@ -694,6 +709,6 @@ When receiving SIGINT/SIGTERM:
 
 ---
 
-**Last Updated**: 2026-03-01 (Project renamed from "Fune" to "Strela")
-**Previous Update**: 2026-02-11 (v2.0.6 - Multi-domain SRS support for Gmail rate limiting mitigation)
+**Last Updated**: 2026-03-12 (v2.0.7 - Phased timeout support for slow MX servers)
+**Previous Update**: 2026-03-01 (Project renamed from "Fune" to "Strela")
 **Next Review**: After load testing and operational documentation
