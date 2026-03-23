@@ -126,7 +126,6 @@ type OutboundConfig struct {
 	// Rate limiting per destination domain
 	PerDomainIntervalSeconds int      `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
 	PerDomainBurst           int      `toml:"per_domain_burst"`            // Bucket size for token bucket rate limiting (default: 10)
-	PerDomainRetrySeconds    int      `toml:"per_domain_retry_seconds"`    // Delay before retrying throttled message (default: 5s)
 	RateLimitWhitelist       []string `toml:"rate_limit_whitelist"`        // Domains exempt from rate limiting (default: [])
 }
 
@@ -321,9 +320,6 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Outbound.PerDomainBurst == 0 {
 		c.Outbound.PerDomainBurst = 10
-	}
-	if c.Outbound.PerDomainRetrySeconds == 0 {
-		c.Outbound.PerDomainRetrySeconds = 5
 	}
 	// DNS defaults
 	if c.DNS.TimeoutSeconds == 0 {
