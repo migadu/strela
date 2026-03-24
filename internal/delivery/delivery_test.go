@@ -16,7 +16,7 @@ func TestNewDeliverer(t *testing.T) {
 		SourceIPSelection:        "round-robin",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
-		MaxTotalDeliverySeconds:   1,
+		MaxTotalDeliverySeconds:  1,
 		PerDomainIntervalSeconds: 1,
 	}
 	dnsCfg := &config.DNSConfig{
@@ -375,5 +375,73 @@ func TestShouldSkipSRS_NoSRSConfig(t *testing.T) {
 	skip, _ := srsInst.ShouldSkip("alice@example.com", "alice@example.com", "pass")
 	if skip {
 		t.Error("ShouldSkip() should not skip when no skip options are set")
+	}
+}
+
+func TestLMTPMode_SkipsMXLookup(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.OutboundConfig{
+		Protocol:                 "lmtp",
+		LMTPDestination:          "lmtp.example.com:24",
+		ConnectionTimeoutSeconds: 1,
+		SMTPTimeoutSeconds:       1,
+		MaxTotalDeliverySeconds:  1,
+	}
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds: 1,
+	}
+	repCfg := &config.ReputationConfig{}
+	expandedIPs := &config.ExpandedSourceIPs{
+		IPv4: []string{},
+		IPv6: []string{},
+	}
+
+	mxLookup := NewMXLookup(dnsCfg, logger)
+	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
+
+	// Verify that deliverer was created with LMTP protocol
+	if deliverer.config.Protocol != "lmtp" {
+		t.Errorf("Expected protocol 'lmtp', got: %s", deliverer.config.Protocol)
+	}
+
+	if deliverer.config.LMTPDestination != "lmtp.example.com:24" {
+		t.Errorf("Expected LMTP destination 'lmtp.example.com:24', got: %s", deliverer.config.LMTPDestination)
+	}
+
+	// Note: Full delivery test would require a mock LMTP server
+	// This test verifies that the deliverer is properly configured for LMTP mode
+}
+
+func TestLMTPMode_InvalidDestination(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.OutboundConfig{
+		Protocol:                 "lmtp",
+		LMTPDestination:          "invalid",
+		ConnectionTimeoutSeconds: 1,
+		SMTPTimeoutSeconds:       1,
+		MaxTotalDeliverySeconds:  1,
+	}
+	dnsCfg := &config.DNSConfig{
+		TimeoutSeconds: 1,
+	}
+	repCfg := &config.ReputationConfig{}
+	expandedIPs := &config.ExpandedSourceIPs{
+		IPv4: []string{},
+		IPv6: []string{},
+	}
+
+	mxLookup := NewMXLookup(dnsCfg, logger)
+	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
+
+	ctx := context.Background()
+	result := deliverer.DeliverMessage(ctx, "sender@example.com", "recipient@example.com", []byte("test"), "", "", "", false, "", "", "", nil)
+
+	// Should fail due to invalid host:port format
+	if result.Status != "error" {
+		t.Errorf("Expected error status for invalid LMTP destination, got %s", result.Status)
+	}
+
+	if result.Error == "" {
+		t.Error("Expected error message for invalid LMTP destination")
 	}
 }

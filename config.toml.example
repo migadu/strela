@@ -81,6 +81,15 @@ bind = "127.0.0.1:8080"                    # Localhost-only admin server (health
 # password = "secure-password"
 
 [outbound]
+# Protocol selection
+protocol = "smtp"                           # "smtp" (default) or "lmtp" for LMTP delivery
+# lmtp_destination = "lmtp.example.com:24" # Required if protocol = "lmtp" - fixed destination host:port
+                                            # When LMTP mode is enabled:
+                                            # - MX lookup is SKIPPED (connects directly to this host)
+                                            # - Uses LHLO instead of EHLO/HELO
+                                            # - Per-recipient delivery status (LMTP returns status after each RCPT)
+                                            # - Typically used for delivery to local mail stores (Dovecot, Cyrus, etc.)
+
 # Source IP configuration - supports individual IPs and CIDR subnets
 # Examples: "192.0.2.1", "192.0.2.0/28" (16 IPs), "2001:db8::1", "2001:db8::/124" (16 IPs)
 # Subnets are expanded on startup. Limits: IPv4 max /22 (1024 IPs), IPv6 max /120 (256 IPs)

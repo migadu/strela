@@ -406,31 +406,53 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			"has_domain", finalARCDomain != "")
 	}
 
-	// 4. Lookup MX records
-	logger.Debug("looking up MX records", "domain", domain)
-	mxRecords, err := d.mxLookup.Lookup(ctx, domain)
-	if err != nil {
-		logger.Debug("MX lookup failed", "domain", domain, "error", err)
-		result := DeliveryResult{
-			TraceID: traceID,
-			Status:  "temp_fail",
-			Error:   fmt.Sprintf("MX lookup failed: %v", err),
+	// 4. Lookup MX records (skip if LMTP mode)
+	var mxRecords []*MXRecord
+	if d.config.Protocol == "lmtp" {
+		// LMTP mode: use configured destination directly
+		logger.Info("LMTP mode: using configured destination", "destination", d.config.LMTPDestination)
+		// Extract host from host:port
+		host, _, err := net.SplitHostPort(d.config.LMTPDestination)
+		if err != nil {
+			logger.Debug("invalid LMTP destination", "destination", d.config.LMTPDestination, "error", err)
+			result := DeliveryResult{
+				TraceID: traceID,
+				Status:  "error",
+				Error:   fmt.Sprintf("Invalid LMTP destination: %v", err),
+			}
+			d.logDeliveryResult(logger, from, to, result)
+			return result
 		}
-		d.logDeliveryResult(logger, from, to, result)
-		return result
-	}
-	if len(mxRecords) == 0 {
-		logger.Debug("no MX records found", "domain", domain)
-		result := DeliveryResult{
-			TraceID: traceID,
-			Status:  "hard_bounce",
-			Error:   "No MX records found",
+		// Create a synthetic MX record for LMTP destination
+		mxRecords = []*MXRecord{{Host: host, Priority: 0}}
+	} else {
+		// SMTP mode: lookup MX records
+		logger.Debug("looking up MX records", "domain", domain)
+		var err error
+		mxRecords, err = d.mxLookup.Lookup(ctx, domain)
+		if err != nil {
+			logger.Debug("MX lookup failed", "domain", domain, "error", err)
+			result := DeliveryResult{
+				TraceID: traceID,
+				Status:  "temp_fail",
+				Error:   fmt.Sprintf("MX lookup failed: %v", err),
+			}
+			d.logDeliveryResult(logger, from, to, result)
+			return result
 		}
-		d.logDeliveryResult(logger, from, to, result)
-		return result
-	}
+		if len(mxRecords) == 0 {
+			logger.Debug("no MX records found", "domain", domain)
+			result := DeliveryResult{
+				TraceID: traceID,
+				Status:  "hard_bounce",
+				Error:   "No MX records found",
+			}
+			d.logDeliveryResult(logger, from, to, result)
+			return result
+		}
 
-	logger.Info("found MX records", "domain", domain, "count", len(mxRecords))
+		logger.Info("found MX records", "domain", domain, "count", len(mxRecords))
+	}
 
 	// 5. Try each MX with IPv6/IPv4 preference
 	var lastResult DeliveryResult
@@ -908,7 +930,24 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		}
 	}
 
-	// TCP connection to port 25 (SMTP)
+	// Determine target port (SMTP port 25 or LMTP configured port)
+	targetPort := "25"
+	if d.config.Protocol == "lmtp" {
+		// Extract port from lmtp_destination
+		_, port, err := net.SplitHostPort(d.config.LMTPDestination)
+		if err != nil {
+			return nil, DeliveryResult{
+				TraceID:  traceID,
+				Status:   "error",
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error:    fmt.Sprintf("Invalid LMTP destination: %v", err),
+			}, err
+		}
+		targetPort = port
+	}
+
+	// TCP connection to target port
 	// Use the minimum of configured timeout and remaining context deadline
 	connectionTimeout := time.Duration(d.config.ConnectionTimeoutSeconds) * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
@@ -949,10 +988,10 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		dialer.LocalAddr = &net.TCPAddr{IP: ip}
 	}
 
-	logger.Info("connecting to MX", "mx", mxHost, "target_ip", targetIP, "source_ip", sourceIP)
+	logger.Info("connecting to MX", "mx", mxHost, "target_ip", targetIP, "port", targetPort, "source_ip", sourceIP, "protocol", d.config.Protocol)
 
 	// Connect to the target IP
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, "25"))
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, targetPort))
 	if err != nil {
 		logger.Debug("TCP dial failed", "mx", mxHost, "target_ip", targetIP, "source_ip", sourceIP, "error", err)
 
@@ -1062,14 +1101,34 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	resultCh := make(chan clientResult, 1)
 
 	recovery.SafeGo(d.logger, "smtp-handshake", func() {
-		// Phase 1+2: Banner + Handshake (banner + EHLO + STARTTLS) with combined timeout
+		// Phase 1+2: Banner + Handshake (banner + EHLO/LHLO + STARTTLS) with combined timeout
 		// Note: banner and handshake are combined because go-smtp doesn't expose individual control
 		handshakePhaseTimeout := bannerTimeout + handshakeTimeout
-		logger.Debug("phases 1+2: banner and handshake", "timeout", handshakePhaseTimeout)
+		logger.Debug("phases 1+2: banner and handshake", "timeout", handshakePhaseTimeout, "protocol", d.config.Protocol)
 		conn.SetDeadline(time.Now().Add(handshakePhaseTimeout))
 		defer conn.SetDeadline(time.Time{}) // Clear deadline after handshake
 
-		// Try STARTTLS first (opportunistic) - this does banner + EHLO + STARTTLS
+		// LMTP mode: skip STARTTLS, use LMTP client
+		if d.config.Protocol == "lmtp" {
+			// Create LMTP client (reads banner and uses LHLO instead of EHLO)
+			client := smtp.NewClientLMTP(conn)
+			// Send LHLO (LMTP greeting)
+			if err := client.Hello(d.config.HelloHostname); err != nil {
+				client.Close()
+				resultCh <- clientResult{err: fmt.Errorf("LHLO failed: %w", err)}
+				return
+			}
+
+			// Clear deadline and set timeouts for delivery
+			conn.SetDeadline(time.Time{})
+			client.CommandTimeout = deliveryTimeout
+			client.SubmissionTimeout = deliveryTimeout
+			logger.Info("LMTP connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
+			resultCh <- clientResult{client: client, usedTLS: false, err: nil}
+			return
+		}
+
+		// SMTP mode: Try STARTTLS first (opportunistic) - this does banner + EHLO + STARTTLS
 		client, err := smtp.NewClientStartTLSWithName(conn, tlsConfig, d.config.HelloHostname)
 		if err == nil {
 			// STARTTLS succeeded
@@ -1096,7 +1155,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			}
 
 			// Reconnect to same target
-			newConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, "25"))
+			newConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetIP, targetPort))
 			if err != nil {
 				resultCh <- clientResult{err: fmt.Errorf("reconnect for plaintext failed: %w", err)}
 				return

@@ -196,6 +196,105 @@ func TestLoadConfigInvalidTOML(t *testing.T) {
 	}
 }
 
+func TestValidate_SMTP(t *testing.T) {
+	cfg := &Config{
+		Outbound: OutboundConfig{
+			Protocol: "smtp",
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Expected no error for SMTP protocol, got: %v", err)
+	}
+}
+
+func TestValidate_LMTP_Valid(t *testing.T) {
+	cfg := &Config{
+		Outbound: OutboundConfig{
+			Protocol:        "lmtp",
+			LMTPDestination: "lmtp.example.com:24",
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Expected no error for valid LMTP config, got: %v", err)
+	}
+}
+
+func TestValidate_LMTP_MissingDestination(t *testing.T) {
+	cfg := &Config{
+		Outbound: OutboundConfig{
+			Protocol: "lmtp",
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Expected error for LMTP without destination, got nil")
+	}
+	expectedMsg := "outbound.lmtp_destination is required when protocol is 'lmtp'"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got: %v", expectedMsg, err)
+	}
+}
+
+func TestValidate_LMTP_InvalidHostPort(t *testing.T) {
+	tests := []struct {
+		name        string
+		destination string
+		wantErr     bool
+	}{
+		{"missing_port", "lmtp.example.com", true},
+		{"missing_host", ":24", true},
+		{"empty", "", true},
+		{"valid", "lmtp.example.com:24", false},
+		{"valid_ipv4", "192.0.2.1:24", false},
+		{"valid_ipv6", "[2001:db8::1]:24", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Outbound: OutboundConfig{
+					Protocol:        "lmtp",
+					LMTPDestination: tt.destination,
+				},
+			}
+
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate_InvalidProtocol(t *testing.T) {
+	cfg := &Config{
+		Outbound: OutboundConfig{
+			Protocol: "invalid",
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Expected error for invalid protocol, got nil")
+	}
+	expectedMsg := "outbound.protocol must be 'smtp' or 'lmtp', got: invalid"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message '%s', got: %v", expectedMsg, err)
+	}
+}
+
+func TestSetDefaults_Protocol(t *testing.T) {
+	cfg := &Config{}
+	cfg.SetDefaults()
+
+	if cfg.Outbound.Protocol != "smtp" {
+		t.Errorf("Expected default protocol 'smtp', got: %s", cfg.Outbound.Protocol)
+	}
+}
+
 func TestS3PrefixNormalization(t *testing.T) {
 	tests := []struct {
 		name     string
