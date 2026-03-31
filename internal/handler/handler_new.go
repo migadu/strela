@@ -19,7 +19,6 @@ import (
 
 	"strela/internal/config"
 	"strela/internal/delivery"
-	"strela/internal/dkim"
 
 	"github.com/emersion/go-message/mail"
 )
@@ -368,8 +367,11 @@ func (h *Handler) buildRawMessage(req *MessageRequest) ([]byte, error) {
 		}
 	}
 
-	// Apply custom headers
+	// Apply custom headers (reject any with CRLF sequences to prevent header injection)
 	for key, value := range req.Headers {
+		if strings.ContainsAny(key, "\r\n") || strings.ContainsAny(value, "\r\n") {
+			return nil, fmt.Errorf("invalid custom header %q: contains prohibited CRLF characters", key)
+		}
 		header.Set(key, value)
 	}
 
@@ -601,8 +603,8 @@ func (h *Handler) decodeBase64Header(value string) string {
 // This is intentionally not a full RFC 5322 parser — it validates the
 // minimum structure needed for SMTP MAIL FROM / RCPT TO to succeed.
 func validateEmailAddress(addr string, fieldName string, allowNull bool) error {
-	// Handle null sender (<> or empty) — valid for bounce/DSN messages
-	if allowNull && (addr == "<>" || addr == "") {
+	// Handle null sender (<>) — valid for bounce/DSN messages (RFC 5321)
+	if allowNull && addr == "<>" {
 		return nil
 	}
 
@@ -686,11 +688,3 @@ func validateEmailAddress(addr string, fieldName string, allowNull bool) error {
 	return nil
 }
 
-// Helper methods for validation could go here
-func (h *Handler) validateDKIM(req *MessageRequest) error {
-	if req.DKIMPrivateKey != "" {
-		_, err := dkim.ValidatePrivateKey(req.DKIMPrivateKey)
-		return err
-	}
-	return nil
-}
