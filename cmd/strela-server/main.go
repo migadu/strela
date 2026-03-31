@@ -54,8 +54,20 @@ func cmdVersion() {
 	fmt.Printf("  built:  %s\n", date)
 }
 
+func defaultConfigPath() string {
+	for _, p := range []string{
+		"/etc/strela/config.toml",
+		"/usr/local/etc/strela/config.toml",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "config.toml"
+}
+
 func main() {
-	configPath := flag.String("config", "config.toml", "Path to configuration file")
+	configPath := flag.String("config", defaultConfigPath(), "Path to configuration file")
 	showVersion := flag.Bool("version", false, "Show version information and exit")
 	flag.Parse()
 

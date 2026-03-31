@@ -46,10 +46,22 @@ var (
 	showVersion bool
 )
 
+func defaultStrelaConfigPath() string {
+	for _, p := range []string{
+		"/etc/strela/config.toml",
+		"/usr/local/etc/strela/config.toml",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "config.toml"
+}
+
 func init() {
 	flag.StringVar(&serverURL, "server", "", "Strela server URL (default: from config or http://localhost:8080)")
 	flag.DurationVar(&timeout, "timeout", 10*time.Second, "Request timeout")
-	flag.StringVar(&configFile, "config", "config.toml", "Path to config file")
+	flag.StringVar(&configFile, "config", defaultStrelaConfigPath(), "Path to config file")
 	flag.BoolVar(&showVersion, "version", false, "Show version information")
 }
 
