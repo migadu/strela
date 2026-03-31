@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -783,6 +784,9 @@ func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog
 				client.SubmissionTimeout = remaining
 			}
 		}
+		// If remaining <= minSMTPTimeout, don't tighten further — let the
+		// context deadline itself enforce cancellation rather than setting
+		// unreasonably small SMTP timeouts.
 	}
 
 	logger.Debug("starting delivery transaction",

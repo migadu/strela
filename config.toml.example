@@ -102,6 +102,7 @@ source_ips_v4 = ["192.0.2.1", "192.0.2.2"]  # IPv4 source IPs/subnets
 source_ips_v6 = ["2001:db8::1"]             # IPv6 source IPs/subnets
 
 source_ip_selection = "round-robin"         # "round-robin", "random", or "hash-domain"
+# smtp_port = 25                             # SMTP port on MX servers (default: 25, override for local testing)
 mx_cache_ttl_seconds = 3600                 # In-memory MX record cache TTL
 max_ips_per_mx = 5                          # Max IP addresses to try per MX host
 

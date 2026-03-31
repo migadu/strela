@@ -127,6 +127,9 @@ type OutboundConfig struct {
 	MaxIPsPerMX              int    `toml:"max_ips_per_mx"`              // Maximum number of IPs to try per MX host (default: 5)
 	HelloHostname            string `toml:"hello_hostname"`              // Hostname for EHLO greeting (default: system hostname)
 
+	// SMTP delivery port (default: 25, RFC 5321 standard)
+	SMTPPort int `toml:"smtp_port"` // Port to connect to on MX servers (default: 25)
+
 	// Rate limiting per destination domain
 	PerDomainIntervalSeconds int      `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
 	PerDomainBurst           int      `toml:"per_domain_burst"`            // Bucket size for token bucket rate limiting (default: 10)
@@ -321,6 +324,9 @@ func (c *Config) SetDefaults() {
 			hostname = "localhost"
 		}
 		c.Outbound.HelloHostname = hostname
+	}
+	if c.Outbound.SMTPPort == 0 {
+		c.Outbound.SMTPPort = 25
 	}
 	if c.Outbound.PerDomainIntervalSeconds == 0 {
 		c.Outbound.PerDomainIntervalSeconds = 2
