@@ -93,8 +93,8 @@ build-linux:
 
 freebsd:
 	@mkdir -p $(BIN_DIR)
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_SERVER_FREEBSD_BINARY) $(STRELA_SERVER_SRC)
-	GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_ADMIN_FREEBSD_BINARY) $(STRELA_ADMIN_SRC)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_SERVER_FREEBSD_BINARY) $(STRELA_SERVER_SRC)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=freebsd go build $(LDFLAGS) -o $(BIN_DIR)/$(STRELA_ADMIN_FREEBSD_BINARY) $(STRELA_ADMIN_SRC)
 
 # ====================================================================================
 # Help
