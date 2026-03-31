@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -401,10 +400,18 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			logger.Info("message signed with ARC successfully", "original_size", len(message), "arc_signed_size", len(signedMessage))
 		}
 	} else {
-		logger.Debug("skipping ARC signing - missing parameters",
-			"has_private_key", finalARCPrivateKey != "",
-			"has_selector", finalARCSelector != "",
-			"has_domain", finalARCDomain != "")
+		// Warn if ARC is partially configured (some params set but not all)
+		hasKey := finalARCPrivateKey != ""
+		hasSel := finalARCSelector != ""
+		hasDom := finalARCDomain != ""
+		if hasKey || hasSel || hasDom {
+			logger.Warn("ARC signing skipped: incomplete configuration (need all of: private_key, selector, domain)",
+				"has_private_key", hasKey,
+				"has_selector", hasSel,
+				"has_domain", hasDom)
+		} else {
+			logger.Debug("ARC signing not configured")
+		}
 	}
 
 	// 4. Lookup MX records (skip if LMTP mode)
@@ -776,7 +783,8 @@ func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog
 	// do not outlive the caller's deadline.
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
-		if remaining > 0 {
+		const minSMTPTimeout = 5 * time.Second
+		if remaining > minSMTPTimeout {
 			if remaining < client.CommandTimeout {
 				client.CommandTimeout = remaining
 			}

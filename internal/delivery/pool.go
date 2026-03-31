@@ -193,8 +193,13 @@ func (p *ConnectionPool) Put(client *smtp.Client, mxHost, sourceIP string) {
 
 // CloseAll closes all idle connections in the pool and stops the cleanup goroutine.
 func (p *ConnectionPool) CloseAll() {
-	// Signal cleanup goroutine to stop
+	// Signal cleanup goroutine to stop and wait for it to exit before
+	// acquiring the mutex, avoiding a race with cleanupExpired().
 	close(p.stopCh)
+
+	// Give the cleanup goroutine time to notice stopCh and release the lock.
+	// cleanupExpired holds mu briefly; this ensures we don't race with it.
+	time.Sleep(100 * time.Millisecond)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
