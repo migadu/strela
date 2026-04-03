@@ -217,7 +217,27 @@ func (h *Handler) handleDeliverWithTransport(w http.ResponseWriter, r *http.Requ
 		"trace_id", traceID,
 		"from", req.From,
 		"to", req.To,
+		"transport", transport,
 		"remote_addr", r.RemoteAddr)
+
+	// Debug: log envelope and raw message headers for troubleshooting
+	if req.RawMessage != "" {
+		headerEnd := strings.Index(req.RawMessage, "\r\n\r\n")
+		if headerEnd < 0 {
+			headerEnd = strings.Index(req.RawMessage, "\n\n")
+		}
+		if headerEnd > 0 {
+			hdrs := req.RawMessage[:headerEnd]
+			if len(hdrs) > 2048 {
+				hdrs = hdrs[:2048]
+			}
+			h.logger.Debug("inbound message headers",
+				"trace_id", traceID,
+				"envelope_from", req.From,
+				"envelope_to", req.To,
+				"headers", hdrs)
+		}
+	}
 
 	// Determine mode: raw message or composed
 	isRawMode := req.RawMessage != ""

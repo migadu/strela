@@ -1,15 +1,18 @@
 package delivery
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log/slog"
 	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,7 +139,7 @@ func NewDeliverer(config *config.OutboundConfig, expandedIPs *config.ExpandedSou
 		arcConfig:         arcConfig,
 		mxLookup:          mxLookup,
 		logger:            logger,
-		ipRotator:         NewIPRotator(ipsV4, ipsV6, config.SourceIPSelection, config.PreferIPv6),
+		ipRotator:         NewIPRotator(ipsV4, ipsV6, config.SourceIPSelection),
 		reputationTracker: reputationTracker,
 		arcPrivateKey:     arcPrivateKey,
 		srs:               srsInstance,
@@ -477,10 +480,15 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	// 5. Try each MX with IPv6/IPv4 preference
 	var lastResult DeliveryResult
 
-	// Determine delivery order: IPv6 first or IPv4 first
-	tryIPv6First := d.ipRotator.PreferIPv6() && d.ipRotator.HasIPv6()
-	tryIPv4 := d.ipRotator.HasIPv4()
-	tryIPv6 := d.ipRotator.HasIPv6()
+	// Determine delivery order based on per-protocol IP mode.
+	// In dual mode, IPv6 is always tried first with IPv4 fallback.
+	// tryIPv4/tryIPv6 control source-IP-bound delivery paths.
+	// preferIPv6 controls target IP selection when no source IPs are configured.
+	ipMode := d.config.IPModeForProtocol(protocol)
+	tryIPv4 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv4) && d.ipRotator.HasIPv4()
+	tryIPv6 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6) && d.ipRotator.HasIPv6()
+	tryIPv6First := tryIPv6
+	preferIPv6 := ipMode == config.IPModeDual || ipMode == config.IPModeIPv6
 
 	for i, mx := range mxRecords {
 		logger.Info("trying MX", "host", mx.Host, "priority", mx.Priority, "index", i, "total", len(mxRecords))
@@ -560,7 +568,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		} else {
 			// No source IPs configured - use system default
 			logger.Debug("no source IPs configured, using system default", "mx", mx.Host)
-			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, "", true, protocol, inboundAuth)
+			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, "", preferIPv6, protocol, inboundAuth)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
@@ -750,7 +758,16 @@ func (d *Deliverer) waitForDomainRateLimit(ctx context.Context, domain string) e
 }
 
 func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, traceID string, from, to string, msg []byte, mxHost, sourceIP string, preferIPv6 bool, protocol string, inboundAuth *InboundAuthResults) DeliveryResult {
-	// 1. Try to get a pooled connection
+	// LMTP: no connection pooling, raw protocol
+	if protocol == config.ProtocolLMTP {
+		dr, result, err := d.dialAndHello(ctx, logger, traceID, mxHost, sourceIP, preferIPv6, protocol)
+		if err != nil {
+			return result
+		}
+		return d.performLMTPTransaction(ctx, logger, traceID, dr.Conn, dr.Reader, from, to, msg, mxHost, sourceIP)
+	}
+
+	// SMTP: try pooled connection first
 	var client *smtp.Client
 	if d.pool != nil {
 		client = d.pool.Get(mxHost, sourceIP)
@@ -762,7 +779,6 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, tr
 				return result
 			}
 
-			// If failed and was reused, try once more with a fresh connection
 			logger.Debug("pooled connection failed, attempting with fresh connection",
 				"mx", mxHost,
 				"error", result.Error)
@@ -770,17 +786,14 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, tr
 		}
 	}
 
-	// 2. If no pooled connection (or reused failed), dial a new one
 	if client == nil {
-		var err error
-		var result DeliveryResult
-		client, result, err = d.dialAndHello(ctx, logger, traceID, mxHost, sourceIP, preferIPv6, protocol)
+		dr, result, err := d.dialAndHello(ctx, logger, traceID, mxHost, sourceIP, preferIPv6, protocol)
 		if err != nil {
 			return result
 		}
+		client = dr.Client
 	}
 
-	// 3. Deliver message logic
 	return d.performDeliveryTransaction(ctx, logger, traceID, client, from, to, msg, mxHost, sourceIP, false, inboundAuth)
 }
 
@@ -853,7 +866,7 @@ func (d *Deliverer) shouldSkipSRS(from, to string, inboundAuth *InboundAuthResul
 }
 
 func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, client *smtp.Client, from, to string, msg []byte, inboundAuth *InboundAuthResults) (string, error) {
-	// MAIL FROM
+	// MAIL FROM — SRS rewrite for SMTP (LMTP uses performLMTPTransaction instead)
 	mailFrom := from
 	if d.srs != nil {
 		if skip, reason := d.shouldSkipSRS(from, to, inboundAuth); skip {
@@ -885,6 +898,16 @@ func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, cli
 		return "", fmt.Errorf("context cancelled before MAIL FROM: %w", err)
 	}
 
+	// Log envelope and first message headers at DEBUG for diagnostics
+	if logger.Enabled(ctx, slog.LevelDebug) {
+		logger.Debug("SMTP envelope",
+			"mail_from", mailFrom,
+			"original_from", from,
+			"rcpt_to", to,
+			"srs_applied", mailFrom != from,
+			"message_headers", extractHeaders(msg))
+	}
+
 	logger.Debug("sending MAIL FROM", "from", mailFrom)
 	if err := client.Mail(mailFrom, mailOpts); err != nil {
 		logger.Debug("MAIL FROM failed", "error", err)
@@ -907,6 +930,9 @@ func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, cli
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("context cancelled before DATA: %w", err)
 	}
+
+	// Prepend X-Envelope-To so downstream relays can identify the envelope recipient
+	msg = append([]byte("X-Envelope-To: "+to+"\r\n"), msg...)
 
 	// DATA
 	logger.Debug("sending DATA", "size", len(msg))
@@ -939,7 +965,15 @@ func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, cli
 	return smtpMsg, nil
 }
 
-func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, traceID string, mxHost, sourceIP string, preferIPv6 bool, protocol string) (*smtp.Client, DeliveryResult, error) {
+// dialResult holds the outcome of dialAndHello. For SMTP, Client is set.
+// For LMTP, Conn and Reader are set (raw protocol, go-smtp doesn't support LMTP DATA responses).
+type dialResult struct {
+	Client *smtp.Client
+	Conn   net.Conn      // raw connection for LMTP
+	Reader *bufio.Reader // buffered reader for LMTP (preserves state from handshake)
+}
+
+func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, traceID string, mxHost, sourceIP string, preferIPv6 bool, protocol string) (*dialResult, DeliveryResult, error) {
 	logger.Debug("resolving MX host", "mx", mxHost)
 
 	// Resolve MX host to IP addresses
@@ -1014,10 +1048,11 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	}
 
 	// Determine target port based on protocol and configured destinations
-	// Determine target port based on protocol and configured destinations
-	targetPort := fmt.Sprintf("%d", d.config.SMTPPort)
-	if d.config.SMTPPort == 0 {
-		targetPort = "25"
+	var targetPort string
+	if protocol == config.ProtocolLMTP {
+		targetPort = fmt.Sprintf("%d", d.config.LMTPPort)
+	} else {
+		targetPort = fmt.Sprintf("%d", d.config.SMTPPort)
 	}
 	if fixedDest := d.fixedDestination(protocol); fixedDest != "" {
 		_, port, err := net.SplitHostPort(fixedDest)
@@ -1172,6 +1207,8 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	// Perform SMTP handshake (EHLO) and optionally STARTTLS with phased timeout enforcement
 	type clientResult struct {
 		client  *smtp.Client
+		conn    net.Conn      // raw connection for LMTP (bypasses go-smtp)
+		reader  *bufio.Reader // buffered reader for LMTP (preserves state from handshake)
 		usedTLS bool
 		err     error
 	}
@@ -1185,28 +1222,64 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		conn.SetDeadline(time.Now().Add(handshakePhaseTimeout))
 		defer conn.SetDeadline(time.Time{}) // Clear deadline after handshake
 
-		// LMTP mode: skip STARTTLS, use LMTP client
+		// LMTP mode: raw protocol (go-smtp's LMTP client doesn't support per-recipient DATA responses)
 		if protocol == config.ProtocolLMTP {
-			// Create LMTP client (reads banner and uses LHLO instead of EHLO)
-			client := smtp.NewClientLMTP(conn)
-			// Send LHLO (LMTP greeting)
-			if err := client.Hello(d.config.HelloHostname); err != nil {
-				client.Close()
-				resultCh <- clientResult{err: fmt.Errorf("LHLO failed: %w", err)}
+			var lmtpConn net.Conn = conn
+			usedTLS := false
+
+			// Implicit TLS for LMTP: wrap connection in TLS before LHLO
+			if d.config.LMTPImplicitTLS {
+				tlsConn := tls.Client(conn, tlsConfig)
+				if err := tlsConn.HandshakeContext(ctx); err != nil {
+					resultCh <- clientResult{err: fmt.Errorf("implicit TLS handshake for LMTP failed: %w", err)}
+					return
+				}
+				lmtpConn = tlsConn
+				usedTLS = true
+			}
+
+			reader := bufio.NewReader(lmtpConn)
+
+			// Read server greeting (220)
+			code, _, err := readLMTPResponse(reader, lmtpConn, handshakePhaseTimeout)
+			if err != nil {
+				lmtpConn.Close()
+				resultCh <- clientResult{err: fmt.Errorf("LMTP greeting: %w", err)}
+				return
+			}
+			if code != 220 {
+				lmtpConn.Close()
+				resultCh <- clientResult{err: fmt.Errorf("LMTP unexpected greeting code: %d", code)}
 				return
 			}
 
-			// Clear deadline and set timeouts for delivery
-			conn.SetDeadline(time.Time{})
-			client.CommandTimeout = deliveryTimeout
-			client.SubmissionTimeout = deliveryTimeout
-			logger.Info("LMTP connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
-			resultCh <- clientResult{client: client, usedTLS: false, err: nil}
+			// Send LHLO
+			if err := writeLMTPCommand(lmtpConn, handshakePhaseTimeout, "LHLO %s", d.config.HelloHostname); err != nil {
+				lmtpConn.Close()
+				resultCh <- clientResult{err: fmt.Errorf("LHLO write: %w", err)}
+				return
+			}
+			code, _, err = readLMTPResponse(reader, lmtpConn, handshakePhaseTimeout)
+			if err != nil {
+				lmtpConn.Close()
+				resultCh <- clientResult{err: fmt.Errorf("LHLO response: %w", err)}
+				return
+			}
+			if code != 250 {
+				lmtpConn.Close()
+				resultCh <- clientResult{err: fmt.Errorf("LHLO rejected: %d", code)}
+				return
+			}
+
+			// Clear deadline
+			lmtpConn.SetDeadline(time.Time{})
+			logger.Info("LMTP connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname, "tls", usedTLS)
+			resultCh <- clientResult{conn: lmtpConn, reader: reader, usedTLS: usedTLS, err: nil}
 			return
 		}
 
 		// Implicit TLS (SMTPS): connection is TLS from the start (e.g. port 465)
-		if d.config.ImplicitTLS {
+		if d.config.SMTPImplicitTLS {
 			tlsConn := tls.Client(conn, tlsConfig)
 			if err := tlsConn.HandshakeContext(ctx); err != nil {
 				resultCh <- clientResult{err: fmt.Errorf("implicit TLS handshake failed: %w", err)}
@@ -1222,7 +1295,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			tlsConn.SetDeadline(time.Time{})
 			client.CommandTimeout = deliveryTimeout
 			client.SubmissionTimeout = deliveryTimeout
-			logger.Info("implicit TLS (SMTPS) connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
+			logger.Info("implicit TLS (SMTPS) connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname, "tls", true)
 			resultCh <- clientResult{client: client, usedTLS: true, err: nil}
 			return
 		}
@@ -1285,29 +1358,31 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		resultCh <- clientResult{err: fmt.Errorf("STARTTLS handshake failed: %w", err)}
 	})
 
-	var client *smtp.Client
 	select {
 	case result := <-resultCh:
 		if result.err != nil {
 			if result.client != nil {
 				result.client.Close()
+			} else if result.conn != nil {
+				result.conn.Close()
 			} else {
 				conn.Close()
 			}
 			return nil, DeliveryResult{TraceID: traceID, Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("Handshake failed: %v", result.err)}, result.err
 		}
-		client = result.client
-		if !result.usedTLS {
+		if !result.usedTLS && protocol != config.ProtocolLMTP {
 			logger.Warn("delivering over plaintext SMTP (no TLS)", "mx", mxHost)
 		}
+		success = true // Prevent deferred close
+		return &dialResult{
+			Client: result.client,
+			Conn:   result.conn,
+			Reader: result.reader,
+		}, DeliveryResult{}, nil
 	case <-ctx.Done():
-		// Timeout occurred
 		conn.Close()
 		return nil, DeliveryResult{TraceID: traceID, Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "SMTP handshake timed out"}, ctx.Err()
 	}
-
-	success = true // Prevent deferred close
-	return client, DeliveryResult{}, nil
 }
 
 func (d *Deliverer) mapSMTPError(logger *slog.Logger, traceID string, err error, mxHost, sourceIP string) DeliveryResult {
@@ -1374,24 +1449,22 @@ func (d *Deliverer) recordMetrics(result DeliveryResult, recipientDomain string)
 
 // IPRotator logic - supports IPv4/IPv6 separation and selection
 type IPRotator struct {
-	ipsV4      []string
-	ipsV6      []string
-	strategy   string
-	counterV4  uint32
-	counterV6  uint32
-	random     *rand.Rand
-	randomMu   sync.Mutex // Protects random for thread-safe access
-	preferIPv6 bool
+	ipsV4    []string
+	ipsV6    []string
+	strategy string
+	counterV4 uint32
+	counterV6 uint32
+	random   *rand.Rand
+	randomMu sync.Mutex // Protects random for thread-safe access
 }
 
 // NewIPRotator creates a new IP rotator with separate IPv4 and IPv6 pools.
-func NewIPRotator(ipsV4, ipsV6 []string, strategy string, preferIPv6 bool) *IPRotator {
+func NewIPRotator(ipsV4, ipsV6 []string, strategy string) *IPRotator {
 	return &IPRotator{
-		ipsV4:      ipsV4,
-		ipsV6:      ipsV6,
-		strategy:   strategy,
-		random:     rand.New(rand.NewSource(time.Now().UnixNano())),
-		preferIPv6: preferIPv6,
+		ipsV4:    ipsV4,
+		ipsV6:    ipsV6,
+		strategy: strategy,
+		random:   rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -1464,13 +1537,8 @@ func (r *IPRotator) HasIPv6() bool {
 	return len(r.ipsV6) > 0
 }
 
-// PreferIPv6 returns whether IPv6 is preferred.
-func (r *IPRotator) PreferIPv6() bool {
-	return r.preferIPv6
-}
-
 func splitEmail(email string) (string, string) {
-	i := bytes.LastIndexByte([]byte(email), '@')
+	i := strings.LastIndexByte(email, '@')
 	if i < 0 {
 		return "", ""
 	}
@@ -1485,9 +1553,9 @@ func isBindError(err error) bool {
 	}
 	// Check for common bind-related error messages
 	errStr := err.Error()
-	return bytes.Contains([]byte(errStr), []byte("bind")) ||
-		bytes.Contains([]byte(errStr), []byte("cannot assign requested address")) ||
-		bytes.Contains([]byte(errStr), []byte("EADDRNOTAVAIL"))
+	return strings.Contains(errStr, "bind") ||
+		strings.Contains(errStr, "cannot assign requested address") ||
+		strings.Contains(errStr, "EADDRNOTAVAIL")
 }
 
 // SetMetrics sets the metrics recorder
@@ -1519,6 +1587,24 @@ func needsUTF8Address(email string) bool {
 	return false
 }
 
+// extractHeaders returns the RFC 822 headers from a message (up to the first blank line),
+// truncated to 2KB for logging. Used for debug diagnostics.
+func extractHeaders(msg []byte) string {
+	const maxLen = 2048
+	// Find the header/body separator: \r\n\r\n or \n\n
+	end := bytes.Index(msg, []byte("\r\n\r\n"))
+	if end < 0 {
+		end = bytes.Index(msg, []byte("\n\n"))
+	}
+	if end < 0 {
+		end = len(msg)
+	}
+	if end > maxLen {
+		end = maxLen
+	}
+	return string(msg[:end])
+}
+
 // supportsExtension checks if the SMTP server supports a given extension.
 func supportsExtension(client *smtp.Client, ext string) bool {
 	if client == nil {
@@ -1526,4 +1612,197 @@ func supportsExtension(client *smtp.Client, ext string) bool {
 	}
 	supported, _ := client.Extension(ext)
 	return supported
+}
+
+// --- LMTP raw protocol implementation (mirrors Kanal's approach) ---
+// go-smtp's LMTP client doesn't support per-recipient DATA responses,
+// so we implement the protocol directly on net.Conn.
+
+// performLMTPTransaction sends MAIL FROM, RCPT TO, DATA, and reads the
+// per-recipient response over a raw connection. The connection is always
+// closed when done (no pooling for LMTP).
+func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Logger, traceID string, conn net.Conn, reader *bufio.Reader, from, to string, msg []byte, mxHost, sourceIP string) DeliveryResult {
+	defer func() {
+		// Best-effort QUIT before closing (avoids Dovecot warnings)
+		conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
+		fmt.Fprintf(conn, "QUIT\r\n")
+		conn.Close()
+	}()
+
+	cmdTimeout := time.Duration(d.config.LMTPTimeoutSeconds) * time.Second
+	if cmdTimeout == 0 {
+		cmdTimeout = 60 * time.Second
+	}
+
+	// Log envelope and first message headers at DEBUG for diagnostics
+	if logger.Enabled(ctx, slog.LevelDebug) {
+		logger.Debug("LMTP envelope",
+			"mail_from", from,
+			"rcpt_to", to,
+			"message_headers", extractHeaders(msg))
+	}
+
+	// MAIL FROM
+	if err := writeLMTPCommand(conn, cmdTimeout, "MAIL FROM:<%s>", from); err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM write: %v", err)}
+	}
+	code, msg2, err := readLMTPResponse(reader, conn, cmdTimeout)
+	if err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM response: %v", err)}
+	}
+	if code != 250 {
+		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
+	}
+
+	// RCPT TO
+	if err := writeLMTPCommand(conn, cmdTimeout, "RCPT TO:<%s>", to); err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO write: %v", err)}
+	}
+	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
+	if err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO response: %v", err)}
+	}
+	if code != 250 {
+		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
+	}
+
+	// DATA
+	if err := writeLMTPCommand(conn, cmdTimeout, "DATA"); err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA write: %v", err)}
+	}
+	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
+	if err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA response: %v", err)}
+	}
+	if code != 354 {
+		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
+	}
+
+	// Send message body with dot-stuffing
+	if err := writeLMTPData(conn, cmdTimeout, msg); err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA body write: %v", err)}
+	}
+
+	// LMTP: read one status per RCPT TO (we send exactly one recipient)
+	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
+	if err != nil {
+		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA final response: %v", err)}
+	}
+
+	result := classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
+	logger.Debug("LMTP transaction complete", "code", code, "message", msg2, "status", result.Status)
+	return result
+}
+
+// classifyLMTPResult maps an LMTP response code to a DeliveryResult.
+func classifyLMTPResult(traceID, mxHost, sourceIP string, code int, msg string) DeliveryResult {
+	result := DeliveryResult{
+		TraceID:     traceID,
+		MXHost:      mxHost,
+		SourceIP:    sourceIP,
+		SMTPCode:    code,
+		SMTPMessage: msg,
+	}
+	switch {
+	case code >= 200 && code < 300:
+		result.Status = "delivered"
+	case code >= 400 && code < 500:
+		result.Status = "temp_fail"
+	case code >= 500 && code < 600:
+		result.Status = "hard_bounce"
+	default:
+		result.Status = "error"
+		result.Error = fmt.Sprintf("unexpected LMTP code: %d", code)
+	}
+	return result
+}
+
+// writeLMTPCommand sends a command line over the connection with a timeout.
+func writeLMTPCommand(conn net.Conn, timeout time.Duration, format string, args ...interface{}) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
+	cmd := fmt.Sprintf(format, args...)
+	_, err := fmt.Fprintf(conn, "%s\r\n", cmd)
+	return err
+}
+
+// writeLMTPData sends the message body with dot-stuffing and the terminating dot.
+// Uses a direct []byte walk instead of bufio.Scanner to avoid per-line string allocations.
+func writeLMTPData(conn net.Conn, timeout time.Duration, message []byte) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
+
+	writer := bufio.NewWriterSize(conn, 64*1024)
+	remaining := message
+
+	for len(remaining) > 0 {
+		i := bytes.IndexByte(remaining, '\n')
+		var line []byte
+		if i < 0 {
+			line = remaining
+			remaining = nil
+		} else {
+			line = remaining[:i]
+			remaining = remaining[i+1:]
+		}
+		// Strip trailing CR (CRLF → just use our own CRLF on output)
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		// Dot-stuff lines starting with '.'
+		if len(line) > 0 && line[0] == '.' {
+			if err := writer.WriteByte('.'); err != nil {
+				return err
+			}
+		}
+		if _, err := writer.Write(line); err != nil {
+			return err
+		}
+		if _, err := writer.WriteString("\r\n"); err != nil {
+			return err
+		}
+	}
+
+	// Terminating dot
+	if _, err := writer.WriteString(".\r\n"); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
+// readLMTPResponse reads a (possibly multi-line) LMTP response.
+func readLMTPResponse(reader *bufio.Reader, conn net.Conn, timeout time.Duration) (int, string, error) {
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return 0, "", fmt.Errorf("set read deadline: %w", err)
+	}
+
+	var lines []string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				return 0, "", fmt.Errorf("connection closed by server")
+			}
+			return 0, "", err
+		}
+
+		line = strings.TrimRight(line, "\r\n")
+		if len(line) < 3 {
+			return 0, "", fmt.Errorf("invalid response line: %q", line)
+		}
+
+		code, err := strconv.Atoi(line[:3])
+		if err != nil {
+			return 0, "", fmt.Errorf("invalid response code in: %q", line)
+		}
+
+		if len(line) > 4 {
+			lines = append(lines, line[4:])
+		}
+
+		// Multi-line: '-' at position 3; final line: ' ' or end
+		if len(line) == 3 || line[3] == ' ' {
+			return code, strings.Join(lines, " "), nil
+		}
+	}
 }

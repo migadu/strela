@@ -124,7 +124,8 @@ func main() {
 	logger.Info("source IPs configured",
 		"ipv4_count", len(expandedIPs.IPv4),
 		"ipv6_count", len(expandedIPs.IPv6),
-		"prefer_ipv6", cfg.Outbound.PreferIPv6)
+		"smtp_ip_mode", cfg.Outbound.SMTPIPMode,
+		"lmtp_ip_mode", cfg.Outbound.LMTPIPMode)
 
 	// Delivery
 	mxLookup := delivery.NewMXLookup(&cfg.DNS, logger)

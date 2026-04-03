@@ -75,7 +75,7 @@ func TestIsBindError(t *testing.T) {
 
 func TestIPRotator_SelectIPs_RoundRobin(t *testing.T) {
 	ipsV4 := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
-	r := NewIPRotator(ipsV4, nil, "round-robin", false)
+	r := NewIPRotator(ipsV4, nil, "round-robin")
 
 	// First call should start at index 0
 	result1 := r.SelectIPs(false, "example.com")
@@ -99,7 +99,7 @@ func TestIPRotator_SelectIPs_RoundRobin(t *testing.T) {
 
 func TestIPRotator_SelectIPs_HashDomain(t *testing.T) {
 	ipsV4 := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
-	r := NewIPRotator(ipsV4, nil, "hash-domain", false)
+	r := NewIPRotator(ipsV4, nil, "hash-domain")
 
 	// Same domain should always get the same start IP
 	result1 := r.SelectIPs(false, "example.com")
@@ -118,7 +118,7 @@ func TestIPRotator_SelectIPs_HashDomain(t *testing.T) {
 
 func TestIPRotator_SelectIPs_Random(t *testing.T) {
 	ipsV4 := []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4", "5.5.5.5"}
-	r := NewIPRotator(ipsV4, nil, "random", false)
+	r := NewIPRotator(ipsV4, nil, "random")
 
 	// Should return all IPs (rotated from random start)
 	result := r.SelectIPs(false, "example.com")
@@ -139,7 +139,7 @@ func TestIPRotator_SelectIPs_Random(t *testing.T) {
 }
 
 func TestIPRotator_SelectIPs_SingleIP(t *testing.T) {
-	r := NewIPRotator([]string{"1.1.1.1"}, nil, "round-robin", false)
+	r := NewIPRotator([]string{"1.1.1.1"}, nil, "round-robin")
 	result := r.SelectIPs(false, "example.com")
 	if len(result) != 1 || result[0] != "1.1.1.1" {
 		t.Errorf("Single IP should return [1.1.1.1], got %v", result)
@@ -147,7 +147,7 @@ func TestIPRotator_SelectIPs_SingleIP(t *testing.T) {
 }
 
 func TestIPRotator_SelectIPs_Empty(t *testing.T) {
-	r := NewIPRotator(nil, nil, "round-robin", false)
+	r := NewIPRotator(nil, nil, "round-robin")
 	result := r.SelectIPs(false, "example.com")
 	if result != nil {
 		t.Errorf("Empty IP pool should return nil, got %v", result)
@@ -156,7 +156,7 @@ func TestIPRotator_SelectIPs_Empty(t *testing.T) {
 
 func TestIPRotator_SelectIPs_IPv6(t *testing.T) {
 	ipsV6 := []string{"2001:db8::1", "2001:db8::2"}
-	r := NewIPRotator(nil, ipsV6, "round-robin", true)
+	r := NewIPRotator(nil, ipsV6, "round-robin")
 
 	result := r.SelectIPs(true, "example.com")
 	if len(result) != 2 {
@@ -171,16 +171,13 @@ func TestIPRotator_SelectIPs_IPv6(t *testing.T) {
 }
 
 func TestIPRotator_Properties(t *testing.T) {
-	r := NewIPRotator([]string{"1.1.1.1"}, []string{"::1"}, "round-robin", true)
+	r := NewIPRotator([]string{"1.1.1.1"}, []string{"::1"}, "round-robin")
 
 	if !r.HasIPv4() {
 		t.Error("HasIPv4() should be true")
 	}
 	if !r.HasIPv6() {
 		t.Error("HasIPv6() should be true")
-	}
-	if !r.PreferIPv6() {
-		t.Error("PreferIPv6() should be true")
 	}
 	if r.GetAllIPsV4()[0] != "1.1.1.1" {
 		t.Error("GetAllIPsV4() wrong")
@@ -196,6 +193,17 @@ func TestIPRotator_Properties(t *testing.T) {
 			t.Errorf("RandomIntn(10) = %d, out of range", n)
 		}
 	}
+}
+
+// --- shared test helpers ---
+
+var defaultTestConfig = config.OutboundConfig{
+	SMTPTimeoutSeconds:      60,
+	MaxTotalDeliverySeconds: 200,
+}
+
+func testLogger() *slog.Logger {
+	return slog.Default()
 }
 
 // --- mapSMTPError ---

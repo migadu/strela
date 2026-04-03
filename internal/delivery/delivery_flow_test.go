@@ -2,133 +2,113 @@ package delivery
 
 import (
 	"testing"
+
+	"strela/internal/config"
 )
 
-// TestDeliveryFlow_IPv4Only verifies that when only IPv4 is configured,
+// TestDeliveryFlow_IPv4Only verifies that when ip_mode is "ipv4",
 // we don't attempt IPv6 delivery at all.
 func TestDeliveryFlow_IPv4Only(t *testing.T) {
 	ipsV4 := []string{"192.0.2.1"}
-	ipsV6 := []string{} // No IPv6
+	ipsV6 := []string{"2001:db8::1"} // Available but should not be used
 
-	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin", true) // prefer IPv6 but none available
+	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin")
+	cfg := &config.OutboundConfig{SMTPIPMode: config.IPModeIPv4}
 
-	// Check flow logic
-	tryIPv6First := rotator.PreferIPv6() && rotator.HasIPv6()
-	tryIPv4 := rotator.HasIPv4()
-	tryIPv6 := rotator.HasIPv6()
+	ipMode := cfg.IPModeForProtocol(config.ProtocolSMTP)
+	tryIPv4 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv4) && rotator.HasIPv4()
+	tryIPv6 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6) && rotator.HasIPv6()
+	tryIPv6First := tryIPv6 && (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6)
 
 	if tryIPv6First {
-		t.Error("Should not try IPv6 first when no IPv6 IPs configured")
+		t.Error("Should not try IPv6 first in ipv4 mode")
 	}
-
 	if !tryIPv4 {
-		t.Error("Should try IPv4 when IPv4 IPs configured")
+		t.Error("Should try IPv4 in ipv4 mode")
 	}
-
 	if tryIPv6 {
-		t.Error("Should not try IPv6 when no IPv6 IPs configured")
-	}
-
-	// Verify the logic path: goes to "else if tryIPv4" branch (line 172 in delivery.go)
-	// and does NOT execute the fallback IPv6 attempt (line 181 check fails)
-	if tryIPv4 && !tryIPv6 {
-		t.Log("✓ Correct flow: Will only attempt IPv4 delivery")
+		t.Error("Should not try IPv6 in ipv4 mode")
 	}
 }
 
-// TestDeliveryFlow_IPv6Only verifies that when only IPv6 is configured,
+// TestDeliveryFlow_IPv6Only verifies that when ip_mode is "ipv6",
 // we don't attempt IPv4 delivery at all.
 func TestDeliveryFlow_IPv6Only(t *testing.T) {
-	ipsV4 := []string{} // No IPv4
+	ipsV4 := []string{"192.0.2.1"} // Available but should not be used
 	ipsV6 := []string{"2001:db8::1"}
 
-	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin", true)
+	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin")
+	cfg := &config.OutboundConfig{SMTPIPMode: config.IPModeIPv6}
 
-	// Check flow logic
-	tryIPv6First := rotator.PreferIPv6() && rotator.HasIPv6()
-	tryIPv4 := rotator.HasIPv4()
-	tryIPv6 := rotator.HasIPv6()
+	ipMode := cfg.IPModeForProtocol(config.ProtocolSMTP)
+	tryIPv4 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv4) && rotator.HasIPv4()
+	tryIPv6 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6) && rotator.HasIPv6()
+	tryIPv6First := tryIPv6 && (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6)
 
 	if !tryIPv6First {
-		t.Error("Should try IPv6 first when IPv6 IPs configured and preferred")
+		t.Error("Should try IPv6 first in ipv6 mode")
 	}
-
 	if tryIPv4 {
-		t.Error("Should not try IPv4 when no IPv4 IPs configured")
+		t.Error("Should not try IPv4 in ipv6 mode")
 	}
-
 	if !tryIPv6 {
-		t.Error("Should try IPv6 when IPv6 IPs configured")
-	}
-
-	// Verify the logic path: goes to "if tryIPv6First" branch (line 157 in delivery.go)
-	// and does NOT execute the fallback IPv4 attempt (line 165 check fails)
-	if tryIPv6First && !tryIPv4 {
-		t.Log("✓ Correct flow: Will only attempt IPv6 delivery")
+		t.Error("Should try IPv6 in ipv6 mode")
 	}
 }
 
-// TestDeliveryFlow_BothIPv6Preferred verifies that when both are configured,
+// TestDeliveryFlow_Dual verifies that when ip_mode is "dual",
 // we try IPv6 first, then fall back to IPv4.
-func TestDeliveryFlow_BothIPv6Preferred(t *testing.T) {
+func TestDeliveryFlow_Dual(t *testing.T) {
 	ipsV4 := []string{"192.0.2.1"}
 	ipsV6 := []string{"2001:db8::1"}
 
-	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin", true)
+	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin")
+	cfg := &config.OutboundConfig{SMTPIPMode: config.IPModeDual}
 
-	// Check flow logic
-	tryIPv6First := rotator.PreferIPv6() && rotator.HasIPv6()
-	tryIPv4 := rotator.HasIPv4()
-	tryIPv6 := rotator.HasIPv6()
+	ipMode := cfg.IPModeForProtocol(config.ProtocolSMTP)
+	tryIPv4 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv4) && rotator.HasIPv4()
+	tryIPv6 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6) && rotator.HasIPv6()
+	tryIPv6First := tryIPv6 && (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6)
 
 	if !tryIPv6First {
-		t.Error("Should try IPv6 first when both configured and IPv6 preferred")
+		t.Error("Should try IPv6 first in dual mode")
 	}
-
 	if !tryIPv4 {
-		t.Error("Should have IPv4 available for fallback")
+		t.Error("Should have IPv4 available for fallback in dual mode")
 	}
-
 	if !tryIPv6 {
-		t.Error("Should have IPv6 available")
-	}
-
-	// Verify the logic path: goes to "if tryIPv6First" branch (line 157)
-	// tries IPv6, then falls back to IPv4 if IPv6 fails (line 165 check succeeds)
-	if tryIPv6First && tryIPv4 {
-		t.Log("✓ Correct flow: Will attempt IPv6 first, then fallback to IPv4")
+		t.Error("Should have IPv6 available in dual mode")
 	}
 }
 
-// TestDeliveryFlow_BothIPv4Preferred verifies that when both are configured
-// but IPv4 is preferred, we try IPv4 first, then fall back to IPv6.
-func TestDeliveryFlow_BothIPv4Preferred(t *testing.T) {
+// TestDeliveryFlow_PerProtocol verifies that SMTP and LMTP can have
+// independent IP mode settings.
+func TestDeliveryFlow_PerProtocol(t *testing.T) {
 	ipsV4 := []string{"192.0.2.1"}
 	ipsV6 := []string{"2001:db8::1"}
 
-	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin", false) // prefer_ipv6 = false
-
-	// Check flow logic
-	tryIPv6First := rotator.PreferIPv6() && rotator.HasIPv6()
-	tryIPv4 := rotator.HasIPv4()
-	tryIPv6 := rotator.HasIPv6()
-
-	if tryIPv6First {
-		t.Error("Should not try IPv6 first when IPv4 is preferred")
+	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin")
+	cfg := &config.OutboundConfig{
+		SMTPIPMode: config.IPModeDual,
+		LMTPIPMode: config.IPModeIPv4,
 	}
 
-	if !tryIPv4 {
-		t.Error("Should have IPv4 available")
+	// SMTP should use dual
+	smtpMode := cfg.IPModeForProtocol(config.ProtocolSMTP)
+	smtpTryIPv6 := (smtpMode == config.IPModeDual || smtpMode == config.IPModeIPv6) && rotator.HasIPv6()
+	if !smtpTryIPv6 {
+		t.Error("SMTP in dual mode should try IPv6")
 	}
 
-	if !tryIPv6 {
-		t.Error("Should have IPv6 available for fallback")
+	// LMTP should use ipv4 only
+	lmtpMode := cfg.IPModeForProtocol(config.ProtocolLMTP)
+	lmtpTryIPv6 := (lmtpMode == config.IPModeDual || lmtpMode == config.IPModeIPv6) && rotator.HasIPv6()
+	lmtpTryIPv4 := (lmtpMode == config.IPModeDual || lmtpMode == config.IPModeIPv4) && rotator.HasIPv4()
+	if lmtpTryIPv6 {
+		t.Error("LMTP in ipv4 mode should not try IPv6")
 	}
-
-	// Verify the logic path: goes to "else if tryIPv4" branch (line 172)
-	// tries IPv4, then falls back to IPv6 if IPv4 fails (line 181 check succeeds)
-	if !tryIPv6First && tryIPv4 && tryIPv6 {
-		t.Log("✓ Correct flow: Will attempt IPv4 first, then fallback to IPv6")
+	if !lmtpTryIPv4 {
+		t.Error("LMTP in ipv4 mode should try IPv4")
 	}
 }
 
@@ -138,28 +118,17 @@ func TestDeliveryFlow_NoSourceIPs(t *testing.T) {
 	ipsV4 := []string{}
 	ipsV6 := []string{}
 
-	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin", false)
+	rotator := NewIPRotator(ipsV4, ipsV6, "round-robin")
+	cfg := &config.OutboundConfig{SMTPIPMode: config.IPModeDual}
 
-	// Check flow logic
-	tryIPv6First := rotator.PreferIPv6() && rotator.HasIPv6()
-	tryIPv4 := rotator.HasIPv4()
-	tryIPv6 := rotator.HasIPv6()
-
-	if tryIPv6First {
-		t.Error("Should not try IPv6 first when no IPs configured")
-	}
+	ipMode := cfg.IPModeForProtocol(config.ProtocolSMTP)
+	tryIPv4 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv4) && rotator.HasIPv4()
+	tryIPv6 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6) && rotator.HasIPv6()
 
 	if tryIPv4 {
 		t.Error("Should not have IPv4 when none configured")
 	}
-
 	if tryIPv6 {
 		t.Error("Should not have IPv6 when none configured")
-	}
-
-	// Verify the logic path: goes to "else" branch (line 188)
-	// uses system default IP (sourceIP = "")
-	if !tryIPv4 && !tryIPv6 {
-		t.Log("✓ Correct flow: Will use system default IP (no source binding)")
 	}
 }

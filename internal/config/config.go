@@ -16,6 +16,13 @@ const (
 	ProtocolLMTP = "lmtp"
 )
 
+// IP mode constants for per-protocol IP version selection.
+const (
+	IPModeDual = "dual" // Use both IPv4 and IPv6 (prefer IPv6)
+	IPModeIPv4 = "ipv4" // IPv4 only
+	IPModeIPv6 = "ipv6" // IPv6 only
+)
+
 // Config is the root configuration structure containing all service settings.
 type Config struct {
 	Logging    LoggingConfig    `toml:"logging"`
@@ -121,7 +128,8 @@ type OutboundConfig struct {
 	// Examples: ["192.0.2.1", "192.0.2.0/24", "2001:db8::1", "2001:db8::/64"]
 	SourceIPsV4       []string `toml:"source_ips_v4"`       // IPv4 source IPs/subnets (expanded on startup)
 	SourceIPsV6       []string `toml:"source_ips_v6"`       // IPv6 source IPs/subnets (expanded on startup)
-	PreferIPv6        bool     `toml:"prefer_ipv6"`         // Try IPv6 first, fallback to IPv4 (default: true)
+	SMTPIPMode        string   `toml:"smtp_ip_mode"`        // IP version for SMTP: "ipv4", "ipv6", or "dual" (default: "dual")
+	LMTPIPMode        string   `toml:"lmtp_ip_mode"`        // IP version for LMTP: "ipv4", "ipv6", or "dual" (default: "ipv4")
 	SourceIPSelection string   `toml:"source_ip_selection"` // "round-robin", "random", "hash-domain" (default: round-robin)
 
 	MXCacheTTLSeconds        int    `toml:"mx_cache_ttl_seconds"`        // MX record cache TTL (default: 3600s)
@@ -134,9 +142,14 @@ type OutboundConfig struct {
 	MaxIPsPerMX              int    `toml:"max_ips_per_mx"`              // Maximum number of IPs to try per MX host (default: 5)
 	HelloHostname            string `toml:"hello_hostname"`              // Hostname for EHLO greeting (default: system hostname)
 
-	// SMTP delivery port (default: 25, RFC 5321 standard)
-	SMTPPort   int  `toml:"smtp_port"`   // Port to connect to on MX servers (default: 25)
-	ImplicitTLS bool `toml:"implicit_tls"` // Use implicit TLS (SMTPS) instead of STARTTLS (default: false)
+	// Delivery ports
+	SMTPPort        int  `toml:"smtp_port"`         // Port to connect to on MX servers (default: 25)
+	LMTPPort        int  `toml:"lmtp_port"`         // Port for LMTP connections (default: 24)
+	SMTPImplicitTLS bool `toml:"smtp_implicit_tls"` // Use implicit TLS (SMTPS) for SMTP instead of STARTTLS (default: false)
+	LMTPImplicitTLS bool `toml:"lmtp_implicit_tls"` // Use implicit TLS for LMTP connections (default: false)
+
+	// Command timeouts
+	LMTPTimeoutSeconds int `toml:"lmtp_timeout_seconds"` // LMTP command timeout for MAIL/RCPT/DATA (default: 60s)
 
 	// Rate limiting per destination domain
 	PerDomainIntervalSeconds int      `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
@@ -319,10 +332,12 @@ func (c *Config) SetDefaults() {
 	if c.Outbound.SourceIPSelection == "" {
 		c.Outbound.SourceIPSelection = "round-robin"
 	}
-	// Default to preferring IPv6 (only matters if not explicitly set)
-	// Note: TOML bool defaults to false, so we can't distinguish between unset and false
-	// We'll treat false as "don't prefer" and true as "prefer"
-	// Actually, let's not set a default - user must be explicit
+	if c.Outbound.SMTPIPMode == "" {
+		c.Outbound.SMTPIPMode = IPModeDual
+	}
+	if c.Outbound.LMTPIPMode == "" {
+		c.Outbound.LMTPIPMode = IPModeIPv4
+	}
 	if c.Outbound.MaxIPsPerMX == 0 {
 		c.Outbound.MaxIPsPerMX = 5
 	}
@@ -335,6 +350,12 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Outbound.SMTPPort == 0 {
 		c.Outbound.SMTPPort = 25
+	}
+	if c.Outbound.LMTPPort == 0 {
+		c.Outbound.LMTPPort = 24
+	}
+	if c.Outbound.LMTPTimeoutSeconds == 0 {
+		c.Outbound.LMTPTimeoutSeconds = 60
 	}
 	if c.Outbound.PerDomainIntervalSeconds == 0 {
 		c.Outbound.PerDomainIntervalSeconds = 2
@@ -398,11 +419,15 @@ func LoadConfig(path string) (*Config, error) {
 		renames := map[string]string{
 			"protocol":         "default_protocol",
 			"lmtp_destination": "default_lmtp_destination",
+			"implicit_tls":     "smtp_implicit_tls",
 		}
 		for old, newName := range renames {
 			if _, found := outbound[old]; found {
 				return nil, fmt.Errorf("config: field \"outbound.%s\" has been renamed to \"outbound.%s\" — please update your config file", old, newName)
 			}
+		}
+		if _, found := outbound["prefer_ipv6"]; found {
+			return nil, fmt.Errorf("config: field \"outbound.prefer_ipv6\" has been replaced by \"outbound.smtp_ip_mode\" and \"outbound.lmtp_ip_mode\" — please update your config file")
 		}
 	}
 
@@ -454,6 +479,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate IP modes (empty is accepted — SetDefaults fills it in before Validate in LoadConfig)
+	validIPModes := map[string]bool{"": true, IPModeDual: true, IPModeIPv4: true, IPModeIPv6: true}
+	if !validIPModes[c.Outbound.SMTPIPMode] {
+		return fmt.Errorf("outbound.smtp_ip_mode must be 'dual', 'ipv4', or 'ipv6', got: %s", c.Outbound.SMTPIPMode)
+	}
+	if !validIPModes[c.Outbound.LMTPIPMode] {
+		return fmt.Errorf("outbound.lmtp_ip_mode must be 'dual', 'ipv4', or 'ipv6', got: %s", c.Outbound.LMTPIPMode)
+	}
+
 	// Validate destination formats if set
 	if err := validateHostPort(c.Outbound.DefaultLMTPDestination, "outbound.default_lmtp_destination"); err != nil {
 		return err
@@ -463,4 +497,12 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// IPModeForProtocol returns the IP mode for the given protocol.
+func (c *OutboundConfig) IPModeForProtocol(protocol string) string {
+	if protocol == ProtocolLMTP {
+		return c.LMTPIPMode
+	}
+	return c.SMTPIPMode
 }

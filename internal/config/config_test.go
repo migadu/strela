@@ -368,6 +368,31 @@ lmtp_destination = "dovecot:24"
 	}
 }
 
+func TestLoadConfig_LegacyImplicitTLSField(t *testing.T) {
+	configContent := `
+[outbound]
+implicit_tls = true
+`
+	tmpFile, err := os.CreateTemp("", "config_legacy_*.toml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.WriteString(configContent)
+	tmpFile.Close()
+
+	_, err = LoadConfig(tmpFile.Name())
+	if err == nil {
+		t.Fatal("Expected error for legacy 'implicit_tls' field, got nil")
+	}
+	if !strings.Contains(err.Error(), "has been renamed") {
+		t.Errorf("Expected rename error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "smtp_implicit_tls") {
+		t.Errorf("Expected error to mention 'smtp_implicit_tls', got: %v", err)
+	}
+}
+
 func TestS3PrefixNormalization(t *testing.T) {
 	tests := []struct {
 		name     string
