@@ -230,6 +230,7 @@ func main() {
 
 	// TLS Manager (if ACME enabled)
 	var tlsManager *tlsmanager.Manager
+	var challengeServer *http.Server
 	if cfg.TLS.Enabled {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if clusterMgr != nil {
@@ -244,6 +245,23 @@ func main() {
 			logger.Error("failed to initialize TLS manager", "error", err)
 			os.Exit(1)
 		}
+
+		// Start HTTP-01 challenge server on port 80 (required for Let's Encrypt certificate issuance and renewal)
+		challengeServer = &http.Server{
+			Addr:         ":80",
+			Handler:      tlsManager.HTTPHandler(nil),
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+			IdleTimeout:  30 * time.Second,
+			ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
+		}
+
+		recovery.SafeGo(logger, "acme-http-challenge", func() {
+			logger.Info("ACME HTTP-01 challenge server starting", "addr", ":80")
+			if err := challengeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("ACME challenge server failed", "error", err)
+			}
+		})
 	}
 
 	server := &http.Server{
@@ -302,6 +320,14 @@ func main() {
 			logger.Error("admin server shutdown error", "error", err)
 		}
 		logger.Info("admin server stopped")
+	}
+
+	// 1c. Stop ACME HTTP-01 challenge server
+	if challengeServer != nil {
+		if err := challengeServer.Shutdown(ctx); err != nil {
+			logger.Error("ACME challenge server shutdown error", "error", err)
+		}
+		logger.Info("ACME challenge server stopped")
 	}
 
 	// 2. Stop rate limiter cleanup goroutine
