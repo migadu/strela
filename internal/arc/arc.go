@@ -179,8 +179,8 @@ func signARCMessageSignature(rawMessage []byte, options *dkim.SignOptions, insta
 
 	// Convert DKIM signature to ARC-Message-Signature format
 	arcMS := string(bytes.TrimSpace(dkimSig))
-	// Add instance number
-	arcMS = fmt.Sprintf("i=%d; %s", instance, arcMS)
+	// Add instance number and version (v=1 must come after i=)
+	arcMS = fmt.Sprintf("i=%d; v=1; %s", instance, arcMS)
 
 	return arcMS, nil
 }
@@ -240,13 +240,14 @@ func signARCSeal(rawMessage []byte, options *dkim.SignOptions, instance int, arc
 	}
 
 	arcSeal := string(bytes.TrimSpace(dkimSig))
-	// Add instance number and chain validation status
+	// Add instance number, version, and chain validation status
+	// RFC 8617: order must be i=, v=1, cv=, then other parameters
 	// cv=none for first hop, cv=pass/fail for subsequent hops
 	cv := "none"
 	if instance > 1 {
 		cv = "pass" // TODO: Actually validate previous ARC chain
 	}
-	arcSeal = fmt.Sprintf("i=%d; cv=%s; %s", instance, cv, arcSeal)
+	arcSeal = fmt.Sprintf("i=%d; v=1; cv=%s; %s", instance, cv, arcSeal)
 
 	return arcSeal, nil
 }

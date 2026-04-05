@@ -72,6 +72,22 @@ func TestSignMessage_Success(t *testing.T) {
 		t.Error("Signed message missing instance number i=1")
 	}
 
+	// Verify v=1 parameter is present and in correct position
+	// RFC 8617: v=1 must come immediately after i= in both ARC-Seal and ARC-Message-Signature
+	lines := strings.Split(signedStr, "\r\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "ARC-Seal:") {
+			if !strings.Contains(line, "i=1; v=1; cv=") {
+				t.Errorf("ARC-Seal has incorrect parameter order. Expected 'i=1; v=1; cv=...', got: %s", line)
+			}
+		}
+		if strings.HasPrefix(line, "ARC-Message-Signature:") {
+			if !strings.Contains(line, "i=1; v=1;") {
+				t.Errorf("ARC-Message-Signature has incorrect parameter order. Expected 'i=1; v=1; ...', got: %s", line)
+			}
+		}
+	}
+
 	// Verify original message is preserved
 	if !bytes.Contains(signedMessage, testMessage) {
 		t.Error("Original message not preserved in signed message")
@@ -265,6 +281,81 @@ func TestDetermineInstance(t *testing.T) {
 				t.Errorf("Expected instance %d, got %d", tt.expected, result)
 			}
 		})
+	}
+}
+
+func TestARC_RFC8617_ParameterOrder(t *testing.T) {
+	// RFC 8617 Section 5.2: ARC-Seal and ARC-Message-Signature parameter ordering
+	// The v=1 parameter MUST come immediately after i= parameter
+
+	// Generate test private key
+	privateKeyPEM, err := generateTestPrivateKey(1024)
+	if err != nil {
+		t.Fatalf("Failed to generate test key: %v", err)
+	}
+
+	testMessage := []byte("From: sender@example.com\r\n" +
+		"To: recipient@example.com\r\n" +
+		"Subject: RFC 8617 Parameter Order Test\r\n" +
+		"\r\n" +
+		"Testing RFC 8617 compliance.\r\n")
+
+	config := &SignConfig{
+		Selector:    "arc-test",
+		Domain:      "example.com",
+		PrivateKey:  privateKeyPEM,
+		HeaderCanon: "relaxed",
+		BodyCanon:   "relaxed",
+	}
+
+	signedMessage, err := SignMessage(testMessage, config)
+	if err != nil {
+		t.Fatalf("SignMessage failed: %v", err)
+	}
+
+	// Parse headers and check parameter ordering
+	lines := strings.Split(string(signedMessage), "\r\n")
+	var arcSeal, arcMS string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "ARC-Seal:") {
+			arcSeal = line
+		}
+		if strings.HasPrefix(line, "ARC-Message-Signature:") {
+			arcMS = line
+		}
+	}
+
+	// Verify ARC-Seal parameter order: i=1; v=1; cv=...
+	if arcSeal == "" {
+		t.Fatal("ARC-Seal header not found")
+	}
+	// Extract the parameters part after "ARC-Seal: "
+	sealParams := strings.TrimPrefix(arcSeal, "ARC-Seal: ")
+	if !strings.HasPrefix(sealParams, "i=1; v=1; cv=") {
+		t.Errorf("ARC-Seal parameter order incorrect per RFC 8617.\nExpected: 'i=1; v=1; cv=...'\nGot: %s", sealParams)
+	}
+
+	// Verify ARC-Message-Signature parameter order: i=1; v=1; ...
+	if arcMS == "" {
+		t.Fatal("ARC-Message-Signature header not found")
+	}
+	// Extract the parameters part after "ARC-Message-Signature: "
+	msParams := strings.TrimPrefix(arcMS, "ARC-Message-Signature: ")
+	if !strings.HasPrefix(msParams, "i=1; v=1;") {
+		t.Errorf("ARC-Message-Signature parameter order incorrect per RFC 8617.\nExpected: 'i=1; v=1; ...'\nGot: %s", msParams)
+	}
+
+	// Additional check: v=1 should not appear anywhere else in the headers
+	// (it should only appear once, right after i=)
+	sealVCount := strings.Count(arcSeal, "v=1")
+	msVCount := strings.Count(arcMS, "v=1")
+
+	if sealVCount != 1 {
+		t.Errorf("ARC-Seal should contain exactly one 'v=1', found %d", sealVCount)
+	}
+	if msVCount != 1 {
+		t.Errorf("ARC-Message-Signature should contain exactly one 'v=1', found %d", msVCount)
 	}
 }
 
