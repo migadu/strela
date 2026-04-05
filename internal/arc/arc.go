@@ -179,7 +179,13 @@ func signARCMessageSignature(rawMessage []byte, options *dkim.SignOptions, insta
 
 	// Convert DKIM signature to ARC-Message-Signature format
 	arcMS := string(bytes.TrimSpace(dkimSig))
-	// Add instance number and version (v=1 must come after i=)
+
+	// Remove v=1 from DKIM signature (we'll add it in the correct position)
+	// DKIM signatures have v=1 as the first parameter, we need to remove it
+	arcMS = strings.TrimPrefix(arcMS, "v=1; ")
+	arcMS = strings.TrimPrefix(arcMS, "v=1;") // handle without space too
+
+	// Add instance number and version (v=1 must come after i= per RFC 8617)
 	arcMS = fmt.Sprintf("i=%d; v=1; %s", instance, arcMS)
 
 	return arcMS, nil
@@ -240,6 +246,12 @@ func signARCSeal(rawMessage []byte, options *dkim.SignOptions, instance int, arc
 	}
 
 	arcSeal := string(bytes.TrimSpace(dkimSig))
+
+	// Remove v=1 from DKIM signature (we'll add it in the correct position)
+	// DKIM signatures have v=1 as the first parameter, we need to remove it
+	arcSeal = strings.TrimPrefix(arcSeal, "v=1; ")
+	arcSeal = strings.TrimPrefix(arcSeal, "v=1;") // handle without space too
+
 	// Add instance number, version, and chain validation status
 	// RFC 8617: order must be i=, v=1, cv=, then other parameters
 	// cv=none for first hop, cv=pass/fail for subsequent hops

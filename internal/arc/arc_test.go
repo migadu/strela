@@ -357,6 +357,14 @@ func TestARC_RFC8617_ParameterOrder(t *testing.T) {
 	if msVCount != 1 {
 		t.Errorf("ARC-Message-Signature should contain exactly one 'v=1', found %d", msVCount)
 	}
+
+	// Ensure no duplicate v=1 at the end (common mistake when converting from DKIM)
+	if strings.HasSuffix(strings.TrimSpace(sealParams), "v=1") {
+		t.Error("ARC-Seal has v=1 at the end, which is incorrect")
+	}
+	if strings.HasSuffix(strings.TrimSpace(msParams), "v=1") {
+		t.Error("ARC-Message-Signature has v=1 at the end, which is incorrect")
+	}
 }
 
 func TestParseCanonicalization(t *testing.T) {
