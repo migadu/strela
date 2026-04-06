@@ -330,8 +330,33 @@ func TestARC_RFC8617_ParameterOrder(t *testing.T) {
 	if arcSeal == "" {
 		t.Fatal("ARC-Seal header not found")
 	}
-	// Extract the parameters part after "ARC-Seal: "
+	// Extract the parameters part after "ARC-Seal: " (handle multiline folding)
 	sealParams := strings.TrimPrefix(arcSeal, "ARC-Seal: ")
+	// Collect continuation lines
+	collectingMS := false
+	collectingSeal := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "ARC-Seal:") {
+			collectingSeal = true
+			collectingMS = false
+		} else if strings.HasPrefix(line, "ARC-Message-Signature:") {
+			collectingMS = true
+			collectingSeal = false
+		} else if strings.HasPrefix(line, "ARC-") || line == "" {
+			collectingSeal = false
+			collectingMS = false
+		} else if collectingSeal && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) {
+			arcSeal += "\r\n" + line
+			sealParams += "\r\n" + line
+		} else if collectingMS && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) {
+			arcMS += "\r\n" + line
+		}
+	}
+
+	// Debug output
+	t.Logf("Full ARC-Seal:\n%s", arcSeal)
+	t.Logf("Full ARC-Message-Signature:\n%s", arcMS)
+
 	if !strings.HasPrefix(sealParams, "i=1; v=1; cv=") {
 		t.Errorf("ARC-Seal parameter order incorrect per RFC 8617.\nExpected: 'i=1; v=1; cv=...'\nGot: %s", sealParams)
 	}
@@ -364,6 +389,54 @@ func TestARC_RFC8617_ParameterOrder(t *testing.T) {
 	}
 	if strings.HasSuffix(strings.TrimSpace(msParams), "v=1") {
 		t.Error("ARC-Message-Signature has v=1 at the end, which is incorrect")
+	}
+}
+
+func TestRemoveVersionParam(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "v=1 at beginning with space",
+			input:    "v=1; a=rsa-sha256; d=example.com",
+			expected: "a=rsa-sha256; d=example.com",
+		},
+		{
+			name:     "v=1 in middle",
+			input:    "a=rsa-sha256; v=1; d=example.com",
+			expected: "a=rsa-sha256; d=example.com",
+		},
+		{
+			name:     "v=1 at end",
+			input:    "a=rsa-sha256; d=example.com; t=123456; v=1;",
+			expected: "a=rsa-sha256; d=example.com; t=123456;",
+		},
+		{
+			name:     "v=1 in multiline (folded) header",
+			input:    "a=rsa-sha256;\r\n c=relaxed; t=123456; v=1;\r\n b=signature",
+			expected: "a=rsa-sha256;\r\n c=relaxed; t=123456;\r\n b=signature",
+		},
+		{
+			name:     "multiple v=1 occurrences",
+			input:    "v=1; a=rsa-sha256; v=1; d=example.com",
+			expected: "a=rsa-sha256; d=example.com",
+		},
+		{
+			name:     "no v=1 present",
+			input:    "a=rsa-sha256; d=example.com; t=123456",
+			expected: "a=rsa-sha256; d=example.com; t=123456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := removeVersionParam(tt.input)
+			if result != tt.expected {
+				t.Errorf("removeVersionParam() failed\nInput:    %q\nExpected: %q\nGot:      %q", tt.input, tt.expected, result)
+			}
+		})
 	}
 }
 

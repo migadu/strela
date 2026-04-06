@@ -180,10 +180,9 @@ func signARCMessageSignature(rawMessage []byte, options *dkim.SignOptions, insta
 	// Convert DKIM signature to ARC-Message-Signature format
 	arcMS := string(bytes.TrimSpace(dkimSig))
 
-	// Remove v=1 from DKIM signature (we'll add it in the correct position)
-	// DKIM signatures have v=1 as the first parameter, we need to remove it
-	arcMS = strings.TrimPrefix(arcMS, "v=1; ")
-	arcMS = strings.TrimPrefix(arcMS, "v=1;") // handle without space too
+	// Remove ALL v=1 parameters from DKIM signature (we'll add it in the correct position)
+	// DKIM libraries may place v=1 anywhere in the signature
+	arcMS = removeVersionParam(arcMS)
 
 	// Add instance number and version (v=1 must come after i= per RFC 8617)
 	arcMS = fmt.Sprintf("i=%d; v=1; %s", instance, arcMS)
@@ -247,10 +246,9 @@ func signARCSeal(rawMessage []byte, options *dkim.SignOptions, instance int, arc
 
 	arcSeal := string(bytes.TrimSpace(dkimSig))
 
-	// Remove v=1 from DKIM signature (we'll add it in the correct position)
-	// DKIM signatures have v=1 as the first parameter, we need to remove it
-	arcSeal = strings.TrimPrefix(arcSeal, "v=1; ")
-	arcSeal = strings.TrimPrefix(arcSeal, "v=1;") // handle without space too
+	// Remove ALL v=1 parameters from DKIM signature (we'll add it in the correct position)
+	// DKIM libraries may place v=1 anywhere in the signature
+	arcSeal = removeVersionParam(arcSeal)
 
 	// Add instance number, version, and chain validation status
 	// RFC 8617: order must be i=, v=1, cv=, then other parameters
@@ -262,6 +260,30 @@ func signARCSeal(rawMessage []byte, options *dkim.SignOptions, instance int, arc
 	arcSeal = fmt.Sprintf("i=%d; v=1; cv=%s; %s", instance, cv, arcSeal)
 
 	return arcSeal, nil
+}
+
+// removeVersionParam removes all v=1 or v=1; parameters from a DKIM signature string.
+// This handles both single-line and multi-line (folded) headers.
+// We need to remove these because ARC headers require v=1 to be in a specific position
+// (immediately after i=), but DKIM libraries may place it elsewhere.
+func removeVersionParam(sig string) string {
+	// Handle various cases:
+	// - "v=1; " at the beginning
+	// - " v=1; " in the middle
+	// - "v=1;" without trailing space
+	// - "\r\n v=1;" in folded headers
+	// - " v=1;\r\n" at line breaks
+
+	sig = strings.ReplaceAll(sig, " v=1;", "")
+	sig = strings.ReplaceAll(sig, "\r\n v=1;", "")
+	sig = strings.ReplaceAll(sig, "\n v=1;", "")
+	sig = strings.ReplaceAll(sig, "\t v=1;", "")
+
+	// Handle v=1 at the very beginning
+	sig = strings.TrimPrefix(sig, "v=1; ")
+	sig = strings.TrimPrefix(sig, "v=1;")
+
+	return sig
 }
 
 // createARCAuthenticationResults creates the ARC-Authentication-Results header
