@@ -472,23 +472,16 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			break
 		}
 
+		// Pre-check: Does this MX host have IPv4/IPv6 addresses?
+		mxHasIPv4, mxHasIPv6 := d.checkMXIPVersions(ctx, logger, mx.Host)
+
 		// Try IPv6 first if preferred
 		if tryIPv6First {
-			logger.Debug("trying IPv6 first", "mx", mx.Host)
-			result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, true, start, inboundAuth)
-			// Return immediately for definitive results (don't try other MX servers)
-			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
-				result.AttemptDurationMs = time.Since(start).Milliseconds()
-				d.recordMetrics(result, domain)
-				d.logDeliveryResult(logger, from, to, result)
-				return result
-			}
-			lastResult = result
-
-			// Fall back to IPv4 if IPv6 failed and IPv4 is available
-			if tryIPv4 {
-				logger.Debug("falling back to IPv4", "mx", mx.Host)
-				result = d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, inboundAuth)
+			// Only try IPv6 if MX actually has IPv6 addresses
+			if tryIPv6 && mxHasIPv6 {
+				logger.Debug("trying IPv6 first", "mx", mx.Host)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, true, start, inboundAuth)
+				// Return immediately for definitive results (don't try other MX servers)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
@@ -496,23 +489,29 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 					return result
 				}
 				lastResult = result
+			} else if tryIPv6 && !mxHasIPv6 {
+				logger.Debug("skipping IPv6 attempt, MX has no IPv6 addresses", "mx", mx.Host)
+			}
+
+			// Fall back to IPv4 if IPv6 failed (or was skipped) and IPv4 is available
+			if tryIPv4 && mxHasIPv4 {
+				logger.Debug("falling back to IPv4", "mx", mx.Host)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, inboundAuth)
+				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
+					result.AttemptDurationMs = time.Since(start).Milliseconds()
+					d.recordMetrics(result, domain)
+					d.logDeliveryResult(logger, from, to, result)
+					return result
+				}
+				lastResult = result
+			} else if tryIPv4 && !mxHasIPv4 {
+				logger.Debug("skipping IPv4 attempt, MX has no IPv4 addresses", "mx", mx.Host)
 			}
 		} else if tryIPv4 {
 			// Try IPv4 first (or only)
-			logger.Debug("trying IPv4", "mx", mx.Host)
-			result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, inboundAuth)
-			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
-				result.AttemptDurationMs = time.Since(start).Milliseconds()
-				d.recordMetrics(result, domain)
-				d.logDeliveryResult(logger, from, to, result)
-				return result
-			}
-			lastResult = result
-
-			// Fall back to IPv6 if IPv4 failed and IPv6 is available
-			if tryIPv6 {
-				logger.Debug("falling back to IPv6", "mx", mx.Host)
-				result = d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, true, start, inboundAuth)
+			if mxHasIPv4 {
+				logger.Debug("trying IPv4", "mx", mx.Host)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, inboundAuth)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
@@ -520,6 +519,23 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 					return result
 				}
 				lastResult = result
+			} else {
+				logger.Debug("skipping IPv4 attempt, MX has no IPv4 addresses", "mx", mx.Host)
+			}
+
+			// Fall back to IPv6 if IPv4 failed (or was skipped) and IPv6 is available
+			if tryIPv6 && mxHasIPv6 {
+				logger.Debug("falling back to IPv6", "mx", mx.Host)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, true, start, inboundAuth)
+				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
+					result.AttemptDurationMs = time.Since(start).Milliseconds()
+					d.recordMetrics(result, domain)
+					d.logDeliveryResult(logger, from, to, result)
+					return result
+				}
+				lastResult = result
+			} else if tryIPv6 && !mxHasIPv6 {
+				logger.Debug("skipping IPv6 attempt, MX has no IPv6 addresses", "mx", mx.Host)
 			}
 		} else {
 			// No source IPs configured - use system default
@@ -544,6 +560,37 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	d.recordMetrics(lastResult, domain)
 	d.logDeliveryResult(logger, from, to, lastResult)
 	return lastResult
+}
+
+// checkMXIPVersions checks if an MX host has IPv4 and/or IPv6 addresses.
+// Returns (hasIPv4, hasIPv6).
+func (d *Deliverer) checkMXIPVersions(ctx context.Context, logger *slog.Logger, mxHost string) (bool, bool) {
+	mxIPs, err := d.mxLookup.dnsResolver.LookupHost(ctx, mxHost)
+	if err != nil {
+		logger.Debug("failed to check MX IP versions", "mx", mxHost, "error", err)
+		// On DNS error, assume both are available (let actual delivery fail properly)
+		return true, true
+	}
+
+	hasIPv4, hasIPv6 := false, false
+	for _, ip := range mxIPs {
+		parsedIP := net.ParseIP(ip)
+		if parsedIP == nil {
+			continue
+		}
+		if parsedIP.To4() != nil {
+			hasIPv4 = true
+		} else {
+			hasIPv6 = true
+		}
+		// Early exit if we've found both
+		if hasIPv4 && hasIPv6 {
+			break
+		}
+	}
+
+	logger.Debug("MX IP version check", "mx", mxHost, "has_ipv4", hasIPv4, "has_ipv6", hasIPv6)
+	return hasIPv4, hasIPv6
 }
 
 // tryDeliveryWithIPVersion attempts delivery using either IPv6 or IPv4 source IPs and matching MX host IPs.
@@ -911,24 +958,25 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		}
 	}
 
-	// If no matching IP version found, return error to allow fallback to other IP version
-	// Note: Using "error" status (not "temp_fail") so the retry logic will try the other IP version
+	// If no matching IP version found, this should not normally happen since we pre-check
+	// MX IP versions before calling tryDeliveryWithIPVersion. If we reach here, something
+	// changed between the check and the delivery attempt (e.g., DNS TTL expired).
 	if targetIP == "" {
 		if len(mxIPs) > 0 {
 			ipVersion := "IPv4"
 			if isSourceIPv6 {
 				ipVersion = "IPv6"
 			}
-			logger.Debug("no matching IP version for MX, will fallback to other version",
+			logger.Warn("no matching IP version for MX (unexpected - should have been pre-filtered)",
 				"mx", mxHost,
 				"required_version", ipVersion,
 				"available_ips", mxIPs)
 			return nil, DeliveryResult{
 				TraceID:  traceID,
-				Status:   "error",
+				Status:   "temp_fail",
 				MXHost:   mxHost,
 				SourceIP: sourceIP,
-				Error:    fmt.Sprintf("MX host has no %s addresses (will try %s)", ipVersion, map[bool]string{true: "IPv4", false: "IPv6"}[isSourceIPv6]),
+				Error:    fmt.Sprintf("MX host has no %s addresses", ipVersion),
 			}, fmt.Errorf("no matching IP version")
 		} else {
 			return nil, DeliveryResult{
