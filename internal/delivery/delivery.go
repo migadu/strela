@@ -911,14 +911,24 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		}
 	}
 
-	// Fallback if no matching IP version found
+	// If no matching IP version found, return temp_fail to allow fallback to other IP version
 	if targetIP == "" {
 		if len(mxIPs) > 0 {
-			targetIP = mxIPs[0]
-			logger.Debug("no matching IP version for MX, using first available",
+			ipVersion := "IPv4"
+			if isSourceIPv6 {
+				ipVersion = "IPv6"
+			}
+			logger.Debug("no matching IP version for MX, will fallback to other version",
 				"mx", mxHost,
-				"require_ipv6", isSourceIPv6,
-				"target_ip", targetIP)
+				"required_version", ipVersion,
+				"available_ips", mxIPs)
+			return nil, DeliveryResult{
+				TraceID:  traceID,
+				Status:   "temp_fail",
+				MXHost:   mxHost,
+				SourceIP: sourceIP,
+				Error:    fmt.Sprintf("MX host has no %s addresses (fallback to other IP version)", ipVersion),
+			}, fmt.Errorf("no matching IP version")
 		} else {
 			return nil, DeliveryResult{
 				TraceID:  traceID,
@@ -973,18 +983,9 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			}, fmt.Errorf("invalid IP")
 		}
 
-		// Ensure target IP version matches source IP version to avoid bind errors
-		isTargetIPv6 := net.ParseIP(targetIP).To4() == nil
-		if isSourceIPv6 != isTargetIPv6 {
-			return nil, DeliveryResult{
-				TraceID:  traceID,
-				Status:   "error",
-				MXHost:   mxHost,
-				SourceIP: sourceIP,
-				Error:    fmt.Sprintf("IP version mismatch: source %s (v6=%v) cannot connect to target %s (v6=%v)", sourceIP, isSourceIPv6, targetIP, isTargetIPv6),
-			}, fmt.Errorf("IP version mismatch")
-		}
-
+		// Bind to source IP
+		// Note: IP version matching is handled earlier in target IP selection,
+		// so we should never reach here with mismatched versions
 		dialer.LocalAddr = &net.TCPAddr{IP: ip}
 	}
 
