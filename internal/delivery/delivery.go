@@ -911,7 +911,8 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		}
 	}
 
-	// If no matching IP version found, return temp_fail to allow fallback to other IP version
+	// If no matching IP version found, return error to allow fallback to other IP version
+	// Note: Using "error" status (not "temp_fail") so the retry logic will try the other IP version
 	if targetIP == "" {
 		if len(mxIPs) > 0 {
 			ipVersion := "IPv4"
@@ -924,10 +925,10 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 				"available_ips", mxIPs)
 			return nil, DeliveryResult{
 				TraceID:  traceID,
-				Status:   "temp_fail",
+				Status:   "error",
 				MXHost:   mxHost,
 				SourceIP: sourceIP,
-				Error:    fmt.Sprintf("MX host has no %s addresses (fallback to other IP version)", ipVersion),
+				Error:    fmt.Sprintf("MX host has no %s addresses (will try %s)", ipVersion, map[bool]string{true: "IPv4", false: "IPv6"}[isSourceIPv6]),
 			}, fmt.Errorf("no matching IP version")
 		} else {
 			return nil, DeliveryResult{
