@@ -252,12 +252,14 @@ func TestHandleDeliver_ModeValidation(t *testing.T) {
 
 // mockDeliverer implements the delivery.Deliverer interface for testing
 type mockDeliverer struct {
-	lastMessage string
-	result      *delivery.DeliveryResult // if set, returned instead of default
+	lastMessage   string
+	lastTransport string
+	result        *delivery.DeliveryResult // if set, returned instead of default
 }
 
-func (m *mockDeliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult {
+func (m *mockDeliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, transport string, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult {
 	m.lastMessage = string(message)
+	m.lastTransport = transport
 	if m.result != nil {
 		return *m.result
 	}
@@ -917,5 +919,125 @@ func TestTimeoutResponse(t *testing.T) {
 	// It must NOT be 504 (that is the HTTP status, not an SMTP code)
 	if resp.SMTPCode != 0 {
 		t.Errorf("Expected smtp_code 0 for connection timeout, got %d (504 is HTTP status, not SMTP code)", resp.SMTPCode)
+	}
+}
+
+func TestHandleDeliverSMTP_SetsTransport(t *testing.T) {
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			MaxTotalDeliverySeconds: 30,
+		},
+	}
+
+	logger := slog.Default()
+	mock := &mockDeliverer{}
+	h := NewHandler(cfg, mock, logger)
+
+	reqBody := MessageRequest{
+		From:       "sender@example.com",
+		To:         "recipient@example.com",
+		RawMessage: "From: sender@example.com\r\n\r\nBody",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/deliver/smtp", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliverSMTP(rr, req)
+
+	if mock.lastTransport != "smtp" {
+		t.Errorf("Expected transport 'smtp', got %q", mock.lastTransport)
+	}
+}
+
+func TestHandleDeliverLMTP_SetsTransport(t *testing.T) {
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			MaxTotalDeliverySeconds: 30,
+			DefaultLMTPDestination: "dovecot.local:24",
+		},
+	}
+
+	logger := slog.Default()
+	mock := &mockDeliverer{}
+	h := NewHandler(cfg, mock, logger)
+
+	reqBody := MessageRequest{
+		From:       "sender@example.com",
+		To:         "recipient@example.com",
+		RawMessage: "From: sender@example.com\r\n\r\nBody",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/deliver/lmtp", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliverLMTP(rr, req)
+
+	if mock.lastTransport != "lmtp" {
+		t.Errorf("Expected transport 'lmtp', got %q", mock.lastTransport)
+	}
+}
+
+func TestHandleDeliverLMTP_NotConfigured(t *testing.T) {
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			MaxTotalDeliverySeconds: 30,
+			// DefaultLMTPDestination intentionally empty
+		},
+	}
+
+	logger := slog.Default()
+	mock := &mockDeliverer{}
+	h := NewHandler(cfg, mock, logger)
+
+	reqBody := MessageRequest{
+		From:       "sender@example.com",
+		To:         "recipient@example.com",
+		RawMessage: "From: sender@example.com\r\n\r\nBody",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/deliver/lmtp", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliverLMTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d", rr.Code)
+	}
+
+	var resp map[string]string
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if resp["error"] != "LMTP destination not configured" {
+		t.Errorf("Expected LMTP not configured error, got: %v", resp)
+	}
+}
+
+func TestHandleDeliver_DefaultTransport(t *testing.T) {
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			MaxTotalDeliverySeconds: 30,
+		},
+	}
+
+	logger := slog.Default()
+	mock := &mockDeliverer{}
+	h := NewHandler(cfg, mock, logger)
+
+	reqBody := MessageRequest{
+		From:       "sender@example.com",
+		To:         "recipient@example.com",
+		RawMessage: "From: sender@example.com\r\n\r\nBody",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliver(rr, req)
+
+	if mock.lastTransport != "" {
+		t.Errorf("Expected empty transport (use config default), got %q", mock.lastTransport)
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -199,7 +200,7 @@ func TestLoadConfigInvalidTOML(t *testing.T) {
 func TestValidate_SMTP(t *testing.T) {
 	cfg := &Config{
 		Outbound: OutboundConfig{
-			Protocol: "smtp",
+			DefaultProtocol: "smtp",
 		},
 	}
 
@@ -211,8 +212,8 @@ func TestValidate_SMTP(t *testing.T) {
 func TestValidate_LMTP_Valid(t *testing.T) {
 	cfg := &Config{
 		Outbound: OutboundConfig{
-			Protocol:        "lmtp",
-			LMTPDestination: "lmtp.example.com:24",
+			DefaultProtocol:        "lmtp",
+			DefaultLMTPDestination: "lmtp.example.com:24",
 		},
 	}
 
@@ -224,7 +225,7 @@ func TestValidate_LMTP_Valid(t *testing.T) {
 func TestValidate_LMTP_MissingDestination(t *testing.T) {
 	cfg := &Config{
 		Outbound: OutboundConfig{
-			Protocol: "lmtp",
+			DefaultProtocol: "lmtp",
 		},
 	}
 
@@ -232,7 +233,7 @@ func TestValidate_LMTP_MissingDestination(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for LMTP without destination, got nil")
 	}
-	expectedMsg := "outbound.lmtp_destination is required when protocol is 'lmtp'"
+	expectedMsg := "outbound.default_lmtp_destination is required when default_protocol is 'lmtp'"
 	if err.Error() != expectedMsg {
 		t.Errorf("Expected error message '%s', got: %v", expectedMsg, err)
 	}
@@ -246,7 +247,6 @@ func TestValidate_LMTP_InvalidHostPort(t *testing.T) {
 	}{
 		{"missing_port", "lmtp.example.com", true},
 		{"missing_host", ":24", true},
-		{"empty", "", true},
 		{"valid", "lmtp.example.com:24", false},
 		{"valid_ipv4", "192.0.2.1:24", false},
 		{"valid_ipv6", "[2001:db8::1]:24", false},
@@ -256,8 +256,8 @@ func TestValidate_LMTP_InvalidHostPort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
 				Outbound: OutboundConfig{
-					Protocol:        "lmtp",
-					LMTPDestination: tt.destination,
+					DefaultProtocol:        "lmtp",
+					DefaultLMTPDestination: tt.destination,
 				},
 			}
 
@@ -272,7 +272,7 @@ func TestValidate_LMTP_InvalidHostPort(t *testing.T) {
 func TestValidate_InvalidProtocol(t *testing.T) {
 	cfg := &Config{
 		Outbound: OutboundConfig{
-			Protocol: "invalid",
+			DefaultProtocol: "invalid",
 		},
 	}
 
@@ -280,9 +280,38 @@ func TestValidate_InvalidProtocol(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for invalid protocol, got nil")
 	}
-	expectedMsg := "outbound.protocol must be 'smtp' or 'lmtp', got: invalid"
+	expectedMsg := "outbound.default_protocol must be 'smtp' or 'lmtp', got: invalid"
 	if err.Error() != expectedMsg {
 		t.Errorf("Expected error message '%s', got: %v", expectedMsg, err)
+	}
+}
+
+func TestValidate_DefaultSMTPDestination(t *testing.T) {
+	tests := []struct {
+		name        string
+		destination string
+		wantErr     bool
+	}{
+		{"empty_is_ok", "", false},
+		{"valid", "relay.example.com:25", false},
+		{"valid_ipv4", "192.0.2.1:587", false},
+		{"missing_port", "relay.example.com", true},
+		{"missing_host", ":25", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Outbound: OutboundConfig{
+					DefaultProtocol:        "smtp",
+					DefaultSMTPDestination: tt.destination,
+				},
+			}
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -290,8 +319,52 @@ func TestSetDefaults_Protocol(t *testing.T) {
 	cfg := &Config{}
 	cfg.SetDefaults()
 
-	if cfg.Outbound.Protocol != "smtp" {
-		t.Errorf("Expected default protocol 'smtp', got: %s", cfg.Outbound.Protocol)
+	if cfg.Outbound.DefaultProtocol != "smtp" {
+		t.Errorf("Expected default protocol 'smtp', got: %s", cfg.Outbound.DefaultProtocol)
+	}
+}
+
+func TestLoadConfig_LegacyProtocolField(t *testing.T) {
+	configContent := `
+[outbound]
+protocol = "smtp"
+`
+	tmpFile, err := os.CreateTemp("", "config_legacy_*.toml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.WriteString(configContent)
+	tmpFile.Close()
+
+	_, err = LoadConfig(tmpFile.Name())
+	if err == nil {
+		t.Fatal("Expected error for legacy 'protocol' field, got nil")
+	}
+	if !strings.Contains(err.Error(), "has been renamed") {
+		t.Errorf("Expected rename error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_LegacyLMTPDestinationField(t *testing.T) {
+	configContent := `
+[outbound]
+lmtp_destination = "dovecot:24"
+`
+	tmpFile, err := os.CreateTemp("", "config_legacy_*.toml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.WriteString(configContent)
+	tmpFile.Close()
+
+	_, err = LoadConfig(tmpFile.Name())
+	if err == nil {
+		t.Fatal("Expected error for legacy 'lmtp_destination' field, got nil")
+	}
+	if !strings.Contains(err.Error(), "has been renamed") {
+		t.Errorf("Expected rename error, got: %v", err)
 	}
 }
 

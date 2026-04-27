@@ -10,6 +10,12 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Protocol constants for delivery transport selection.
+const (
+	ProtocolSMTP = "smtp"
+	ProtocolLMTP = "lmtp"
+)
+
 // Config is the root configuration structure containing all service settings.
 type Config struct {
 	Logging    LoggingConfig    `toml:"logging"`
@@ -107,8 +113,9 @@ type DNSConfig struct {
 // OutboundConfig configures SMTP delivery behavior and settings.
 type OutboundConfig struct {
 	// Protocol selection
-	Protocol        string `toml:"protocol"`         // "smtp" or "lmtp" (default: "smtp")
-	LMTPDestination string `toml:"lmtp_destination"` // "host:port" for LMTP mode (required if protocol = "lmtp")
+	DefaultProtocol        string `toml:"default_protocol"`         // "smtp" or "lmtp" (default: "smtp")
+	DefaultSMTPDestination string `toml:"default_smtp_destination"` // fixed relay "host:port" (empty = MX lookup)
+	DefaultLMTPDestination string `toml:"default_lmtp_destination"` // "host:port" for LMTP mode (required if default_protocol = "lmtp")
 
 	// Source IP configuration - supports individual IPs and CIDR subnets
 	// Examples: ["192.0.2.1", "192.0.2.0/24", "2001:db8::1", "2001:db8::/64"]
@@ -128,7 +135,8 @@ type OutboundConfig struct {
 	HelloHostname            string `toml:"hello_hostname"`              // Hostname for EHLO greeting (default: system hostname)
 
 	// SMTP delivery port (default: 25, RFC 5321 standard)
-	SMTPPort int `toml:"smtp_port"` // Port to connect to on MX servers (default: 25)
+	SMTPPort   int  `toml:"smtp_port"`   // Port to connect to on MX servers (default: 25)
+	ImplicitTLS bool `toml:"implicit_tls"` // Use implicit TLS (SMTPS) instead of STARTTLS (default: false)
 
 	// Rate limiting per destination domain
 	PerDomainIntervalSeconds int      `toml:"per_domain_interval_seconds"` // Minimum seconds between deliveries to same domain (default: 2s)
@@ -284,8 +292,8 @@ func (c *Config) SetDefaults() {
 			// Can't log here since we don't have a logger, but the manager will log the final value
 		}
 	}
-	if c.Outbound.Protocol == "" {
-		c.Outbound.Protocol = "smtp"
+	if c.Outbound.DefaultProtocol == "" {
+		c.Outbound.DefaultProtocol = ProtocolSMTP
 	}
 	if c.Outbound.MXCacheTTLSeconds == 0 {
 		c.Outbound.MXCacheTTLSeconds = 3600
@@ -381,6 +389,23 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	// Detect legacy field names before parsing into struct
+	var raw map[string]interface{}
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+	if outbound, ok := raw["outbound"].(map[string]interface{}); ok {
+		renames := map[string]string{
+			"protocol":         "default_protocol",
+			"lmtp_destination": "default_lmtp_destination",
+		}
+		for old, newName := range renames {
+			if _, found := outbound[old]; found {
+				return nil, fmt.Errorf("config: field \"outbound.%s\" has been renamed to \"outbound.%s\" — please update your config file", old, newName)
+			}
+		}
+	}
+
 	var config Config
 	if err := toml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
@@ -396,29 +421,45 @@ func LoadConfig(path string) (*Config, error) {
 	return &config, nil
 }
 
+// validateHostPort checks that value is a valid "host:port" string.
+// Returns nil if value is empty (nothing to validate).
+func validateHostPort(value, fieldName string) error {
+	if value == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return fmt.Errorf("%s must be in 'host:port' format: %w", fieldName, err)
+	}
+	if host == "" {
+		return fmt.Errorf("%s host cannot be empty", fieldName)
+	}
+	if port == "" {
+		return fmt.Errorf("%s port cannot be empty", fieldName)
+	}
+	return nil
+}
+
 // Validate checks the configuration for errors and inconsistencies.
 func (c *Config) Validate() error {
 	// Validate outbound protocol
-	if c.Outbound.Protocol != "smtp" && c.Outbound.Protocol != "lmtp" {
-		return fmt.Errorf("outbound.protocol must be 'smtp' or 'lmtp', got: %s", c.Outbound.Protocol)
+	if c.Outbound.DefaultProtocol != ProtocolSMTP && c.Outbound.DefaultProtocol != ProtocolLMTP {
+		return fmt.Errorf("outbound.default_protocol must be 'smtp' or 'lmtp', got: %s", c.Outbound.DefaultProtocol)
 	}
 
 	// Validate LMTP configuration
-	if c.Outbound.Protocol == "lmtp" {
-		if c.Outbound.LMTPDestination == "" {
-			return fmt.Errorf("outbound.lmtp_destination is required when protocol is 'lmtp'")
+	if c.Outbound.DefaultProtocol == ProtocolLMTP {
+		if c.Outbound.DefaultLMTPDestination == "" {
+			return fmt.Errorf("outbound.default_lmtp_destination is required when default_protocol is 'lmtp'")
 		}
-		// Validate host:port format
-		host, port, err := net.SplitHostPort(c.Outbound.LMTPDestination)
-		if err != nil {
-			return fmt.Errorf("outbound.lmtp_destination must be in 'host:port' format: %w", err)
-		}
-		if host == "" {
-			return fmt.Errorf("outbound.lmtp_destination host cannot be empty")
-		}
-		if port == "" {
-			return fmt.Errorf("outbound.lmtp_destination port cannot be empty")
-		}
+	}
+
+	// Validate destination formats if set
+	if err := validateHostPort(c.Outbound.DefaultLMTPDestination, "outbound.default_lmtp_destination"); err != nil {
+		return err
+	}
+	if err := validateHostPort(c.Outbound.DefaultSMTPDestination, "outbound.default_smtp_destination"); err != nil {
+		return err
 	}
 
 	return nil

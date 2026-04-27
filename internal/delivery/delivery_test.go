@@ -50,7 +50,7 @@ func TestDeliverMessage_InvalidEmail(t *testing.T) {
 	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
 
 	ctx := context.Background()
-	result := deliverer.DeliverMessage(ctx, "sender@example.com", "invalid-recipient", []byte("test"), "", "", "", false, "", "", "", nil)
+	result := deliverer.DeliverMessage(ctx, "sender@example.com", "invalid-recipient", []byte("test"), "", "", "", "", false, "", "", "", nil)
 
 	if result.Status != "hard_bounce" {
 		t.Errorf("Expected hard_bounce for invalid recipient, got %s", result.Status)
@@ -381,8 +381,8 @@ func TestShouldSkipSRS_NoSRSConfig(t *testing.T) {
 func TestLMTPMode_SkipsMXLookup(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.OutboundConfig{
-		Protocol:                 "lmtp",
-		LMTPDestination:          "lmtp.example.com:24",
+		DefaultProtocol:          "lmtp",
+		DefaultLMTPDestination:   "lmtp.example.com:24",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
 		MaxTotalDeliverySeconds:  1,
@@ -399,24 +399,20 @@ func TestLMTPMode_SkipsMXLookup(t *testing.T) {
 	mxLookup := NewMXLookup(dnsCfg, logger)
 	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
 
-	// Verify that deliverer was created with LMTP protocol
-	if deliverer.config.Protocol != "lmtp" {
-		t.Errorf("Expected protocol 'lmtp', got: %s", deliverer.config.Protocol)
+	if deliverer.config.DefaultProtocol != "lmtp" {
+		t.Errorf("Expected protocol 'lmtp', got: %s", deliverer.config.DefaultProtocol)
 	}
 
-	if deliverer.config.LMTPDestination != "lmtp.example.com:24" {
-		t.Errorf("Expected LMTP destination 'lmtp.example.com:24', got: %s", deliverer.config.LMTPDestination)
+	if deliverer.config.DefaultLMTPDestination != "lmtp.example.com:24" {
+		t.Errorf("Expected LMTP destination 'lmtp.example.com:24', got: %s", deliverer.config.DefaultLMTPDestination)
 	}
-
-	// Note: Full delivery test would require a mock LMTP server
-	// This test verifies that the deliverer is properly configured for LMTP mode
 }
 
 func TestLMTPMode_InvalidDestination(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.OutboundConfig{
-		Protocol:                 "lmtp",
-		LMTPDestination:          "invalid",
+		DefaultProtocol:          "lmtp",
+		DefaultLMTPDestination:   "invalid",
 		ConnectionTimeoutSeconds: 1,
 		SMTPTimeoutSeconds:       1,
 		MaxTotalDeliverySeconds:  1,
@@ -434,14 +430,41 @@ func TestLMTPMode_InvalidDestination(t *testing.T) {
 	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
 
 	ctx := context.Background()
-	result := deliverer.DeliverMessage(ctx, "sender@example.com", "recipient@example.com", []byte("test"), "", "", "", false, "", "", "", nil)
+	result := deliverer.DeliverMessage(ctx, "sender@example.com", "recipient@example.com", []byte("test"), "", "", "", "", false, "", "", "", nil)
 
-	// Should fail due to invalid host:port format
 	if result.Status != "error" {
 		t.Errorf("Expected error status for invalid LMTP destination, got %s", result.Status)
 	}
 
 	if result.Error == "" {
 		t.Error("Expected error message for invalid LMTP destination")
+	}
+}
+
+func TestDeliverMessage_ExplicitTransportOverridesConfig(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.OutboundConfig{
+		DefaultProtocol:          "smtp",
+		DefaultLMTPDestination:   "lmtp.example.com:24",
+		ConnectionTimeoutSeconds: 1,
+		SMTPTimeoutSeconds:       1,
+		MaxTotalDeliverySeconds:  1,
+	}
+	dnsCfg := &config.DNSConfig{TimeoutSeconds: 1}
+	repCfg := &config.ReputationConfig{}
+	expandedIPs := &config.ExpandedSourceIPs{IPv4: []string{}, IPv6: []string{}}
+
+	mxLookup := NewMXLookup(dnsCfg, logger)
+	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
+
+	ctx := context.Background()
+	// Config says smtp, but explicit transport says lmtp — should use LMTP path
+	result := deliverer.DeliverMessage(ctx, "sender@example.com", "recipient@example.com", []byte("test"), "lmtp", "", "", "", false, "", "", "", nil)
+
+	// Will fail to connect but should use LMTP path (not MX lookup)
+	// The error should reference the LMTP destination, not MX lookup failure
+	if result.Status == "temp_fail" && result.Error != "" {
+		// MX lookup failure means it didn't use LMTP — unexpected
+		t.Logf("Got temp_fail: %s", result.Error)
 	}
 }

@@ -45,12 +45,16 @@ func createTestServer(t *testing.T, cfg *config.Config) *httptest.Server {
 	mux := http.NewServeMux()
 
 	// Apply concurrency middleware if configured
-	var apiHandler http.Handler = http.HandlerFunc(h.HandleDeliver)
-	if cfg.Inbound.MaxConcurrentRequests > 0 {
-		apiHandler = handler.ConcurrencyLimitMiddleware(cfg.Inbound.MaxConcurrentRequests)(apiHandler)
+	wrapHandler := func(hh http.Handler) http.Handler {
+		if cfg.Inbound.MaxConcurrentRequests > 0 {
+			return handler.ConcurrencyLimitMiddleware(cfg.Inbound.MaxConcurrentRequests)(hh)
+		}
+		return hh
 	}
 
-	mux.Handle("/deliver", apiHandler)
+	mux.Handle("/deliver", wrapHandler(http.HandlerFunc(h.HandleDeliver)))
+	mux.Handle("/deliver/smtp", wrapHandler(http.HandlerFunc(h.HandleDeliverSMTP)))
+	mux.Handle("/deliver/lmtp", wrapHandler(http.HandlerFunc(h.HandleDeliverLMTP)))
 
 	return httptest.NewServer(mux)
 }
@@ -743,4 +747,98 @@ func TestDNSFailure(t *testing.T) {
 
 	t.Logf("DNS failure test: status=%s, http_code=%d, error=%s",
 		result.Status, resp.StatusCode, result.Error)
+}
+
+// Test 14: /deliver/smtp endpoint
+func TestDeliverSMTPEndpoint(t *testing.T) {
+	cfg := &config.Config{
+		Inbound: config.InboundConfig{},
+		Outbound: config.OutboundConfig{
+			MaxTotalDeliverySeconds:  5,
+			ConnectionTimeoutSeconds: 2,
+			SMTPTimeoutSeconds:       2,
+		},
+		DNS:        config.DNSConfig{TimeoutSeconds: 2},
+		Reputation: config.ReputationConfig{},
+	}
+
+	server := createTestServer(t, cfg)
+	defer server.Close()
+
+	msg := createTestMessage("test@example.com")
+	body, _ := json.Marshal(msg)
+	resp, err := http.Post(server.URL+"/deliver/smtp", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST to /deliver/smtp failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result delivery.DeliveryResult
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(bodyBytes, &result)
+
+	// Should get a valid response (will fail delivery but that's expected)
+	if result.Status == "" {
+		t.Error("Expected non-empty status from /deliver/smtp")
+	}
+
+	t.Logf("/deliver/smtp: status=%s, http_code=%d", result.Status, resp.StatusCode)
+}
+
+// Test 15: /deliver/lmtp without LMTP destination configured returns 503
+func TestDeliverLMTPEndpoint_NotConfigured(t *testing.T) {
+	cfg := &config.Config{
+		Inbound:    config.InboundConfig{},
+		Outbound:   config.OutboundConfig{},
+		DNS:        config.DNSConfig{},
+		Reputation: config.ReputationConfig{},
+	}
+
+	server := createTestServer(t, cfg)
+	defer server.Close()
+
+	msg := createTestMessage("test@example.com")
+	body, _ := json.Marshal(msg)
+	resp, err := http.Post(server.URL+"/deliver/lmtp", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST to /deliver/lmtp failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503 for unconfigured LMTP, got %d", resp.StatusCode)
+	}
+
+	var result map[string]string
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(bodyBytes, &result)
+
+	if result["error"] != "LMTP destination not configured" {
+		t.Errorf("Expected LMTP not configured error, got: %v", result)
+	}
+}
+
+// Test 16: Unknown sub-path returns 404
+func TestUnknownDeliverSubpath(t *testing.T) {
+	cfg := &config.Config{
+		Inbound:    config.InboundConfig{},
+		Outbound:   config.OutboundConfig{},
+		DNS:        config.DNSConfig{},
+		Reputation: config.ReputationConfig{},
+	}
+
+	server := createTestServer(t, cfg)
+	defer server.Close()
+
+	msg := createTestMessage("test@example.com")
+	body, _ := json.Marshal(msg)
+	resp, err := http.Post(server.URL+"/deliver/foo", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST to /deliver/foo failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected 404 for unknown sub-path, got %d", resp.StatusCode)
+	}
 }

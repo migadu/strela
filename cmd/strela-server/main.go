@@ -139,25 +139,32 @@ func main() {
 	// Router
 	mux := http.NewServeMux()
 
-	// Routes
-	var apiHandler http.Handler = http.HandlerFunc(h.HandleDeliver)
-
-	if cfg.Inbound.MaxConcurrentRequests > 0 {
-		apiHandler = handler.ConcurrencyLimitMiddleware(cfg.Inbound.MaxConcurrentRequests)(apiHandler)
-	}
+	// Middleware stack shared by all delivery routes
 	var rateLimiter *handler.RateLimiter
 	if cfg.Inbound.RateLimitEnabled {
 		rateLimiter = handler.NewRateLimiter(cfg.Inbound.RateLimitRequestsPerIP, cfg.Inbound.RateLimitWindowSeconds, logger)
-		apiHandler = rateLimiter.Middleware(apiHandler)
 	}
-	if m != nil {
-		apiHandler = handler.MetricsMiddleware(apiHandler, m)
+	wrapDeliveryHandler := func(h http.Handler) http.Handler {
+		wrapped := h
+		if cfg.Inbound.MaxConcurrentRequests > 0 {
+			wrapped = handler.ConcurrencyLimitMiddleware(cfg.Inbound.MaxConcurrentRequests)(wrapped)
+		}
+		if rateLimiter != nil {
+			wrapped = rateLimiter.Middleware(wrapped)
+		}
+		if m != nil {
+			wrapped = handler.MetricsMiddleware(wrapped, m)
+		}
+		wrapped = handler.SecurityHeadersMiddleware(wrapped)
+		// CRITICAL: Panic recovery must be the outermost middleware to catch all panics
+		wrapped = handler.PanicRecoveryMiddleware(wrapped, logger)
+		return wrapped
 	}
-	apiHandler = handler.SecurityHeadersMiddleware(apiHandler)
-	// CRITICAL: Panic recovery must be the outermost middleware to catch all panics
-	apiHandler = handler.PanicRecoveryMiddleware(apiHandler, logger)
 
-	mux.Handle("/deliver", apiHandler)
+	// Routes
+	mux.Handle("/deliver", wrapDeliveryHandler(http.HandlerFunc(h.HandleDeliver)))
+	mux.Handle("/deliver/smtp", wrapDeliveryHandler(http.HandlerFunc(h.HandleDeliverSMTP)))
+	mux.Handle("/deliver/lmtp", wrapDeliveryHandler(http.HandlerFunc(h.HandleDeliverLMTP)))
 
 	// Initialize cluster for leader election (if enabled) — before admin server so health can report cluster status
 	var clusterMgr *cluster.Cluster

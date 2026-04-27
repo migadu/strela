@@ -25,7 +25,7 @@ import (
 
 // DeliveryEngine defines the interface for message delivery
 type DeliveryEngine interface {
-	DeliverMessage(ctx context.Context, from, to string, message []byte, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult
+	DeliverMessage(ctx context.Context, from, to string, message []byte, transport string, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult
 	Stop()
 }
 
@@ -100,11 +100,34 @@ func generateTraceID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// HandleDeliver handles synchronous message delivery requests.
+// HandleDeliver handles synchronous message delivery requests using the default protocol from config.
+func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
+	h.handleDeliverWithTransport(w, r, "")
+}
+
+// HandleDeliverSMTP handles delivery requests, always using SMTP transport.
+func (h *Handler) HandleDeliverSMTP(w http.ResponseWriter, r *http.Request) {
+	h.handleDeliverWithTransport(w, r, config.ProtocolSMTP)
+}
+
+// HandleDeliverLMTP handles delivery requests, always using LMTP transport.
+// Returns 503 if default_lmtp_destination is not configured.
+func (h *Handler) HandleDeliverLMTP(w http.ResponseWriter, r *http.Request) {
+	if h.config.Outbound.DefaultLMTPDestination == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "LMTP destination not configured"})
+		return
+	}
+	h.handleDeliverWithTransport(w, r, config.ProtocolLMTP)
+}
+
+// handleDeliverWithTransport handles synchronous message delivery requests.
+// transport overrides the config default_protocol when non-empty.
 // Supports two modes:
 // 1. JSON mode: Content-Type: application/json with MessageRequest body
 // 2. Header mode: Content-Type: message/rfc822 with raw RFC822 body and HTTP headers
-func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleDeliverWithTransport(w http.ResponseWriter, r *http.Request, transport string) {
 	// Generate a unique trace ID for this delivery session.
 	traceID := generateTraceID()
 
@@ -313,7 +336,7 @@ func (h *Handler) HandleDeliver(w http.ResponseWriter, r *http.Request) {
 		"has_arc_key", arcPrivateKey != "",
 		"arc_selector", arcSelector,
 		"arc_domain", arcDomain)
-	result := h.deliveryEngine.DeliverMessage(ctx, req.From, req.To, rawMessage, dkimPrivateKey, dkimSelector, dkimDomain, skipDKIMValidation, arcPrivateKey, arcSelector, arcDomain, req.InboundAuth)
+	result := h.deliveryEngine.DeliverMessage(ctx, req.From, req.To, rawMessage, transport, dkimPrivateKey, dkimSelector, dkimDomain, skipDKIMValidation, arcPrivateKey, arcSelector, arcDomain, req.InboundAuth)
 	h.logger.Debug("delivery attempt finished",
 		"trace_id", traceID,
 		"status", result.Status,
