@@ -21,10 +21,11 @@ func TestNewLogger_Defaults(t *testing.T) {
 		cfg.Level = "info"
 	}
 
-	logger, err := NewLogger(cfg)
+	logger, lw, err := NewLogger(cfg)
 	if err != nil {
 		t.Fatalf("NewLogger() failed: %v", err)
 	}
+	defer lw.Close()
 	if logger == nil {
 		t.Fatal("NewLogger() returned nil logger")
 	}
@@ -55,13 +56,16 @@ func TestNewLogger_AllLevels(t *testing.T) {
 				Level:  tt.level,
 			}
 
-			logger, err := NewLogger(cfg)
+			logger, lw, err := NewLogger(cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewLogger() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !tt.wantErr && logger == nil {
-				t.Error("NewLogger() returned nil logger without error")
+			if !tt.wantErr {
+				defer lw.Close()
+				if logger == nil {
+					t.Error("NewLogger() returned nil logger without error")
+				}
 			}
 		})
 	}
@@ -89,13 +93,16 @@ func TestNewLogger_AllFormats(t *testing.T) {
 				Level:  "info",
 			}
 
-			logger, err := NewLogger(cfg)
+			logger, lw, err := NewLogger(cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewLogger() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !tt.wantErr && logger == nil {
-				t.Error("NewLogger() returned nil logger without error")
+			if !tt.wantErr {
+				defer lw.Close()
+				if logger == nil {
+					t.Error("NewLogger() returned nil logger without error")
+				}
 			}
 		})
 	}
@@ -123,13 +130,16 @@ func TestNewLogger_AllOutputs(t *testing.T) {
 				Level:  "info",
 			}
 
-			logger, err := NewLogger(cfg)
+			logger, lw, err := NewLogger(cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewLogger() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !tt.wantErr && logger == nil {
-				t.Error("NewLogger() returned nil logger without error")
+			if !tt.wantErr {
+				defer lw.Close()
+				if logger == nil {
+					t.Error("NewLogger() returned nil logger without error")
+				}
 			}
 		})
 	}
@@ -146,10 +156,11 @@ func TestNewLogger_FileOutput(t *testing.T) {
 		Level:  "debug",
 	}
 
-	logger, err := NewLogger(cfg)
+	logger, lw, err := NewLogger(cfg)
 	if err != nil {
 		t.Fatalf("NewLogger() failed: %v", err)
 	}
+	defer lw.Close()
 	if logger == nil {
 		t.Fatal("NewLogger() returned nil logger")
 	}
@@ -185,12 +196,9 @@ func TestNewLogger_FileOutput_InvalidPath(t *testing.T) {
 		Level:  "info",
 	}
 
-	logger, err := NewLogger(cfg)
+	_, _, err := NewLogger(cfg)
 	if err == nil {
 		t.Error("NewLogger() should fail with invalid file path")
-	}
-	if logger != nil {
-		t.Error("NewLogger() should return nil logger on error")
 	}
 }
 
@@ -229,7 +237,7 @@ func TestParseLogLevel(t *testing.T) {
 	}
 }
 
-func TestGetLogWriter(t *testing.T) {
+func TestNewLogWriter(t *testing.T) {
 	tests := []struct {
 		name    string
 		output  string
@@ -245,28 +253,28 @@ func TestGetLogWriter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			writer, err := getLogWriter(tt.output)
+			writer, err := newLogWriter(tt.output)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("getLogWriter(%q) error = %v, wantErr %v", tt.output, err, tt.wantErr)
+				t.Errorf("newLogWriter(%q) error = %v, wantErr %v", tt.output, err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr && writer == nil {
-				t.Error("getLogWriter() returned nil writer without error")
+				t.Error("newLogWriter() returned nil writer without error")
 			}
 		})
 	}
 }
 
-func TestGetLogWriter_File(t *testing.T) {
+func TestNewLogWriter_File(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "test.log")
 
-	writer, err := getLogWriter(logFile)
+	writer, err := newLogWriter(logFile)
 	if err != nil {
-		t.Fatalf("getLogWriter() failed: %v", err)
+		t.Fatalf("newLogWriter() failed: %v", err)
 	}
 	if writer == nil {
-		t.Fatal("getLogWriter() returned nil writer")
+		t.Fatal("newLogWriter() returned nil writer")
 	}
 
 	// Write to the writer

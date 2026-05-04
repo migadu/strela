@@ -2,27 +2,64 @@ package config
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 )
 
+// LogWriter wraps a log output destination and supports reopening for log rotation.
+// When the output is a file, Reopen closes the old handle and opens a new one so
+// that newsyslog (or similar) rotation works correctly after SIGHUP.
+type LogWriter struct {
+	mu   sync.Mutex
+	path string   // empty for stdout/stderr
+	file *os.File // current output file (or os.Stdout/os.Stderr)
+}
+
+func (w *LogWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.file.Write(p)
+}
+
+// Reopen closes and reopens the log file. No-op for stdout/stderr.
+func (w *LogWriter) Reopen() error {
+	if w.path == "" {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	newFile, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("reopen log file %s: %w", w.path, err)
+	}
+	w.file.Close()
+	w.file = newFile
+	return nil
+}
+
+func (w *LogWriter) Close() error {
+	if w.path == "" {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.file.Close()
+}
+
 // NewLogger creates a configured slog.Logger based on the LoggingConfig.
-func NewLogger(cfg LoggingConfig) (*slog.Logger, error) {
-	// Parse log level
+func NewLogger(cfg LoggingConfig) (*slog.Logger, *LogWriter, error) {
 	level, err := parseLogLevel(cfg.Level)
 	if err != nil {
-		return nil, fmt.Errorf("invalid log level: %w", err)
+		return nil, nil, fmt.Errorf("invalid log level: %w", err)
 	}
 
-	// Determine output writer
-	writer, err := getLogWriter(cfg.Output)
+	writer, err := newLogWriter(cfg.Output)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create log writer: %w", err)
+		return nil, nil, fmt.Errorf("failed to create log writer: %w", err)
 	}
 
-	// Create handler based on format
 	var handler slog.Handler
 	opts := &slog.HandlerOptions{
 		Level: level,
@@ -34,13 +71,13 @@ func NewLogger(cfg LoggingConfig) (*slog.Logger, error) {
 	case "console", "":
 		handler = slog.NewTextHandler(writer, opts)
 	default:
-		return nil, fmt.Errorf("invalid log format: %s (must be 'console' or 'json')", cfg.Format)
+		writer.Close()
+		return nil, nil, fmt.Errorf("invalid log format: %s (must be 'console' or 'json')", cfg.Format)
 	}
 
-	return slog.New(handler), nil
+	return slog.New(handler), writer, nil
 }
 
-// parseLogLevel converts a string log level to slog.Level.
 func parseLogLevel(level string) (slog.Level, error) {
 	switch strings.ToLower(level) {
 	case "debug":
@@ -56,23 +93,19 @@ func parseLogLevel(level string) (slog.Level, error) {
 	}
 }
 
-// getLogWriter creates an io.Writer based on the output configuration.
-func getLogWriter(output string) (io.Writer, error) {
+func newLogWriter(output string) (*LogWriter, error) {
 	switch strings.ToLower(output) {
 	case "stderr", "":
-		return os.Stderr, nil
+		return &LogWriter{file: os.Stderr}, nil
 	case "stdout":
-		return os.Stdout, nil
+		return &LogWriter{file: os.Stdout}, nil
 	case "syslog":
-		// For syslog, we'll use stderr as a fallback since slog doesn't have built-in syslog support.
-		// Users can pipe stderr to syslog using systemd or other tools.
-		return os.Stderr, nil
+		return &LogWriter{file: os.Stderr}, nil
 	default:
-		// Assume it's a file path
 		file, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open log file %s: %w", output, err)
 		}
-		return file, nil
+		return &LogWriter{path: output, file: file}, nil
 	}
 }
