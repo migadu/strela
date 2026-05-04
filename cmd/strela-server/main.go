@@ -29,7 +29,7 @@ var (
 	date    = "unknown"
 )
 
-func initLogger(logCfg *config.LoggingConfig) (*slog.Logger, error) {
+func initLogger(logCfg *config.LoggingConfig) (*slog.Logger, *config.LogWriter, error) {
 	return config.NewLogger(*logCfg)
 }
 
@@ -84,11 +84,12 @@ func main() {
 	}
 	tempCfg.SetDefaults()
 
-	logger, err := initLogger(&tempCfg.Logging)
+	logger, logWriter, err := initLogger(&tempCfg.Logging)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
+	defer logWriter.Close()
 
 	logger.Info(">>>>>>>____________________\\'-._  ")
 	logger.Info(">>>>>>>                    //.-'   ")
@@ -317,6 +318,21 @@ func main() {
 		//deliverer.ReloadConfig(&newCfg.Outbound)
 		// No easy way to update handler config without locking in handler.
 		return nil
+	})
+
+	// SIGHUP handler: reopen log file and reload config
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	recovery.SafeGo(logger, "sighup-handler", func() {
+		for range sighup {
+			logger.Info("received SIGHUP, reopening log file and reloading config")
+			if err := logWriter.Reopen(); err != nil {
+				logger.Error("failed to reopen log file", "error", err)
+			}
+			if err := reloadableCfg.Reload(); err != nil {
+				logger.Error("failed to reload config", "error", err)
+			}
+		}
 	})
 
 	// Signal handling
