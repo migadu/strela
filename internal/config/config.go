@@ -412,25 +412,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Detect legacy field names before parsing into struct
+	// Parse raw TOML to detect which fields were explicitly set (for smart defaults)
 	var raw map[string]interface{}
 	if err := toml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	if outbound, ok := raw["outbound"].(map[string]interface{}); ok {
-		renames := map[string]string{
-			"protocol":         "default_protocol",
-			"lmtp_destination": "default_lmtp_destination",
-			"implicit_tls":     "smtp_implicit_tls",
-		}
-		for old, newName := range renames {
-			if _, found := outbound[old]; found {
-				return nil, fmt.Errorf("config: field \"outbound.%s\" has been renamed to \"outbound.%s\" — please update your config file", old, newName)
-			}
-		}
-		if _, found := outbound["prefer_ipv6"]; found {
-			return nil, fmt.Errorf("config: field \"outbound.prefer_ipv6\" has been replaced by \"outbound.smtp_ip_mode\" and \"outbound.lmtp_ip_mode\" — please update your config file")
-		}
 	}
 
 	var config Config
