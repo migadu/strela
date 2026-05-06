@@ -730,4 +730,3 @@ func validateEmailAddress(addr string, fieldName string, allowNull bool) error {
 
 	return nil
 }
-

@@ -130,6 +130,8 @@ type OutboundConfig struct {
 	SourceIPsV6       []string `toml:"source_ips_v6"`       // IPv6 source IPs/subnets (expanded on startup)
 	SMTPIPMode        string   `toml:"smtp_ip_mode"`        // IP version for SMTP: "ipv4", "ipv6", or "dual" (default: "dual")
 	LMTPIPMode        string   `toml:"lmtp_ip_mode"`        // IP version for LMTP: "ipv4", "ipv6", or "dual" (default: "ipv4")
+	SMTPPreferIPv6    bool     `toml:"smtp_prefer_ipv6"`    // When smtp_ip_mode="dual", try IPv6 first (default: true)
+	LMTPPreferIPv6    bool     `toml:"lmtp_prefer_ipv6"`    // When lmtp_ip_mode="dual", try IPv6 first (default: false)
 	SourceIPSelection string   `toml:"source_ip_selection"` // "round-robin", "random", "hash-domain" (default: round-robin)
 
 	MXCacheTTLSeconds        int    `toml:"mx_cache_ttl_seconds"`        // MX record cache TTL (default: 3600s)
@@ -436,6 +438,24 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Apply smart defaults for prefer_ipv6 settings based on whether they were explicitly set
+	// SMTP default: prefer IPv6 (better for internet delivery)
+	// LMTP default: prefer IPv4 (better for local delivery)
+	if outbound, ok := raw["outbound"].(map[string]interface{}); ok {
+		if _, smtpPreferSet := outbound["smtp_prefer_ipv6"]; !smtpPreferSet {
+			// Not explicitly set - default to true for SMTP
+			config.Outbound.SMTPPreferIPv6 = true
+		}
+		if _, lmtpPreferSet := outbound["lmtp_prefer_ipv6"]; !lmtpPreferSet {
+			// Not explicitly set - default to false for LMTP
+			config.Outbound.LMTPPreferIPv6 = false
+		}
+	} else {
+		// No outbound section - use defaults
+		config.Outbound.SMTPPreferIPv6 = true
+		config.Outbound.LMTPPreferIPv6 = false
+	}
+
 	config.SetDefaults()
 
 	// Validate configuration
@@ -505,4 +525,13 @@ func (c *OutboundConfig) IPModeForProtocol(protocol string) string {
 		return c.LMTPIPMode
 	}
 	return c.SMTPIPMode
+}
+
+// PreferIPv6ForProtocol returns whether to prefer IPv6 for the given protocol.
+// Only relevant when IPModeForProtocol returns IPModeDual.
+func (c *OutboundConfig) PreferIPv6ForProtocol(protocol string) bool {
+	if protocol == ProtocolLMTP {
+		return c.LMTPPreferIPv6
+	}
+	return c.SMTPPreferIPv6
 }

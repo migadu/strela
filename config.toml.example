@@ -95,9 +95,14 @@ default_protocol = "smtp"                           # "smtp" (default) or "lmtp"
 # Examples: "192.0.2.1", "192.0.2.0/28" (16 IPs), "2001:db8::1", "2001:db8::/124" (16 IPs)
 # Subnets are expanded on startup. Limits: IPv4 max /22 (1024 IPs), IPv6 max /120 (256 IPs)
 
-# Per-protocol IP version selection: "dual" (IPv6 first, IPv4 fallback), "ipv4", or "ipv6"
+# Per-protocol IP version selection: "dual" (both versions), "ipv4", or "ipv6"
 smtp_ip_mode = "dual"                       # SMTP: use both IPv6 and IPv4
 lmtp_ip_mode = "ipv4"                       # LMTP: IPv4 only (typically local delivery)
+
+# When *_ip_mode = "dual", control which version is tried first:
+smtp_prefer_ipv6 = true                     # SMTP dual mode: try IPv6 first, fallback to IPv4 (default: true)
+lmtp_prefer_ipv6 = false                    # LMTP dual mode: try IPv4 first, fallback to IPv6 (default: false)
+                                            # Ignored when ip_mode is "ipv4" or "ipv6" (only one version available)
 
 # Separate IPv4 and IPv6 source IP pools
 source_ips_v4 = ["192.0.2.1", "192.0.2.2"]  # IPv4 source IPs/subnets

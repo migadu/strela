@@ -954,7 +954,7 @@ func TestHandleDeliverLMTP_SetsTransport(t *testing.T) {
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{
 			MaxTotalDeliverySeconds: 30,
-			DefaultLMTPDestination: "dovecot.local:24",
+			DefaultLMTPDestination:  "dovecot.local:24",
 		},
 	}
 

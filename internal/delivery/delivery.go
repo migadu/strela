@@ -492,14 +492,16 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	var lastResult DeliveryResult
 
 	// Determine delivery order based on per-protocol IP mode.
-	// In dual mode, IPv6 is always tried first with IPv4 fallback.
+	// In dual mode, the prefer_ipv6 setting controls which version is tried first.
 	// tryIPv4/tryIPv6 control source-IP-bound delivery paths.
 	// preferIPv6 controls target IP selection when no source IPs are configured.
 	ipMode := d.config.IPModeForProtocol(protocol)
+	preferIPv6 := d.config.PreferIPv6ForProtocol(protocol)
 	tryIPv4 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv4) && d.ipRotator.HasIPv4()
 	tryIPv6 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6) && d.ipRotator.HasIPv6()
-	tryIPv6First := tryIPv6
-	preferIPv6 := ipMode == config.IPModeDual || ipMode == config.IPModeIPv6
+	// In dual mode, tryIPv6First is determined by preferIPv6 setting
+	// In IPv6-only mode, always try IPv6 first (tryIPv4 will be false anyway)
+	tryIPv6First := tryIPv6 && (ipMode == config.IPModeIPv6 || (ipMode == config.IPModeDual && preferIPv6))
 
 	for i, mx := range mxRecords {
 		logger.Info("trying MX", "host", mx.Host, "priority", mx.Priority, "index", i, "total", len(mxRecords))
@@ -1212,7 +1214,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	// For SMTP STARTTLS, use empty ServerName to disable SNI
 	// Some SMTP servers have issues with SNI and reject the handshake
 	tlsConfig := &tls.Config{
-		ServerName:         "", // Disable SNI for SMTP compatibility
+		ServerName:         "",   // Disable SNI for SMTP compatibility
 		InsecureSkipVerify: true, // Opportunistic TLS
 		MinVersion:         tls.VersionTLS12,
 		CipherSuites:       opportunisticCipherSuites,
@@ -1475,13 +1477,13 @@ func (d *Deliverer) recordMetrics(result DeliveryResult, recipientDomain string)
 
 // IPRotator logic - supports IPv4/IPv6 separation and selection
 type IPRotator struct {
-	ipsV4    []string
-	ipsV6    []string
-	strategy string
+	ipsV4     []string
+	ipsV6     []string
+	strategy  string
 	counterV4 uint32
 	counterV6 uint32
-	random   *rand.Rand
-	randomMu sync.Mutex // Protects random for thread-safe access
+	random    *rand.Rand
+	randomMu  sync.Mutex // Protects random for thread-safe access
 }
 
 // NewIPRotator creates a new IP rotator with separate IPv4 and IPv6 pools.
