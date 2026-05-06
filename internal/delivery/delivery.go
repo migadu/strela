@@ -30,6 +30,17 @@ import (
 // ErrDomainRateLimitExceeded is returned when the domain rate limit is exceeded (Fail Fast).
 var ErrDomainRateLimitExceeded = fmt.Errorf("domain rate limit exceeded")
 
+var opportunisticCipherSuites []uint16
+
+func init() {
+	for _, c := range tls.CipherSuites() {
+		opportunisticCipherSuites = append(opportunisticCipherSuites, c.ID)
+	}
+	for _, c := range tls.InsecureCipherSuites() {
+		opportunisticCipherSuites = append(opportunisticCipherSuites, c.ID)
+	}
+}
+
 // contextKey is an unexported type for context keys in this package.
 type contextKey string
 
@@ -1198,11 +1209,21 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		"delivery_timeout", deliveryTimeout)
 
 	// TLS configuration
+	// For SMTP STARTTLS, use empty ServerName to disable SNI
+	// Some SMTP servers have issues with SNI and reject the handshake
 	tlsConfig := &tls.Config{
-		ServerName:         host,
+		ServerName:         "", // Disable SNI for SMTP compatibility
 		InsecureSkipVerify: true, // Opportunistic TLS
 		MinVersion:         tls.VersionTLS12,
+		CipherSuites:       opportunisticCipherSuites,
 	}
+
+	logger.Debug("TLS configuration",
+		"server_name", "(disabled for SMTP)",
+		"hello_hostname", d.config.HelloHostname,
+		"mx_host", mxHost,
+		"target_host", host,
+		"min_version", "TLS1.2")
 
 	// Perform SMTP handshake (EHLO) and optionally STARTTLS with phased timeout enforcement
 	type clientResult struct {
@@ -1303,7 +1324,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		// SMTP mode: Try STARTTLS first (opportunistic) - this does banner + EHLO + STARTTLS
 		client, err := smtp.NewClientStartTLSWithName(conn, tlsConfig, d.config.HelloHostname)
 		if err == nil {
-			// STARTTLS succeeded
+			// STARTTLS succeeded - TLS handshake completed
 			client.CommandTimeout = deliveryTimeout
 			client.SubmissionTimeout = deliveryTimeout
 			logger.Info("STARTTLS connection established", "mx", mxHost, "hello_hostname", d.config.HelloHostname)
@@ -1354,7 +1375,12 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			return
 		}
 
-		// Other STARTTLS errors (handshake failed, etc.) - fail
+		// Other STARTTLS errors (handshake failed, etc.) - log detailed error
+		logger.Error("STARTTLS handshake failed",
+			"mx", mxHost,
+			"error", err.Error(),
+			"tls_min_version", "TLS1.2",
+			"skip_verify", true)
 		resultCh <- clientResult{err: fmt.Errorf("STARTTLS handshake failed: %w", err)}
 	})
 
