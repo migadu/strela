@@ -128,8 +128,11 @@ func (h *Handler) HandleDeliverLMTP(w http.ResponseWriter, r *http.Request) {
 // 1. JSON mode: Content-Type: application/json with MessageRequest body
 // 2. Header mode: Content-Type: message/rfc822 with raw RFC822 body and HTTP headers
 func (h *Handler) handleDeliverWithTransport(w http.ResponseWriter, r *http.Request, transport string) {
-	// Generate a unique trace ID for this delivery session.
-	traceID := generateTraceID()
+	// Use caller-provided trace ID if present, otherwise generate one.
+	traceID := r.Header.Get("X-Trace-Id")
+	if traceID == "" {
+		traceID = generateTraceID()
+	}
 
 	h.logger.Debug("received delivery request",
 		"trace_id", traceID,
@@ -672,9 +675,6 @@ func validateEmailAddress(addr string, fieldName string, allowNull bool) error {
 	// Local part validation
 	if localPart == "" {
 		return fmt.Errorf("%s: empty local part in %q", fieldName, addr)
-	}
-	if len(localPart) > 64 {
-		return fmt.Errorf("%s: local part exceeds 64 characters in %q", fieldName, addr)
 	}
 
 	// Domain validation

@@ -50,7 +50,7 @@ func TestValidateEmailAddress(t *testing.T) {
 		{name: "space in domain", addr: "user@exam ple.com", fieldName: "to", wantErr: true, errMsg: "invalid character"},
 
 		// Length limits
-		{name: "local part too long (65 chars)", addr: strings.Repeat("a", 65) + "@example.com", fieldName: "to", wantErr: true, errMsg: "local part exceeds 64"},
+		{name: "long local part (65 chars) is allowed", addr: strings.Repeat("a", 65) + "@example.com", fieldName: "to", wantErr: false},
 
 		// Domain label limits
 		{name: "domain label too long (64 chars)", addr: "user@" + strings.Repeat("a", 64) + ".com", fieldName: "to", wantErr: true, errMsg: "exceeds 63 characters"},
