@@ -684,8 +684,8 @@ Body
 		t.Errorf("Expected status 400, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	if !strings.Contains(rr.Body.String(), "Missing 'from' or 'to'") {
-		t.Errorf("Expected missing fields error, got: %s", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), "Missing 'to'") {
+		t.Errorf("Expected missing 'to' error, got: %s", rr.Body.String())
 	}
 }
 

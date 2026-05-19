@@ -879,6 +879,12 @@ func (d *Deliverer) shouldSkipSRS(from, to string, inboundAuth *InboundAuthResul
 }
 
 func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, client *smtp.Client, from, to string, msg []byte, inboundAuth *InboundAuthResults) (string, error) {
+	// Accept callers that pass envelope addresses with or without angle brackets.
+	// Null sender ("" or "<>") both result in MAIL FROM:<>, since go-smtp wraps
+	// the address in <> itself.
+	from = stripAngleBrackets(from)
+	to = stripAngleBrackets(to)
+
 	// MAIL FROM — SRS rewrite for SMTP (LMTP uses performLMTPTransaction instead)
 	mailFrom := from
 	if d.srs != nil {
@@ -1573,6 +1579,15 @@ func splitEmail(email string) (string, string) {
 	return email[:i], email[i+1:]
 }
 
+// stripAngleBrackets removes one surrounding pair of <> from an envelope
+// address. "" and "<>" both collapse to "" (the null sender).
+func stripAngleBrackets(addr string) string {
+	if len(addr) >= 2 && addr[0] == '<' && addr[len(addr)-1] == '>' {
+		return addr[1 : len(addr)-1]
+	}
+	return addr
+}
+
 // isBindError checks if an error is related to binding to a local address.
 // This typically indicates misconfiguration (IP not assigned to interface).
 func isBindError(err error) bool {
@@ -1661,6 +1676,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 	if cmdTimeout == 0 {
 		cmdTimeout = 60 * time.Second
 	}
+
+	// Accept callers that pass envelope addresses with or without angle brackets.
+	// Null sender ("" or "<>") both produce MAIL FROM:<>.
+	from = stripAngleBrackets(from)
+	to = stripAngleBrackets(to)
 
 	// Log envelope and first message headers at DEBUG for diagnostics
 	if logger.Enabled(ctx, slog.LevelDebug) {

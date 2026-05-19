@@ -12,6 +12,77 @@ import (
 	"time"
 )
 
+// mockLMTPServerCapture is like mockLMTPServer but also captures the MAIL FROM
+// and RCPT TO command lines for assertion.
+func mockLMTPServerCapture(t *testing.T, ln net.Listener, responseCode int, mailFromCh, rcptToCh chan<- string, errCh chan<- error) {
+	t.Helper()
+
+	conn, err := ln.Accept()
+	if err != nil {
+		errCh <- err
+		return
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	fmt.Fprintf(conn, "220 mock LMTP ready\r\n")
+
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		errCh <- fmt.Errorf("reading LHLO: %w", err)
+		return
+	}
+	if !strings.HasPrefix(line, "LHLO ") {
+		errCh <- fmt.Errorf("expected LHLO, got: %s", line)
+		return
+	}
+	fmt.Fprintf(conn, "250 OK\r\n")
+
+	line, err = reader.ReadString('\n')
+	if err != nil {
+		errCh <- fmt.Errorf("reading MAIL FROM: %w", err)
+		return
+	}
+	mailFromCh <- strings.TrimRight(line, "\r\n")
+	fmt.Fprintf(conn, "250 OK\r\n")
+
+	line, err = reader.ReadString('\n')
+	if err != nil {
+		errCh <- fmt.Errorf("reading RCPT TO: %w", err)
+		return
+	}
+	rcptToCh <- strings.TrimRight(line, "\r\n")
+	fmt.Fprintf(conn, "250 OK\r\n")
+
+	line, err = reader.ReadString('\n')
+	if err != nil {
+		errCh <- fmt.Errorf("reading DATA: %w", err)
+		return
+	}
+	if !strings.HasPrefix(line, "DATA") {
+		errCh <- fmt.Errorf("expected DATA, got: %s", line)
+		return
+	}
+	fmt.Fprintf(conn, "354 Go ahead\r\n")
+
+	// Drain body until lone ".\r\n"
+	for {
+		line, err = reader.ReadString('\n')
+		if err != nil {
+			errCh <- fmt.Errorf("reading body: %w", err)
+			return
+		}
+		if strings.TrimRight(line, "\r\n") == "." {
+			break
+		}
+	}
+
+	fmt.Fprintf(conn, "%d 2.1.5 Delivered\r\n", responseCode)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reader.ReadString('\n')
+	errCh <- nil
+}
+
 // mockLMTPServer accepts one LMTP connection and runs through the full
 // protocol: greeting → LHLO → MAIL FROM → RCPT TO → DATA → body → per-recipient response.
 func mockLMTPServer(t *testing.T, ln net.Listener, responseCode int, bodyCh chan<- []byte, errCh chan<- error) {
@@ -307,5 +378,59 @@ func TestPerformLMTPTransaction_DotStuffing(t *testing.T) {
 	}
 	if !strings.Contains(body, "Normal line") {
 		t.Errorf("normal line missing")
+	}
+}
+
+// TestPerformLMTPTransaction_NullSender verifies that both "" and "<>" produce
+// the wire form "MAIL FROM:<>" (and that angle-bracketed recipients are
+// normalized to a single pair of brackets).
+func TestPerformLMTPTransaction_NullSender(t *testing.T) {
+	cases := []struct {
+		name string
+		from string
+		to   string
+		want string // expected MAIL FROM line
+		rcpt string // expected RCPT TO line
+	}{
+		{name: "empty from", from: "", to: "rcpt@example.com", want: "MAIL FROM:<>", rcpt: "RCPT TO:<rcpt@example.com>"},
+		{name: "<> from", from: "<>", to: "rcpt@example.com", want: "MAIL FROM:<>", rcpt: "RCPT TO:<rcpt@example.com>"},
+		{name: "bracketed from", from: "<bounce@example.com>", to: "rcpt@example.com", want: "MAIL FROM:<bounce@example.com>", rcpt: "RCPT TO:<rcpt@example.com>"},
+		{name: "bracketed to", from: "a@b.com", to: "<c@d.com>", want: "MAIL FROM:<a@b.com>", rcpt: "RCPT TO:<c@d.com>"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+
+			mailFromCh := make(chan string, 1)
+			rcptToCh := make(chan string, 1)
+			errCh := make(chan error, 1)
+			go mockLMTPServerCapture(t, ln, 250, mailFromCh, rcptToCh, errCh)
+
+			conn, reader := lmtpHandshake(t, ln.Addr().String())
+
+			msg := []byte("From: a@b.com\r\nTo: c@d.com\r\n\r\nbody\r\n")
+			result := (&Deliverer{config: &defaultTestConfig}).performLMTPTransaction(
+				t.Context(), testLogger(), "trace-null", conn, reader,
+				tc.from, tc.to, msg, "localhost", "",
+			)
+
+			if result.Status != "delivered" {
+				t.Fatalf("expected delivered, got %s (error: %s)", result.Status, result.Error)
+			}
+			if got := <-mailFromCh; got != tc.want {
+				t.Errorf("MAIL FROM wire form: got %q, want %q", got, tc.want)
+			}
+			if got := <-rcptToCh; got != tc.rcpt {
+				t.Errorf("RCPT TO wire form: got %q, want %q", got, tc.rcpt)
+			}
+			if err := <-errCh; err != nil {
+				t.Fatalf("server error: %v", err)
+			}
+		})
 	}
 }
