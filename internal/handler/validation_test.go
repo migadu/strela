@@ -25,8 +25,8 @@ func TestValidateEmailAddress(t *testing.T) {
 		{name: "long but valid", addr: "a@example.com", fieldName: "to", wantErr: false},
 		{name: "IDN domain (non-ASCII)", addr: "user@münchen.de", fieldName: "to", wantErr: false},
 
-		// Null sender (from only)
-		{name: "null sender empty", addr: "", fieldName: "from", allowNull: true, wantErr: true, errMsg: "address is empty"},
+		// Null sender (from only) — accept both empty and <> forms
+		{name: "null sender empty", addr: "", fieldName: "from", allowNull: true, wantErr: false},
 		{name: "null sender angle brackets", addr: "<>", fieldName: "from", allowNull: true, wantErr: false},
 		{name: "null sender not allowed for to", addr: "<>", fieldName: "to", allowNull: false, wantErr: true, errMsg: "address is empty"},
 		{name: "empty to rejected", addr: "", fieldName: "to", allowNull: false, wantErr: true, errMsg: "address is empty"},

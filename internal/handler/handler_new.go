@@ -196,14 +196,15 @@ func (h *Handler) handleDeliverWithTransport(w http.ResponseWriter, r *http.Requ
 		"arc_domain", req.ARCDomain)
 
 	// 4. Validation
-	if req.From == "" || req.To == "" {
-		h.logger.Debug("missing required fields", "from", req.From, "to", req.To)
-		http.Error(w, "Missing 'from' or 'to' fields", http.StatusBadRequest)
+	// Empty 'from' is permitted (null sender, e.g. for bounces / DSN).
+	if req.To == "" {
+		h.logger.Debug("missing required field", "from", req.From, "to", req.To)
+		http.Error(w, "Missing 'to' field", http.StatusBadRequest)
 		return
 	}
 
 	// Validate email address format before passing to SMTP layer.
-	// From allows null sender (<>) for bounce/DSN messages.
+	// From allows null sender (empty or <>) for bounce/DSN messages.
 	if err := validateEmailAddress(req.From, "from", true); err != nil {
 		h.logger.Debug("invalid 'from' address", "from", req.From, "error", err, "trace_id", traceID)
 		http.Error(w, fmt.Sprintf("Invalid 'from' address: %v", err), http.StatusBadRequest)
@@ -644,22 +645,20 @@ func (h *Handler) decodeBase64Header(value string) string {
 // Accepted forms:
 //   - user@domain.tld            (standard)
 //   - "quoted local"@domain.tld  (quoted local-part)
-//   - <>                         (null sender / bounce, from only)
+//   - <>  or  ""                 (null sender / bounce, from only)
 //
 // This is intentionally not a full RFC 5322 parser — it validates the
 // minimum structure needed for SMTP MAIL FROM / RCPT TO to succeed.
 func validateEmailAddress(addr string, fieldName string, allowNull bool) error {
-	// Handle null sender (<>) — valid for bounce/DSN messages (RFC 5321)
-	if allowNull && addr == "<>" {
-		return nil
-	}
-
-	// Strip angle brackets if present: <user@domain> → user@domain
+	// Strip angle brackets if present: <user@domain> → user@domain, <> → ""
 	if len(addr) >= 2 && addr[0] == '<' && addr[len(addr)-1] == '>' {
 		addr = addr[1 : len(addr)-1]
 	}
 
 	if addr == "" {
+		if allowNull {
+			return nil // null sender — valid for bounce/DSN messages (RFC 5321)
+		}
 		return fmt.Errorf("%s: address is empty", fieldName)
 	}
 
