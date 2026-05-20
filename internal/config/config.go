@@ -64,19 +64,20 @@ type InboundConfig struct {
 	MaxConcurrentRequests int `toml:"max_concurrent_requests"` // Maximum concurrent HTTP requests (0 = unlimited)
 }
 
-// MetricsConfig configures the Prometheus metrics endpoint (served on the admin server).
+// MetricsConfig configures the health and metrics server (serves /health and /metrics).
 type MetricsConfig struct {
-	Enabled bool   `toml:"enabled"` // Enable Prometheus metrics endpoint (default: true)
-	Path    string `toml:"path"`    // Path for metrics endpoint (default: /metrics)
+	Enabled                bool   `toml:"enabled"`                  // Enable health/metrics server (default: true)
+	Bind                   string `toml:"bind"`                     // Bind address (default: :8083)
+	Path                   string `toml:"path"`                     // Path for metrics endpoint (default: /metrics)
+	IncludeRecipientDomain bool   `toml:"include_recipient_domain"` // Include recipient_domain label in delivery metrics (default: false, caution: high cardinality)
 }
 
-// AdminConfig configures the admin server (health + metrics endpoints).
-// This server listens on a separate localhost-only address to avoid public exposure.
+// AdminConfig configures the admin server for the strela-admin CLI (serves /health with auth).
 type AdminConfig struct {
-	Enabled  bool   `toml:"enabled"`  // Enable admin server with health + metrics (default: true)
+	Enabled  bool   `toml:"enabled"`  // Enable admin server (default: true)
 	Bind     string `toml:"bind"`     // Bind address for admin server (default: 127.0.0.1:8080)
-	Username string `toml:"username"` // HTTP Basic Auth username (optional)
-	Password string `toml:"password"` // HTTP Basic Auth password (optional)
+	Username string `toml:"username"` // HTTP Basic Auth username
+	Password string `toml:"password"` // HTTP Basic Auth password
 }
 
 // TLSConfig configures TLS/SSL certificate handling for HTTPS.
@@ -272,12 +273,15 @@ func (c *Config) SetDefaults() {
 		c.Inbound.RateLimitWindowSeconds = 60
 	}
 
-	// Metrics defaults
+	// Metrics/health server defaults
 	if c.Metrics.Path == "" {
 		c.Metrics.Path = "/metrics"
 	}
+	if c.Metrics.Bind == "" {
+		c.Metrics.Bind = ":8083"
+	}
 
-	// Admin server defaults (localhost-only for security)
+	// Admin server defaults
 	if c.Admin.Bind == "" {
 		c.Admin.Bind = "127.0.0.1:8080"
 	}

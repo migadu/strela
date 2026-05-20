@@ -111,7 +111,7 @@ func main() {
 	// Metrics
 	var m *metrics.Metrics
 	if cfg.Metrics.Enabled {
-		m = metrics.NewMetrics()
+		m = metrics.NewMetrics(cfg.Metrics.IncludeRecipientDomain)
 		logger.Info("metrics initialized", "path", cfg.Metrics.Path)
 	}
 
@@ -207,24 +207,49 @@ func main() {
 		defer clusterMgr.Shutdown()
 	}
 
-	// Admin server (health + metrics) on separate localhost-only listener
+	// Health/metrics server on separate listener (unauthenticated, for LB probes and Prometheus)
+	var metricsServer *http.Server
+	if cfg.Metrics.Enabled {
+		metricsMux := http.NewServeMux()
+		if clusterMgr != nil {
+			metricsMux.Handle("/health", handler.NewHealthHandler(deliverer, logger, clusterMgr))
+		} else {
+			metricsMux.Handle("/health", handler.NewHealthHandler(deliverer, logger))
+		}
+		if m != nil && cfg.Metrics.Path != "" {
+			metricsMux.Handle(cfg.Metrics.Path, promhttp.Handler())
+		}
+
+		metricsHandler := handler.PanicRecoveryMiddleware(metricsMux, logger)
+
+		metricsServer = &http.Server{
+			Addr:         cfg.Metrics.Bind,
+			Handler:      metricsHandler,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  30 * time.Second,
+			ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
+		}
+
+		recovery.SafeGo(logger, "metrics-server", func() {
+			logger.Info("health/metrics server starting", "addr", cfg.Metrics.Bind)
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("health/metrics server failed", "error", err)
+				os.Exit(1)
+			}
+		})
+	}
+
+	// Admin server (authenticated, for strela-admin CLI)
 	var adminServer *http.Server
 	if cfg.Admin.Enabled {
 		adminMux := http.NewServeMux()
-
-		// Health Endpoint (with optional cluster info)
 		if clusterMgr != nil {
 			adminMux.Handle("/health", handler.NewHealthHandler(deliverer, logger, clusterMgr))
 		} else {
 			adminMux.Handle("/health", handler.NewHealthHandler(deliverer, logger))
 		}
 
-		// Metrics Endpoint (served on admin port alongside health)
-		if m != nil && cfg.Metrics.Path != "" {
-			adminMux.Handle(cfg.Metrics.Path, promhttp.Handler())
-		}
-
-		// Apply admin-level auth and panic recovery to all admin endpoints
 		var adminHandler http.Handler = adminMux
 		if cfg.Admin.Username != "" && cfg.Admin.Password != "" {
 			adminHandler = basicAuthMiddleware(adminMux, cfg.Admin.Username, cfg.Admin.Password, logger)
@@ -241,7 +266,7 @@ func main() {
 		}
 
 		recovery.SafeGo(logger, "admin-server", func() {
-			logger.Info("admin server starting (health + metrics)", "addr", cfg.Admin.Bind)
+			logger.Info("admin server starting", "addr", cfg.Admin.Bind)
 			if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("admin server failed", "error", err)
 				os.Exit(1)
@@ -350,7 +375,15 @@ func main() {
 	}
 	logger.Info("HTTP server stopped")
 
-	// 1b. Stop admin server (health + metrics)
+	// 1b. Stop health/metrics server
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(ctx); err != nil {
+			logger.Error("health/metrics server shutdown error", "error", err)
+		}
+		logger.Info("health/metrics server stopped")
+	}
+
+	// 1c. Stop admin server
 	if adminServer != nil {
 		if err := adminServer.Shutdown(ctx); err != nil {
 			logger.Error("admin server shutdown error", "error", err)
@@ -358,7 +391,7 @@ func main() {
 		logger.Info("admin server stopped")
 	}
 
-	// 1c. Stop ACME HTTP-01 challenge server
+	// 1d. Stop ACME HTTP-01 challenge server
 	if challengeServer != nil {
 		if err := challengeServer.Shutdown(ctx); err != nil {
 			logger.Error("ACME challenge server shutdown error", "error", err)
