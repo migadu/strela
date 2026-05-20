@@ -7,6 +7,8 @@ import (
 
 // Metrics holds all Prometheus metrics for the application.
 type Metrics struct {
+	includeRecipientDomain bool
+
 	// Delivery metrics
 	DeliveryAttempts *prometheus.CounterVec
 	DeliveryDuration *prometheus.HistogramVec
@@ -23,25 +25,33 @@ type Metrics struct {
 }
 
 // NewMetrics creates and registers all Prometheus metrics.
-func NewMetrics() *Metrics {
+// If includeRecipientDomain is true, delivery metrics include a recipient_domain label (caution: high cardinality).
+func NewMetrics(includeRecipientDomain bool) *Metrics {
+	deliveryLabels := []string{"outcome"}
+	if includeRecipientDomain {
+		deliveryLabels = append(deliveryLabels, "recipient_domain")
+	}
+
 	return &Metrics{
-		// Delivery attempts by outcome and recipient domain
+		includeRecipientDomain: includeRecipientDomain,
+
+		// Delivery attempts by outcome (and optionally recipient domain)
 		DeliveryAttempts: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "strela_delivery_attempts_total",
-				Help: "Total number of delivery attempts by outcome and recipient domain",
+				Help: "Total number of delivery attempts by outcome",
 			},
-			[]string{"outcome", "recipient_domain"},
+			deliveryLabels,
 		),
 
-		// Delivery duration histogram by outcome and recipient domain
+		// Delivery duration histogram by outcome (and optionally recipient domain)
 		DeliveryDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "strela_delivery_duration_seconds",
 				Help:    "Time taken for delivery attempts",
 				Buckets: []float64{.1, .5, 1, 2, 5, 10, 30, 60, 120},
 			},
-			[]string{"outcome", "recipient_domain"},
+			deliveryLabels,
 		),
 
 		// Active deliveries
@@ -101,8 +111,13 @@ func NewMetrics() *Metrics {
 
 // RecordDeliveryAttempt records a delivery attempt with its outcome, recipient domain, and duration.
 func (m *Metrics) RecordDeliveryAttempt(outcome, recipientDomain string, duration float64) {
-	m.DeliveryAttempts.WithLabelValues(outcome, recipientDomain).Inc()
-	m.DeliveryDuration.WithLabelValues(outcome, recipientDomain).Observe(duration)
+	if m.includeRecipientDomain {
+		m.DeliveryAttempts.WithLabelValues(outcome, recipientDomain).Inc()
+		m.DeliveryDuration.WithLabelValues(outcome, recipientDomain).Observe(duration)
+	} else {
+		m.DeliveryAttempts.WithLabelValues(outcome).Inc()
+		m.DeliveryDuration.WithLabelValues(outcome).Observe(duration)
+	}
 }
 
 // RecordHTTPRequest records an HTTP request with method, path, status code, and duration.

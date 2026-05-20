@@ -133,7 +133,7 @@ Return JSON response immediately:
 - **strela-server**: Main SMTP delivery gateway (only binary in v2.0)
 
 **Removed in v2.0:**
-- ~~strela-admin~~ - Admin CLI tool (no queue to manage)
+- **strela-admin**: Admin CLI tool (health, stats, TLS certificate management). Connects to admin server (:8080).
 
 ### Core Packages (`internal/`)
 
@@ -532,7 +532,7 @@ Major dependencies (see `go.mod`):
 - ❌ Circuit breaker (`internal/delivery/circuit_breaker.go`)
 - ❌ Retry scheduler (`internal/delivery/retry_scheduler.go`)
 - ❌ Idempotency support (`internal/handler/idempotency.go`)
-- ❌ `strela-admin` CLI tool (`cmd/strela-admin/`)
+- ✅ `strela-admin` CLI tool (`cmd/strela-admin/`) — retained for health checks, stats, and TLS management
 
 ### What Was Added
 - ✅ Synchronous delivery with immediate JSON response

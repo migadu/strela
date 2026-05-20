@@ -69,16 +69,21 @@ cache_ttl_seconds = 3600                    # Cache successful MX lookups (1 hou
 cache_negative_ttl_seconds = 60             # Cache failed MX lookups (1 minute)
 
 [metrics]
+# Health/metrics server: serves /health and /metrics on a separate listener.
+# Intended for load balancer probes and Prometheus scraping (no authentication).
 enabled = true
-path = "/metrics"                           # Prometheus metrics endpoint path (served on admin server)
+bind = ":8083"                              # Health/metrics server bind address
+path = "/metrics"                           # Prometheus metrics endpoint path
+include_recipient_domain = false            # Include recipient_domain label in delivery metrics
+                                            # WARNING: high cardinality — each unique domain creates new time series
+                                            # Only enable for small deployments or debugging
 
 [admin]
-# Admin server: serves /health and /metrics on a separate localhost-only listener.
-# Not exposed publicly — use strela-admin to query from the local machine.
+# Admin server: serves /health with authentication for strela-admin CLI.
 enabled = true
-bind = "127.0.0.1:8080"                    # Localhost-only admin server (health + metrics)
-# username = "admin"                        # Optional basic auth
-# password = "secure-password"
+bind = "127.0.0.1:8080"                     # Admin server bind address (localhost only by default)
+# username = "admin"                        # HTTP Basic Auth username
+# password = "secure-password"              # HTTP Basic Auth password
 
 [outbound]
 # Protocol selection — controls the default protocol for the /deliver endpoint.

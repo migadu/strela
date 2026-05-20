@@ -149,21 +149,20 @@ func loadConfigSilent() *config.Config {
 	return cfg
 }
 
-// resolveServerURL determines the admin server URL from flag, config, or default.
-// The admin server (health + metrics) runs on health.listen_addr, separate from the main API.
-func resolveServerURL(cfg *config.Config) string {
+// resolveAdminURL determines the admin server URL from flag, config, or default.
+// The admin server serves /health and /metrics with authentication for the CLI.
+func resolveAdminURL(cfg *config.Config) string {
 	if serverURL != "" {
 		return serverURL
 	}
 	if cfg != nil && cfg.Admin.Bind != "" {
 		listen := cfg.Admin.Bind
-		// If it starts with ":", add localhost
 		if strings.HasPrefix(listen, ":") {
 			return "http://localhost" + listen
 		}
 		return "http://" + listen
 	}
-	return "http://127.0.0.1:8080"
+	return "http://localhost:8080"
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -194,7 +193,7 @@ type SystemHealth struct {
 
 func cmdHealth() {
 	cfg := loadConfigSilent()
-	url := resolveServerURL(cfg)
+	url := resolveAdminURL(cfg)
 
 	var username, password string
 	if cfg != nil {
@@ -252,20 +251,28 @@ func cmdHealth() {
 
 func cmdStats() {
 	cfg := loadConfigSilent()
-	url := resolveServerURL(cfg)
 
-	var username, password string
-	var metricsPath string
-	if cfg != nil {
-		username = cfg.Admin.Username
-		password = cfg.Admin.Password
+	metricsPath := "/metrics"
+	if cfg != nil && cfg.Metrics.Path != "" {
 		metricsPath = cfg.Metrics.Path
 	}
-	if metricsPath == "" {
-		metricsPath = "/metrics"
+
+	// Stats come from the metrics server (no auth)
+	var url string
+	if serverURL != "" {
+		url = serverURL
+	} else if cfg != nil && cfg.Metrics.Bind != "" {
+		listen := cfg.Metrics.Bind
+		if strings.HasPrefix(listen, ":") {
+			url = "http://localhost" + listen
+		} else {
+			url = "http://" + listen
+		}
+	} else {
+		url = "http://localhost:8083"
 	}
 
-	body, err := httpGetWithAuth(url+metricsPath, username, password)
+	body, err := httpGetWithAuth(url+metricsPath, "", "")
 	if err != nil {
 		fatal("Failed to get metrics: %v", err)
 	}
