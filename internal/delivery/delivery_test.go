@@ -108,7 +108,7 @@ func TestDomainWhitelist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := deliverer.isDomainWhitelisted(tt.domain)
+			result := deliverer.isDomainWhitelisted(deliverer.getConfig(),tt.domain)
 			if result != tt.expectWhitelisted {
 				t.Errorf("isDomainWhitelisted(%q) = %v, want %v", tt.domain, result, tt.expectWhitelisted)
 			}
@@ -133,7 +133,7 @@ func TestDomainWhitelist_EmptyList(t *testing.T) {
 	mxLookup := NewMXLookup(dnsCfg, logger)
 	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
 
-	if deliverer.isDomainWhitelisted("any-domain.com") {
+	if deliverer.isDomainWhitelisted(deliverer.getConfig(),"any-domain.com") {
 		t.Error("Empty whitelist should not match any domain")
 	}
 }

@@ -302,20 +302,20 @@ func TestWaitForDomainRateLimit(t *testing.T) {
 	ctx := context.Background()
 
 	// First 2 requests should succeed (burst=2)
-	if err := d.waitForDomainRateLimit(ctx, "test.com"); err != nil {
+	if err := d.waitForDomainRateLimit(ctx, d.getConfig(), "test.com"); err != nil {
 		t.Errorf("First request should succeed, got: %v", err)
 	}
-	if err := d.waitForDomainRateLimit(ctx, "test.com"); err != nil {
+	if err := d.waitForDomainRateLimit(ctx, d.getConfig(), "test.com"); err != nil {
 		t.Errorf("Second request (within burst) should succeed, got: %v", err)
 	}
 
 	// Third request should fail (burst exhausted, no time for refill)
-	if err := d.waitForDomainRateLimit(ctx, "test.com"); err != ErrDomainRateLimitExceeded {
+	if err := d.waitForDomainRateLimit(ctx, d.getConfig(), "test.com"); err != ErrDomainRateLimitExceeded {
 		t.Errorf("Third request should be rate-limited, got: %v", err)
 	}
 
 	// Different domain should have its own limiter
-	if err := d.waitForDomainRateLimit(ctx, "other.com"); err != nil {
+	if err := d.waitForDomainRateLimit(ctx, d.getConfig(), "other.com"); err != nil {
 		t.Errorf("Different domain should not be rate-limited, got: %v", err)
 	}
 }
@@ -335,12 +335,12 @@ func TestWaitForDomainRateLimit_TokenRefill(t *testing.T) {
 	ctx := context.Background()
 
 	// Consume the burst token
-	if err := d.waitForDomainRateLimit(ctx, "refill-test.com"); err != nil {
+	if err := d.waitForDomainRateLimit(ctx, d.getConfig(), "refill-test.com"); err != nil {
 		t.Fatalf("First request should succeed: %v", err)
 	}
 
 	// Should be rate-limited now
-	if err := d.waitForDomainRateLimit(ctx, "refill-test.com"); err != ErrDomainRateLimitExceeded {
+	if err := d.waitForDomainRateLimit(ctx, d.getConfig(), "refill-test.com"); err != ErrDomainRateLimitExceeded {
 		t.Fatalf("Should be rate-limited after burst: %v", err)
 	}
 
@@ -348,7 +348,7 @@ func TestWaitForDomainRateLimit_TokenRefill(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	// Should succeed after refill
-	if err := d.waitForDomainRateLimit(ctx, "refill-test.com"); err != nil {
+	if err := d.waitForDomainRateLimit(ctx, d.getConfig(), "refill-test.com"); err != nil {
 		t.Errorf("Should succeed after token refill, got: %v", err)
 	}
 }
@@ -370,9 +370,9 @@ func TestCleanupDomainLimiters(t *testing.T) {
 	ctx := context.Background()
 
 	// Create some domain limiters
-	d.waitForDomainRateLimit(ctx, "domain1.com")
-	d.waitForDomainRateLimit(ctx, "domain2.com")
-	d.waitForDomainRateLimit(ctx, "domain3.com")
+	d.waitForDomainRateLimit(ctx, d.getConfig(), "domain1.com")
+	d.waitForDomainRateLimit(ctx, d.getConfig(), "domain2.com")
+	d.waitForDomainRateLimit(ctx, d.getConfig(), "domain3.com")
 
 	// Verify they exist
 	count := 0
