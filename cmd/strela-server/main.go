@@ -82,7 +82,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
-	tempCfg.SetDefaults()
 
 	logger, logWriter, err := initLogger(&tempCfg.Logging)
 	if err != nil {
@@ -339,9 +338,8 @@ func main() {
 
 	// Register reload callbacks
 	reloadableCfg.RegisterReloadCallback(func(newCfg *config.Config) error {
-		//mxLookup.ReloadConfig(&newCfg.DNS) // signature changed
-		//deliverer.ReloadConfig(&newCfg.Outbound)
-		// No easy way to update handler config without locking in handler.
+		mxLookup.ReloadConfig(&newCfg.DNS)
+		deliverer.ReloadConfig(&newCfg.Outbound)
 		return nil
 	})
 
