@@ -605,9 +605,17 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				logger.Debug("skipping IPv6 attempt, MX has no IPv6 addresses", "mx", mx.Host)
 			}
 		} else {
-			// No source IPs configured - use system default
-			logger.Debug("no source IPs configured, using system default", "mx", mx.Host)
-			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, "", preferIPv6, protocol, inboundAuth, cfg)
+			// No source IPs configured - use system default.
+			// Derive target IP preference from ip_mode when set to a specific version,
+			// so that smtp_ip_mode="ipv4" selects IPv4 targets even without source IPs.
+			targetPreferIPv6 := preferIPv6
+			if ipMode == config.IPModeIPv4 {
+				targetPreferIPv6 = false
+			} else if ipMode == config.IPModeIPv6 {
+				targetPreferIPv6 = true
+			}
+			logger.Debug("no source IPs configured, using system default", "mx", mx.Host, "prefer_ipv6", targetPreferIPv6)
+			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, "", targetPreferIPv6, protocol, inboundAuth, cfg)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
@@ -1021,17 +1029,20 @@ type dialResult struct {
 }
 
 func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, traceID string, mxHost string, mxIPs []string, sourceIP string, preferIPv6 bool, protocol string, cfg *config.OutboundConfig) (*dialResult, DeliveryResult, error) {
-	// Filter MX IPs by version matching sourceIP if provided, or preferIPv6
+	// Select target IP matching the source IP version.
+	// When sourceIP is bound, versions MUST match (can't connect IPv6→IPv4).
+	// When sourceIP is empty, version is a preference — fall back to any available IP.
 	var targetIP string
-	isSourceIPv6 := false
-	if sourceIP != "" {
+	var fallbackIP string
+	requireMatch := sourceIP != ""
+
+	wantIPv6 := preferIPv6
+	if requireMatch {
 		parsedSource := net.ParseIP(sourceIP)
-		isSourceIPv6 = parsedSource != nil && parsedSource.To4() == nil
-	} else {
-		isSourceIPv6 = preferIPv6
+		wantIPv6 = parsedSource != nil && parsedSource.To4() == nil
 	}
 
-	logger.Debug("selecting target MX IP", "mx", mxHost, "source_ip", sourceIP, "require_ipv6", isSourceIPv6)
+	logger.Debug("selecting target MX IP", "mx", mxHost, "source_ip", sourceIP, "want_ipv6", wantIPv6, "require_match", requireMatch)
 
 	for _, ip := range mxIPs {
 		parsedIP := net.ParseIP(ip)
@@ -1039,23 +1050,26 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			continue
 		}
 
-		isTargetV4 := parsedIP.To4() != nil
-		if isSourceIPv6 && !isTargetV4 {
-			targetIP = ip
-			break
-		} else if !isSourceIPv6 && isTargetV4 {
+		isTargetV6 := parsedIP.To4() == nil
+		if wantIPv6 == isTargetV6 {
 			targetIP = ip
 			break
 		}
+		if fallbackIP == "" {
+			fallbackIP = ip
+		}
 	}
 
-	// If no matching IP version found, this should not normally happen since we pre-check
-	// MX IP versions before calling tryDeliveryWithIPVersion. If we reach here, something
-	// changed between the check and the delivery attempt (e.g., DNS TTL expired).
+	// Use fallback when no source IP is bound (no version constraint)
+	if targetIP == "" && !requireMatch && fallbackIP != "" {
+		logger.Debug("preferred IP version not available, using fallback", "mx", mxHost, "preferred_ipv6", wantIPv6, "fallback_ip", fallbackIP)
+		targetIP = fallbackIP
+	}
+
 	if targetIP == "" {
 		if len(mxIPs) > 0 {
 			ipVersion := "IPv4"
-			if isSourceIPv6 {
+			if wantIPv6 {
 				ipVersion = "IPv6"
 			}
 			logger.Warn("no matching IP version for MX",
