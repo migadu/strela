@@ -531,7 +531,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		}
 
 		// Pre-check: Does this MX host have IPv4/IPv6 addresses?
-		mxHasIPv4, mxHasIPv6 := d.checkMXIPVersions(ctx, logger, mx.Host)
+		_, mxHasIPv4, mxHasIPv6, _ := d.resolveMXHost(ctx, logger, mx.Host)
 
 		// Try IPv6 first if preferred
 		if tryIPv6First {
@@ -620,17 +620,16 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	return lastResult
 }
 
-// checkMXIPVersions checks if an MX host has IPv4 and/or IPv6 addresses.
-// Returns (hasIPv4, hasIPv6).
-func (d *Deliverer) checkMXIPVersions(ctx context.Context, logger *slog.Logger, mxHost string) (bool, bool) {
-	mxIPs, err := d.mxLookup.dnsResolver.LookupHost(ctx, mxHost)
+// resolveMXHost resolves the MX host to IP addresses and classifies them by version.
+// Returns the resolved IPs and whether IPv4/IPv6 addresses were found.
+// On DNS error, returns nil IPs with hasIPv4=false, hasIPv6=false and the error.
+func (d *Deliverer) resolveMXHost(ctx context.Context, logger *slog.Logger, mxHost string) (mxIPs []string, hasIPv4, hasIPv6 bool, err error) {
+	mxIPs, err = d.mxLookup.dnsResolver.LookupHost(ctx, mxHost)
 	if err != nil {
-		logger.Debug("failed to check MX IP versions", "mx", mxHost, "error", err)
-		// On DNS error, assume both are available (let actual delivery fail properly)
-		return true, true
+		logger.Debug("failed to resolve MX host", "mx", mxHost, "error", err)
+		return nil, false, false, err
 	}
 
-	hasIPv4, hasIPv6 := false, false
 	for _, ip := range mxIPs {
 		parsedIP := net.ParseIP(ip)
 		if parsedIP == nil {
@@ -641,14 +640,17 @@ func (d *Deliverer) checkMXIPVersions(ctx context.Context, logger *slog.Logger, 
 		} else {
 			hasIPv6 = true
 		}
-		// Early exit if we've found both
 		if hasIPv4 && hasIPv6 {
 			break
 		}
 	}
 
-	logger.Debug("MX IP version check", "mx", mxHost, "has_ipv4", hasIPv4, "has_ipv6", hasIPv6)
-	return hasIPv4, hasIPv6
+	if !hasIPv4 && !hasIPv6 && len(mxIPs) > 0 {
+		logger.Warn("MX host resolved but no parseable IPs", "mx", mxHost, "raw_ips", mxIPs)
+	} else {
+		logger.Debug("MX host resolved", "mx", mxHost, "has_ipv4", hasIPv4, "has_ipv6", hasIPv6, "ips", len(mxIPs))
+	}
+	return mxIPs, hasIPv4, hasIPv6, nil
 }
 
 // tryDeliveryWithIPVersion attempts delivery using either IPv6 or IPv4 source IPs and matching MX host IPs.
