@@ -531,7 +531,16 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		}
 
 		// Resolve MX host to IPs once — shared by all delivery attempts for this MX.
-		mxIPs, mxHasIPv4, mxHasIPv6, _ := d.resolveMXHost(ctx, logger, mx.Host)
+		mxIPs, mxHasIPv4, mxHasIPv6, dnsErr := d.resolveMXHost(ctx, logger, mx.Host)
+		if dnsErr != nil {
+			lastResult = DeliveryResult{
+				TraceID: traceID,
+				Status:  "temp_fail",
+				MXHost:  mx.Host,
+				Error:   fmt.Sprintf("Failed to resolve MX host: %v", dnsErr),
+			}
+			continue
+		}
 
 		// Try IPv6 first if preferred
 		if tryIPv6First {
@@ -1049,26 +1058,25 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			if isSourceIPv6 {
 				ipVersion = "IPv6"
 			}
-			logger.Warn("no matching IP version for MX (unexpected - should have been pre-filtered)",
+			logger.Warn("no matching IP version for MX",
 				"mx", mxHost,
 				"required_version", ipVersion,
 				"available_ips", mxIPs)
 			return nil, DeliveryResult{
 				TraceID:  traceID,
-				Status:   "temp_fail",
+				Status:   "error",
 				MXHost:   mxHost,
 				SourceIP: sourceIP,
 				Error:    fmt.Sprintf("MX host has no %s addresses", ipVersion),
 			}, fmt.Errorf("no matching IP version")
-		} else {
-			return nil, DeliveryResult{
-				TraceID:  traceID,
-				Status:   "temp_fail",
-				MXHost:   mxHost,
-				SourceIP: sourceIP,
-				Error:    "No IP addresses resolved for MX host",
-			}, fmt.Errorf("no IP")
 		}
+		return nil, DeliveryResult{
+			TraceID:  traceID,
+			Status:   "temp_fail",
+			MXHost:   mxHost,
+			SourceIP: sourceIP,
+			Error:    "No IP addresses resolved for MX host",
+		}, fmt.Errorf("no IP")
 	}
 
 	// Determine target port based on protocol and configured destinations
