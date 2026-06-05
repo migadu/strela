@@ -530,15 +530,15 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			break
 		}
 
-		// Pre-check: Does this MX host have IPv4/IPv6 addresses?
-		_, mxHasIPv4, mxHasIPv6, _ := d.resolveMXHost(ctx, logger, mx.Host)
+		// Resolve MX host to IPs once — shared by all delivery attempts for this MX.
+		mxIPs, mxHasIPv4, mxHasIPv6, _ := d.resolveMXHost(ctx, logger, mx.Host)
 
 		// Try IPv6 first if preferred
 		if tryIPv6First {
 			// Only try IPv6 if MX actually has IPv6 addresses
 			if tryIPv6 && mxHasIPv6 {
 				logger.Debug("trying IPv6 first", "mx", mx.Host)
-				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, true, start, protocol, inboundAuth)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, true, start, protocol, inboundAuth, cfg)
 				// Return immediately for definitive results (don't try other MX servers)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
@@ -554,7 +554,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Fall back to IPv4 if IPv6 failed (or was skipped) and IPv4 is available
 			if tryIPv4 && mxHasIPv4 {
 				logger.Debug("falling back to IPv4", "mx", mx.Host)
-				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, protocol, inboundAuth)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, false, start, protocol, inboundAuth, cfg)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
@@ -569,7 +569,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Try IPv4 first (or only)
 			if mxHasIPv4 {
 				logger.Debug("trying IPv4", "mx", mx.Host)
-				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, false, start, protocol, inboundAuth)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, false, start, protocol, inboundAuth, cfg)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
@@ -584,7 +584,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			// Fall back to IPv6 if IPv4 failed (or was skipped) and IPv6 is available
 			if tryIPv6 && mxHasIPv6 {
 				logger.Debug("falling back to IPv6", "mx", mx.Host)
-				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, true, start, protocol, inboundAuth)
+				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, true, start, protocol, inboundAuth, cfg)
 				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
@@ -598,7 +598,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		} else {
 			// No source IPs configured - use system default
 			logger.Debug("no source IPs configured, using system default", "mx", mx.Host)
-			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, "", preferIPv6, protocol, inboundAuth)
+			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, "", preferIPv6, protocol, inboundAuth, cfg)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
@@ -654,7 +654,7 @@ func (d *Deliverer) resolveMXHost(ctx context.Context, logger *slog.Logger, mxHo
 }
 
 // tryDeliveryWithIPVersion attempts delivery using either IPv6 or IPv4 source IPs and matching MX host IPs.
-func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, logger *slog.Logger, traceID string, from, to string, message []byte, mxHost string, useIPv6 bool, startTime time.Time, protocol string, inboundAuth *InboundAuthResults) DeliveryResult {
+func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, logger *slog.Logger, traceID string, from, to string, message []byte, mxHost string, mxIPs []string, useIPv6 bool, startTime time.Time, protocol string, inboundAuth *InboundAuthResults, cfg *config.OutboundConfig) DeliveryResult {
 	// Extract domain from recipient for hash-domain strategy
 	_, domain := splitEmail(to)
 
@@ -689,7 +689,7 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, logger *slog.L
 			return DeliveryResult{TraceID: traceID, Status: "timeout", Error: "Context canceled", MXHost: mxHost, SourceIP: sourceIP}
 		}
 
-		result := d.attemptDelivery(ctx, logger, traceID, from, to, message, mxHost, sourceIP, useIPv6, protocol, inboundAuth)
+		result := d.attemptDelivery(ctx, logger, traceID, from, to, message, mxHost, mxIPs, sourceIP, useIPv6, protocol, inboundAuth, cfg)
 		lastResult = result
 
 		// Track reputation
@@ -789,10 +789,10 @@ func (d *Deliverer) waitForDomainRateLimit(ctx context.Context, cfg *config.Outb
 	return ErrDomainRateLimitExceeded
 }
 
-func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, traceID string, from, to string, msg []byte, mxHost, sourceIP string, preferIPv6 bool, protocol string, inboundAuth *InboundAuthResults) DeliveryResult {
+func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, traceID string, from, to string, msg []byte, mxHost string, mxIPs []string, sourceIP string, preferIPv6 bool, protocol string, inboundAuth *InboundAuthResults, cfg *config.OutboundConfig) DeliveryResult {
 	// LMTP: no connection pooling, raw protocol
 	if protocol == config.ProtocolLMTP {
-		dr, result, err := d.dialAndHello(ctx, logger, traceID, mxHost, sourceIP, preferIPv6, protocol)
+		dr, result, err := d.dialAndHello(ctx, logger, traceID, mxHost, mxIPs, sourceIP, preferIPv6, protocol, cfg)
 		if err != nil {
 			return result
 		}
@@ -819,7 +819,7 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, tr
 	}
 
 	if client == nil {
-		dr, result, err := d.dialAndHello(ctx, logger, traceID, mxHost, sourceIP, preferIPv6, protocol)
+		dr, result, err := d.dialAndHello(ctx, logger, traceID, mxHost, mxIPs, sourceIP, preferIPv6, protocol, cfg)
 		if err != nil {
 			return result
 		}
@@ -1011,22 +1011,7 @@ type dialResult struct {
 	Reader *bufio.Reader // buffered reader for LMTP (preserves state from handshake)
 }
 
-func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, traceID string, mxHost, sourceIP string, preferIPv6 bool, protocol string) (*dialResult, DeliveryResult, error) {
-	cfg := d.getConfig()
-	logger.Debug("resolving MX host", "mx", mxHost)
-
-	// Resolve MX host to IP addresses
-	mxIPs, err := d.mxLookup.dnsResolver.LookupHost(ctx, mxHost)
-	if err != nil {
-		return nil, DeliveryResult{
-			TraceID:  traceID,
-			Status:   "temp_fail",
-			MXHost:   mxHost,
-			SourceIP: sourceIP,
-			Error:    fmt.Sprintf("Failed to resolve MX host: %v", err),
-		}, err
-	}
-
+func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, traceID string, mxHost string, mxIPs []string, sourceIP string, preferIPv6 bool, protocol string, cfg *config.OutboundConfig) (*dialResult, DeliveryResult, error) {
 	// Filter MX IPs by version matching sourceIP if provided, or preferIPv6
 	var targetIP string
 	isSourceIPv6 := false
