@@ -1120,17 +1120,7 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	if err != nil {
 		logger.Debug("TCP dial failed", "mx", mxHost, "target_ip", targetIP, "source_ip", sourceIP, "error", err)
 
-		// Determine status based on error classification
-		status := "temp_fail"
-		classified := ClassifyError(0, "", err)
-		if classified.Category == ErrorNetwork && (strings.Contains(strings.ToLower(err.Error()), "deadline") || strings.Contains(strings.ToLower(err.Error()), "timeout")) {
-			// If it was a timeout, check if it was the context
-			if ctx.Err() != nil {
-				status = "timeout"
-			}
-		}
-
-		// Check if error is due to source IP binding failure
+		// Check if error is due to source IP binding failure (this is a config error, not a network issue)
 		if sourceIP != "" && isBindError(err) {
 			logger.Error("failed to bind to source IP",
 				"source_ip", sourceIP,
@@ -1144,6 +1134,17 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 				Error:    fmt.Sprintf("Cannot bind to source IP %s for target %s: %v", sourceIP, targetIP, err),
 			}, err
 		}
+
+		// Connection timeouts should allow trying other MX hosts
+		// Return "timeout" status for all connection failures (timeout, refused, unreachable)
+		// This allows the main loop to continue to the next MX host
+		status := "timeout" // Changed from "temp_fail" to allow MX fallback
+
+		// Check if this was a context cancellation (overall timeout)
+		if ctx.Err() != nil {
+			logger.Debug("connection attempt cancelled by context", "mx", mxHost, "context_err", ctx.Err())
+		}
+
 		return nil, DeliveryResult{TraceID: traceID, Status: status, MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
 	}
 
@@ -1396,7 +1397,9 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			} else {
 				conn.Close()
 			}
-			return nil, DeliveryResult{TraceID: traceID, Status: "temp_fail", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("Handshake failed: %v", result.err)}, result.err
+			// Handshake failures (EHLO/STARTTLS) should also allow trying other MX hosts
+			// Some MX servers may be misconfigured or have compatibility issues
+			return nil, DeliveryResult{TraceID: traceID, Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("Handshake failed: %v", result.err)}, result.err
 		}
 		if !result.usedTLS && protocol != config.ProtocolLMTP {
 			logger.Warn("delivering over plaintext SMTP (no TLS)", "mx", mxHost)
