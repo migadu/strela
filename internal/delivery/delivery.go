@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -482,6 +483,20 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		var err error
 		mxRecords, err = d.mxLookup.Lookup(ctx, domain)
 		if err != nil {
+			// Only a domain that genuinely publishes no MX records is permanent.
+			// Every other lookup error (SERVFAIL, timeout, network) is transient
+			// and must stay retryable — otherwise a momentary DNS failure under
+			// load permanently bounces valid mail for the negative-cache window.
+			if errors.Is(err, errNoMXRecords) {
+				logger.Debug("no MX records found", "domain", domain)
+				result := DeliveryResult{
+					TraceID: traceID,
+					Status:  "hard_bounce",
+					Error:   "No MX records found",
+				}
+				d.logDeliveryResult(logger, from, to, result)
+				return result
+			}
 			logger.Debug("MX lookup failed", "domain", domain, "error", err)
 			result := DeliveryResult{
 				TraceID: traceID,
@@ -492,6 +507,8 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			return result
 		}
 		if len(mxRecords) == 0 {
+			// Defensive: Lookup returns errNoMXRecords for empty results, so this
+			// branch should be unreachable. Treat as a hard bounce for safety.
 			logger.Debug("no MX records found", "domain", domain)
 			result := DeliveryResult{
 				TraceID: traceID,

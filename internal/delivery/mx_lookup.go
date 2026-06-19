@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -11,6 +12,12 @@ import (
 	"strela/internal/config"
 	"strela/internal/recovery"
 )
+
+// errNoMXRecords indicates the domain resolved but published no MX records.
+// This is a permanent condition (safe to hard-bounce), distinct from a
+// transient resolver failure (SERVFAIL, timeout, network error) which must
+// stay retryable. Callers in this package compare against it with errors.Is.
+var errNoMXRecords = errors.New("no MX records found")
 
 // MXLookup handles MX record lookups with in-memory caching.
 // It uses a custom DNS resolver with configurable servers and stores results in a sync.Map.
@@ -30,8 +37,14 @@ type MXRecord struct {
 }
 
 // mxCacheEntry represents a cached MX lookup result (successful or failed).
+//
+// err is non-nil only for cached transient failures: it is re-surfaced to the
+// caller so that retries within the negative TTL stay retryable, rather than a
+// cached nil-records hit being misread as a permanent "no MX records" bounce.
+// A permanent no-MX result is cached with records=nil and err=nil.
 type mxCacheEntry struct {
 	records   []*MXRecord
+	err       error
 	expiresAt time.Time
 }
 
@@ -57,8 +70,13 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 		return nil, ctx.Err()
 	}
 
-	// Try cache first
-	if cached, ok := m.getFromCache(domain); ok {
+	// Try cache first. A cached transient failure carries its error so it stays
+	// retryable; a cached permanent no-MX result has nil records and nil error.
+	if cached, cachedErr, ok := m.getFromCache(domain); ok {
+		if cachedErr != nil {
+			m.logger.Debug("MX negative cache hit (transient failure)", "domain", domain, "error", cachedErr)
+			return nil, cachedErr
+		}
 		m.logger.Debug("MX cache hit", "domain", domain, "records", len(cached))
 		return cached, nil
 	}
@@ -83,8 +101,18 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 			records, err := m.lookupDNS(context.Background(), domain)
 			if err != nil {
 				m.logger.Debug("MX lookup failed", "domain", domain, "error", err)
-				// Cache negative result
-				m.storeInCache(domain, nil, m.negativeTTL)
+				if errors.Is(err, errNoMXRecords) {
+					// Permanent: domain resolves but publishes no MX records.
+					// Cache an empty, non-error result so a cached hit is treated
+					// as a hard bounce, consistent with a fresh lookup.
+					m.storeInCache(domain, nil, nil, m.negativeTTL)
+				} else {
+					// Transient resolver failure (SERVFAIL, timeout, network).
+					// Cache the error so retries within the negative TTL remain
+					// retryable instead of being misclassified as a permanent
+					// "no MX records" hard bounce.
+					m.storeInCache(domain, nil, err, m.negativeTTL)
+				}
 				return nil, err
 			}
 
@@ -94,7 +122,7 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 			})
 
 			// Store in cache
-			m.storeInCache(domain, records, m.cacheTTL)
+			m.storeInCache(domain, records, nil, m.cacheTTL)
 
 			m.logger.Info("MX lookup successful", "domain", domain, "records", len(records))
 			return records, nil
@@ -118,7 +146,7 @@ func (m *MXLookup) lookupDNS(ctx context.Context, domain string) ([]*MXRecord, e
 	}
 
 	if len(mxRecords) == 0 {
-		return nil, fmt.Errorf("no MX records found for domain %s", domain)
+		return nil, fmt.Errorf("%w for domain %s", errNoMXRecords, domain)
 	}
 
 	records := make([]*MXRecord, len(mxRecords))
@@ -132,11 +160,13 @@ func (m *MXLookup) lookupDNS(ctx context.Context, domain string) ([]*MXRecord, e
 	return records, nil
 }
 
-// getFromCache retrieves and validates MX records from cache.
-func (m *MXLookup) getFromCache(domain string) ([]*MXRecord, bool) {
+// getFromCache retrieves and validates MX records from cache. The returned
+// error is the cached transient-failure error (nil for hits and permanent
+// no-MX results); ok reports whether a live cache entry was found.
+func (m *MXLookup) getFromCache(domain string) ([]*MXRecord, error, bool) {
 	val, ok := m.cache.Load(domain)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 
 	entry, ok := val.(*mxCacheEntry)
@@ -145,21 +175,23 @@ func (m *MXLookup) getFromCache(domain string) ([]*MXRecord, bool) {
 			"domain", domain,
 			"type", fmt.Sprintf("%T", val))
 		m.cache.Delete(domain) // Remove corrupted entry
-		return nil, false
+		return nil, nil, false
 	}
 
 	if time.Now().After(entry.expiresAt) {
 		m.cache.Delete(domain)
-		return nil, false
+		return nil, nil, false
 	}
 
-	return entry.records, true
+	return entry.records, entry.err, true
 }
 
-// storeInCache stores MX records in cache.
-func (m *MXLookup) storeInCache(domain string, records []*MXRecord, ttl time.Duration) {
+// storeInCache stores an MX lookup result in cache. A non-nil err marks a
+// cached transient failure that is re-surfaced (kept retryable) on later hits.
+func (m *MXLookup) storeInCache(domain string, records []*MXRecord, err error, ttl time.Duration) {
 	m.cache.Store(domain, &mxCacheEntry{
 		records:   records,
+		err:       err,
 		expiresAt: time.Now().Add(ttl),
 	})
 }
