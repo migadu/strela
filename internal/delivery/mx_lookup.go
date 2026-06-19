@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -138,26 +139,68 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 	}
 }
 
-// lookupDNS performs the actual DNS MX lookup.
+// lookupDNS resolves the mail route for a domain, classifying by the actual DNS
+// outcome rather than by whether MX records happened to be present:
+//
+//   - MX records found                          → use them
+//   - no MX but A/AAAA found                     → implicit MX: the domain itself
+//     at preference 0 (RFC 5321 §5.1)
+//   - no MX and no address (NXDOMAIN / NODATA)   → errNoMXRecords (permanent, hard bounce)
+//   - SERVFAIL / timeout / network failure       → transient error (retryable)
+//
+// This avoids the mirror-image bugs of keying on MX presence alone: a domain
+// with only an A record is deliverable (not a hard bounce), and a nonexistent
+// domain is permanent (not an endless retry).
 func (m *MXLookup) lookupDNS(ctx context.Context, domain string) ([]*MXRecord, error) {
 	mxRecords, err := m.dnsResolver.LookupMX(ctx, domain)
 	if err != nil {
-		return nil, fmt.Errorf("DNS lookup failed: %w", err)
+		if !isDNSNotFound(err) {
+			// SERVFAIL, timeout, network — transient; keep retryable.
+			return nil, fmt.Errorf("MX lookup failed: %w", err)
+		}
+		// NXDOMAIN or no MX records (NODATA): fall through to the A/AAAA lookup.
+		mxRecords = nil
 	}
 
-	if len(mxRecords) == 0 {
+	if len(mxRecords) > 0 {
+		records := make([]*MXRecord, len(mxRecords))
+		for i, mx := range mxRecords {
+			records[i] = &MXRecord{
+				Host:     mx.Host,
+				Priority: mx.Pref,
+			}
+		}
+		return records, nil
+	}
+
+	// No MX records. RFC 5321 §5.1: the domain's own A/AAAA record acts as an
+	// implicit MX of preference 0.
+	addrs, err := m.dnsResolver.LookupHost(ctx, domain)
+	if err != nil {
+		if isDNSNotFound(err) {
+			// Neither MX nor address records: the domain does not exist or has no
+			// mail route. Permanent — surface as errNoMXRecords so it hard-bounces.
+			return nil, fmt.Errorf("%w for domain %s", errNoMXRecords, domain)
+		}
+		// Transient resolver failure on the address lookup; keep retryable.
+		return nil, fmt.Errorf("address lookup failed: %w", err)
+	}
+	if len(addrs) == 0 {
 		return nil, fmt.Errorf("%w for domain %s", errNoMXRecords, domain)
 	}
+	return []*MXRecord{{Host: domain, Priority: 0}}, nil
+}
 
-	records := make([]*MXRecord, len(mxRecords))
-	for i, mx := range mxRecords {
-		records[i] = &MXRecord{
-			Host:     mx.Host,
-			Priority: mx.Pref,
-		}
+// isDNSNotFound reports whether err is a DNS "not found" result — NXDOMAIN or
+// NODATA (no records of the requested type) — as opposed to a transient resolver
+// failure (SERVFAIL, timeout, network error). Go collapses NXDOMAIN and NODATA
+// into DNSError.IsNotFound; both are permanent for our purposes.
+func isDNSNotFound(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsNotFound
 	}
-
-	return records, nil
+	return false
 }
 
 // getFromCache retrieves and validates MX records from cache. The returned
