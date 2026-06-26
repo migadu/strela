@@ -73,6 +73,7 @@ type DeliveryResult struct {
 
 // Deliverer is the main delivery engine that handles direct SMTP delivery.
 type Deliverer struct {
+	configMu          sync.RWMutex // protects config
 	config            *config.OutboundConfig
 	arcConfig         *config.ARCConfig
 	mxLookup          *MXLookup
@@ -261,6 +262,21 @@ func (d *Deliverer) Stop() {
 	d.reputationTracker.Cleanup()
 
 	d.logger.Info("deliverer stopped")
+}
+
+// getConfig returns the current outbound config under read lock.
+func (d *Deliverer) getConfig() *config.OutboundConfig {
+	d.configMu.RLock()
+	defer d.configMu.RUnlock()
+	return d.config
+}
+
+// ReloadConfig hot-swaps the outbound configuration.
+func (d *Deliverer) ReloadConfig(cfg *config.OutboundConfig) {
+	d.configMu.Lock()
+	defer d.configMu.Unlock()
+	d.config = cfg
+	d.logger.Info("deliverer config reloaded")
 }
 
 // GetConnectionPool returns the connection pool (for testing/inspection)
@@ -1154,10 +1170,14 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 		return nil, DeliveryResult{TraceID: traceID, Status: status, MXHost: mxHost, SourceIP: sourceIP, Error: err.Error()}, err
 	}
 
-	// Ensure connection is closed if setup fails
+	// Track whether the goroutine took ownership of conn (e.g. closed it
+	// and reconnected). When connConsumed is true the defer must NOT touch
+	// conn because it was already closed inside the goroutine.
+	connConsumed := false
+	// Ensure connection is closed if setup fails and goroutine didn't consume it.
 	success := false
 	defer func() {
-		if !success {
+		if !success && !connConsumed {
 			conn.Close()
 		}
 	}()
@@ -1346,8 +1366,10 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			// Server doesn't support STARTTLS - connection is now in bad state, need fresh connection
 			logger.Warn("STARTTLS not supported, reconnecting for plaintext SMTP", "mx", mxHost)
 
-			// Close corrupted connection
+			// Close corrupted connection and mark it consumed so the
+			// deferred cleanup in the outer function doesn't double-close.
 			conn.Close()
+			connConsumed = true
 
 			// Reconnect without STARTTLS (reuse same timeout for reconnect)
 			dialer := &net.Dialer{Timeout: connectionTimeout}
@@ -1400,11 +1422,13 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 				result.client.Close()
 			} else if result.conn != nil {
 				result.conn.Close()
-			} else {
-				conn.Close()
 			}
-			// Handshake failures (EHLO/STARTTLS) should also allow trying other MX hosts
-			// Some MX servers may be misconfigured or have compatibility issues
+			// The goroutine already closed result.client/result.conn above, so
+			// mark conn consumed to prevent the deferred cleanup from double-closing.
+			connConsumed = true
+			// Handshake failures (EHLO/STARTTLS) should also allow trying other MX hosts.
+			// Some MX servers may be misconfigured or have compatibility issues, so use
+			// "timeout" status (which continues to the next MX) rather than "temp_fail".
 			return nil, DeliveryResult{TraceID: traceID, Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("Handshake failed: %v", result.err)}, result.err
 		}
 		if !result.usedTLS && protocol != config.ProtocolLMTP {
@@ -1417,7 +1441,12 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 			Reader: result.reader,
 		}, DeliveryResult{}, nil
 	case <-ctx.Done():
+		// The goroutine may still be running (and may have consumed conn).
+		// Closing conn here is safe even if already closed — net.Conn.Close
+		// is idempotent for TCP connections. Mark connConsumed so the defer
+		// doesn't attempt a third close.
 		conn.Close()
+		connConsumed = true
 		return nil, DeliveryResult{TraceID: traceID, Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "SMTP handshake timed out"}, ctx.Err()
 	}
 }
@@ -1660,6 +1689,25 @@ func supportsExtension(client *smtp.Client, ext string) bool {
 	return supported
 }
 
+// isTimeoutError checks if an error is a network timeout (i/o timeout, deadline exceeded).
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return true
+	}
+	return false
+}
+
+// lmtpStatus returns "timeout" if err is a network timeout, otherwise "error".
+func lmtpStatus(err error) string {
+	if isTimeoutError(err) {
+		return "timeout"
+	}
+	return "error"
+}
+
 // --- LMTP raw protocol implementation (mirrors Kanal's approach) ---
 // go-smtp's LMTP client doesn't support per-recipient DATA responses,
 // so we implement the protocol directly on net.Conn.
@@ -1695,11 +1743,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// MAIL FROM
 	if err := writeLMTPCommand(conn, cmdTimeout, "MAIL FROM:<%s>", from); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM write: %v", err)}
 	}
 	code, msg2, err := readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM response: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM response: %v", err)}
 	}
 	if code != 250 {
 		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
@@ -1707,11 +1755,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// RCPT TO
 	if err := writeLMTPCommand(conn, cmdTimeout, "RCPT TO:<%s>", to); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO write: %v", err)}
 	}
 	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO response: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO response: %v", err)}
 	}
 	if code != 250 {
 		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
@@ -1719,11 +1767,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// DATA
 	if err := writeLMTPCommand(conn, cmdTimeout, "DATA"); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA write: %v", err)}
 	}
 	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA response: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA response: %v", err)}
 	}
 	if code != 354 {
 		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
@@ -1731,13 +1779,13 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// Send message body with dot-stuffing
 	if err := writeLMTPData(conn, cmdTimeout, msg); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA body write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA body write: %v", err)}
 	}
 
 	// LMTP: read one status per RCPT TO (we send exactly one recipient)
 	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: "error", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA final response: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA final response: %v", err)}
 	}
 
 	result := classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)

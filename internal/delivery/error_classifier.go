@@ -198,7 +198,6 @@ func isReputationError(response string) bool {
 		"proofpoint",
 		"cloudmark",
 		"barracuda",
-		"unfortunately",
 	}
 
 	for _, keyword := range reputationKeywords {

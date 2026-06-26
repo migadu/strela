@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"strela/internal/config"
+	"strela/internal/recovery"
 )
 
 // MXLookup handles MX record lookups with in-memory caching.
@@ -73,7 +74,7 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 		err     error
 	}
 	ch := make(chan sfResult, 1)
-	go func() {
+	recovery.SafeGo(m.logger, "mx-singleflight-lookup", func() {
 		result, err := m.sf.do(domain, func() ([]*MXRecord, error) {
 			m.logger.Debug("executing singleflight DNS lookup", "domain", domain)
 
@@ -99,7 +100,7 @@ func (m *MXLookup) Lookup(ctx context.Context, domain string) ([]*MXRecord, erro
 			return records, nil
 		})
 		ch <- sfResult{records: result, err: err}
-	}()
+	})
 
 	select {
 	case r := <-ch:

@@ -27,6 +27,7 @@ type ConnectionPool struct {
 	maxIdle     int
 	logger      *slog.Logger
 	stopCh      chan struct{}
+	cleanupDone chan struct{} // closed when the cleanup goroutine exits
 }
 
 // NewConnectionPool creates a new connection pool with background cleanup.
@@ -44,6 +45,7 @@ func NewConnectionPool(ttlSeconds int, logger *slog.Logger) *ConnectionPool {
 		maxIdle:     10, // Per-key limit
 		logger:      logger,
 		stopCh:      make(chan struct{}),
+		cleanupDone: make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine
@@ -55,6 +57,8 @@ func NewConnectionPool(ttlSeconds int, logger *slog.Logger) *ConnectionPool {
 // startCleanup starts a background goroutine to periodically clean up expired connections.
 func (p *ConnectionPool) startCleanup() {
 	recovery.SafeGo(p.logger, "connection-pool-cleanup", func() {
+		defer close(p.cleanupDone)
+
 		// Run cleanup every TTL interval
 		ticker := time.NewTicker(p.ttl)
 		defer ticker.Stop()
@@ -193,13 +197,10 @@ func (p *ConnectionPool) Put(client *smtp.Client, mxHost, sourceIP string) {
 
 // CloseAll closes all idle connections in the pool and stops the cleanup goroutine.
 func (p *ConnectionPool) CloseAll() {
-	// Signal cleanup goroutine to stop and wait for it to exit before
+	// Signal cleanup goroutine to stop and wait for it to fully exit before
 	// acquiring the mutex, avoiding a race with cleanupExpired().
 	close(p.stopCh)
-
-	// Give the cleanup goroutine time to notice stopCh and release the lock.
-	// cleanupExpired holds mu briefly; this ensures we don't race with it.
-	time.Sleep(100 * time.Millisecond)
+	<-p.cleanupDone
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
