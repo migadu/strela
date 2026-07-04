@@ -6,10 +6,13 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"strela/internal/config"
 )
 
 // mockLMTPServerCapture is like mockLMTPServer but also captures the MAIL FROM
@@ -207,6 +210,59 @@ func lmtpHandshake(t *testing.T, addr string) (net.Conn, *bufio.Reader) {
 	}
 
 	return conn, reader
+}
+
+// TestDeliverMessage_LMTPSkipsSourceIPPool verifies that LMTP delivery never
+// binds a source IP from the outbound pool. The pool here holds only a non-local
+// public address (192.0.2.1, TEST-NET-1); if the LMTP path tried to bind it as
+// the source for the loopback connection, the dial would fail with a bind error.
+// Delivery succeeding proves the pool was skipped and OS default routing was used.
+func TestDeliverMessage_LMTPSkipsSourceIPPool(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	bodyCh := make(chan []byte, 1)
+	errCh := make(chan error, 1)
+	go mockLMTPServer(t, ln, 250, bodyCh, errCh)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.OutboundConfig{
+		DefaultProtocol:          "lmtp",
+		DefaultLMTPDestination:   ln.Addr().String(),
+		LMTPIPMode:               config.IPModeIPv4, // would select an IPv4 pool IP if not skipped
+		HelloHostname:            "test.local",
+		ConnectionTimeoutSeconds: 5,
+		BannerTimeoutSeconds:     5,
+		HandshakeTimeoutSeconds:  5,
+		SMTPTimeoutSeconds:       5,
+		LMTPTimeoutSeconds:       5,
+		MaxTotalDeliverySeconds:  30,
+	}
+	// Pool holds only a non-local address that cannot be bound as a source IP.
+	expandedIPs := &config.ExpandedSourceIPs{IPv4: []string{"192.0.2.1"}}
+	repCfg := &config.ReputationConfig{}
+	mxLookup := NewMXLookup(&config.DNSConfig{TimeoutSeconds: 5}, logger)
+	deliverer := NewDeliverer(cfg, expandedIPs, mxLookup, logger, repCfg, nil, nil)
+
+	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: t\r\n\r\nbody\r\n")
+	result := deliverer.DeliverMessage(
+		t.Context(), "sender@example.com", "rcpt@example.com", msg,
+		"lmtp", "", "", "", false, "", "", "", nil,
+	)
+
+	if result.Status != "delivered" {
+		t.Fatalf("expected delivered (pool must be skipped for LMTP), got %s (error: %s)", result.Status, result.Error)
+	}
+	if result.SourceIP != "" {
+		t.Errorf("expected no source IP bound for LMTP, got %q", result.SourceIP)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server error: %v", err)
+	}
+	<-bodyCh
 }
 
 func TestPerformLMTPTransaction_Success(t *testing.T) {

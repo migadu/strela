@@ -533,6 +533,14 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	preferIPv6 := cfg.PreferIPv6ForProtocol(protocol)
 	tryIPv4 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv4) && d.ipRotator.HasIPv4()
 	tryIPv6 := (ipMode == config.IPModeDual || ipMode == config.IPModeIPv6) && d.ipRotator.HasIPv6()
+	// LMTP is local delivery (own LDA on loopback/private network): the source-IP
+	// pool is for public SMTP egress (rDNS/SPF/reputation) and has no meaning here.
+	// Binding a public pool IP toward a loopback/private target can also break routing,
+	// so always skip the pool for LMTP and let the OS pick the route.
+	if protocol == config.ProtocolLMTP {
+		tryIPv4 = false
+		tryIPv6 = false
+	}
 	// In dual mode, tryIPv6First is determined by preferIPv6 setting
 	// In IPv6-only mode, always try IPv6 first (tryIPv4 will be false anyway)
 	tryIPv6First := tryIPv6 && (ipMode == config.IPModeIPv6 || (ipMode == config.IPModeDual && preferIPv6))
