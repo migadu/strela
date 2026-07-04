@@ -102,14 +102,16 @@ default_protocol = "smtp"                           # "smtp" (default) or "lmtp"
 
 # Per-protocol IP version selection: "dual" (both versions), "ipv4", or "ipv6"
 smtp_ip_mode = "dual"                       # SMTP: use both IPv6 and IPv4
-lmtp_ip_mode = "ipv4"                       # LMTP: IPv4 only (typically local delivery)
+lmtp_ip_mode = "ipv4"                       # LMTP: IPv4 only (selects the destination's IPv4 address; local delivery)
 
 # When *_ip_mode = "dual", control which version is tried first:
 smtp_prefer_ipv6 = true                     # SMTP dual mode: try IPv6 first, fallback to IPv4 (default: true)
 lmtp_prefer_ipv6 = false                    # LMTP dual mode: try IPv4 first, fallback to IPv6 (default: false)
                                             # Ignored when ip_mode is "ipv4" or "ipv6" (only one version available)
 
-# Separate IPv4 and IPv6 source IP pools
+# Separate IPv4 and IPv6 source IP pools.
+# NOTE: These apply to SMTP (public internet) egress only. LMTP is local delivery
+# to your own LDA, so it never binds a pool IP — it always uses OS default routing.
 source_ips_v4 = ["192.0.2.1", "192.0.2.2"]  # IPv4 source IPs/subnets
 source_ips_v6 = ["2001:db8::1"]             # IPv6 source IPs/subnets
 
