@@ -210,12 +210,20 @@ func (c *ClusterConfig) GetBindPort() int {
 // DKIMConfig configures DKIM (DomainKeys Identified Mail) signing for outbound messages.
 type DKIMConfig struct {
 	Enabled        bool   `toml:"enabled"`          // Enable DKIM signing (default: false)
-	Selector       string `toml:"selector"`         // DNS selector for DKIM public key (e.g., "default", "mail")
+	Selector       string `toml:"selector"`         // DNS selector for DKIM public key (e.g., "default", "mail"); in keystore mode this is the fallback selector for domains missing from the selector map
 	Domain         string `toml:"domain"`           // Domain for DKIM signing (e.g., "example.com")
-	PrivateKeyPath string `toml:"private_key_path"` // Path to RSA private key in PEM format (1024 or 2048 bits)
+	PrivateKeyPath string `toml:"private_key_path"` // Path to RSA private key in PEM format (1024 to 4096 bits)
 	SkipValidation bool   `toml:"skip_validation"`  // Skip DNS validation of DKIM record (default: false)
 	HeaderCanon    string `toml:"header_canon"`     // Header canonicalization: "relaxed" or "simple" (default: relaxed)
 	BodyCanon      string `toml:"body_canon"`       // Body canonicalization: "relaxed" or "simple" (default: relaxed)
+
+	// Keystore mode: per-domain keys in an rspamd-style layout
+	// ($key_directory/$selector/$domain.key). Active when key_directory is set;
+	// leave private_key_path/domain empty in this mode (a config-wide key would
+	// take precedence over keystore lookups).
+	KeyDirectory    string `toml:"key_directory"`  // Root directory of per-domain key files
+	SelectorMapPath string `toml:"selector_map"`   // File mapping "domain selector" per line (rspamd selector_map format)
+	KeyCacheSize    int    `toml:"key_cache_size"` // Max cached key files in memory (default: 20000)
 }
 
 // ARCConfig configures Authenticated Received Chain (ARC) signing for email forwarding.

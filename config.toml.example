@@ -177,6 +177,16 @@ enabled = false
 # header_canon = "relaxed"                       # Header canonicalization: "relaxed" or "simple" (default: relaxed)
 # body_canon = "relaxed"                         # Body canonicalization: "relaxed" or "simple" (default: relaxed)
 
+# Keystore mode: per-domain keys in an rspamd-style layout ($key_directory/$selector/$domain.key).
+# Active when key_directory is set. Messages without explicit DKIM parameters are signed with the
+# key matching their From-header domain; domains without a key are delivered unsigned. Leave
+# private_key_path/domain unset in this mode (an explicit config-wide key takes precedence over
+# keystore lookups). With many domains, set skip_validation = true to avoid one DNS lookup per delivery.
+# key_directory = "/usr/local/etc/rspamd/domainkeys"              # Root directory of per-domain key files
+# selector_map = "/usr/local/etc/rspamd/domainkeys/selectors.map" # "domain selector" per line; auto-reloaded on mtime change
+# selector = "default"                           # In keystore mode: fallback selector for domains missing from the map
+# key_cache_size = 20000                         # Max cached key files held in memory (default: 20000)
+
 # API request behavior:
 # - If enabled=true: API parameters (dkim_private_key, dkim_selector, dkim_domain) override config defaults
 # - If enabled=false: All API DKIM parameters are IGNORED (logged as warning)

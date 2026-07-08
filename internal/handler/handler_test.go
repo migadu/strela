@@ -252,14 +252,20 @@ func TestHandleDeliver_ModeValidation(t *testing.T) {
 
 // mockDeliverer implements the delivery.Deliverer interface for testing
 type mockDeliverer struct {
-	lastMessage   string
-	lastTransport string
-	result        *delivery.DeliveryResult // if set, returned instead of default
+	lastMessage      string
+	lastTransport    string
+	lastDKIMKey      string
+	lastDKIMSelector string
+	lastDKIMDomain   string
+	result           *delivery.DeliveryResult // if set, returned instead of default
 }
 
 func (m *mockDeliverer) DeliverMessage(ctx context.Context, from, to string, message []byte, transport string, dkimPrivateKey, dkimSelector, dkimDomain string, skipDKIMValidation bool, arcPrivateKey, arcSelector, arcDomain string, inboundAuth *delivery.InboundAuthResults) delivery.DeliveryResult {
 	m.lastMessage = string(message)
 	m.lastTransport = transport
+	m.lastDKIMKey = dkimPrivateKey
+	m.lastDKIMSelector = dkimSelector
+	m.lastDKIMDomain = dkimDomain
 	if m.result != nil {
 		return *m.result
 	}
@@ -328,6 +334,20 @@ func TestHandleDeliver_DKIMConfigDefaults(t *testing.T) {
 			expectDKIMSelector: "override",
 			expectDKIMDomain:   "override.com",
 		},
+		{
+			name: "config selector does not leak into request-supplied key",
+			req: MessageRequest{
+				From:           "sender@example.com",
+				To:             "recipient@example.com",
+				Subject:        "Test",
+				Text:           "Body",
+				DKIMPrivateKey: "dummy-key-for-test",
+			},
+			// In keystore mode `selector` is the fallback selector; it must
+			// not be paired with a key the request brought itself.
+			expectDKIMSelector: "",
+			expectDKIMDomain:   "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -339,11 +359,72 @@ func TestHandleDeliver_DKIMConfigDefaults(t *testing.T) {
 
 			h.HandleDeliver(rr, req)
 
-			// Check that request was processed
 			if rr.Code != http.StatusOK {
-				t.Logf("Response: %s", rr.Body.String())
+				t.Fatalf("expected status 200, got %d: %s", rr.Code, rr.Body.String())
+			}
+			if mockDeliverer.lastDKIMSelector != tt.expectDKIMSelector {
+				t.Errorf("expected DKIM selector %q, got %q", tt.expectDKIMSelector, mockDeliverer.lastDKIMSelector)
+			}
+			if mockDeliverer.lastDKIMDomain != tt.expectDKIMDomain {
+				t.Errorf("expected DKIM domain %q, got %q", tt.expectDKIMDomain, mockDeliverer.lastDKIMDomain)
 			}
 		})
+	}
+}
+
+func TestHandleDeliver_DKIMConfigKeyPairsWithConfigSelector(t *testing.T) {
+	// With a config-wide key loaded, config selector/domain apply to it as before.
+	tmpFile, err := os.CreateTemp("", "dkim-pair-test-*.key")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	testKey := "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"
+	if _, err := tmpFile.WriteString(testKey); err != nil {
+		t.Fatalf("failed to write key: %v", err)
+	}
+	tmpFile.Close()
+
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			MaxTotalDeliverySeconds: 30,
+		},
+		DKIM: config.DKIMConfig{
+			Enabled:        true,
+			Selector:       "default",
+			Domain:         "example.com",
+			PrivateKeyPath: tmpFile.Name(),
+			SkipValidation: true,
+		},
+	}
+
+	logger := slog.Default()
+	md := &mockDeliverer{}
+	h := NewHandler(cfg, md, logger)
+
+	body, _ := json.Marshal(MessageRequest{
+		From:    "sender@example.com",
+		To:      "recipient@example.com",
+		Subject: "Test",
+		Text:    "Body",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliver(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if md.lastDKIMKey != testKey {
+		t.Errorf("expected config DKIM key to be used, got %q", md.lastDKIMKey)
+	}
+	if md.lastDKIMSelector != "default" {
+		t.Errorf("expected config selector %q, got %q", "default", md.lastDKIMSelector)
+	}
+	if md.lastDKIMDomain != "example.com" {
+		t.Errorf("expected config domain %q, got %q", "example.com", md.lastDKIMDomain)
 	}
 }
 

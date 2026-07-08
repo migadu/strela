@@ -198,7 +198,11 @@ Return JSON response immediately:
 
 #### `dkim/`
 - DKIM email signing support
-- **Key file**: `signer.go`
+- **Key files**: `dkim.go` (signing, key parsing, DNS validation), `keystore.go` (per-domain keystore)
+- **Keystore mode**: rspamd-style per-domain keys (`$key_directory/$selector/$domain.key` + selector map file).
+  Enabled via `[dkim] key_directory` / `selector_map`; keys loaded lazily with TTL cache, selector map
+  auto-reloads on mtime change. Signing domain is the From-header domain (DMARC alignment), falling back
+  to the envelope sender. Explicit API/config DKIM parameters take precedence over keystore lookups.
 
 #### `arc/`
 - ARC (Authenticated Received Chain) signing for email forwarding

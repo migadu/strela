@@ -289,18 +289,22 @@ func (h *Handler) handleDeliverWithTransport(w http.ResponseWriter, r *http.Requ
 		dkimDomain = req.DKIMDomain
 		skipDKIMValidation = req.SkipDKIMValidation
 
-		// Apply config defaults if not provided in request
+		// Apply the config-wide key when the request doesn't bring its own.
+		// The config selector/domain pair with the config key only: a request
+		// that supplies its own key must supply its own selector/domain (in
+		// keystore mode `selector` is the fallback selector and must not leak
+		// into explicit per-request parameters).
 		if dkimPrivateKey == "" && h.dkimPrivateKey != "" {
 			dkimPrivateKey = h.dkimPrivateKey
 			h.logger.Debug("using DKIM private key from config")
-		}
-		if dkimSelector == "" && h.config.DKIM.Selector != "" {
-			dkimSelector = h.config.DKIM.Selector
-			h.logger.Debug("using DKIM selector from config", "selector", dkimSelector)
-		}
-		if dkimDomain == "" && h.config.DKIM.Domain != "" {
-			dkimDomain = h.config.DKIM.Domain
-			h.logger.Debug("using DKIM domain from config", "domain", dkimDomain)
+			if dkimSelector == "" && h.config.DKIM.Selector != "" {
+				dkimSelector = h.config.DKIM.Selector
+				h.logger.Debug("using DKIM selector from config", "selector", dkimSelector)
+			}
+			if dkimDomain == "" && h.config.DKIM.Domain != "" {
+				dkimDomain = h.config.DKIM.Domain
+				h.logger.Debug("using DKIM domain from config", "domain", dkimDomain)
+			}
 		}
 		if !req.SkipDKIMValidation && h.config.DKIM.SkipValidation {
 			skipDKIMValidation = h.config.DKIM.SkipValidation
