@@ -4,7 +4,7 @@
 //
 // Key Features:
 //   - RSA-based DKIM signing with SHA-256 hashing
-//   - Support for 1024-bit and 2048-bit RSA keys
+//   - Support for RSA keys from 1024 to 4096 bits
 //   - PKCS#1 and PKCS#8 private key formats
 //   - Configurable signature expiration (default: 7 days)
 //   - Standard header field signing (From, To, Subject, Date, etc.)
@@ -50,11 +50,11 @@ import (
 
 // SignMessage signs an email message with DKIM using RSA-SHA256. The signature
 // is prepended to the raw message as a DKIM-Signature header field. Supports
-// both 1024-bit and 2048-bit RSA private keys in PKCS#1 or PKCS#8 PEM format.
+// RSA private keys from 1024 to 4096 bits in PKCS#1 or PKCS#8 PEM format.
 //
 // Parameters:
 //   - rawMessage: Complete RFC 5322 email message (headers + body)
-//   - privateKeyPEM: PEM-encoded RSA private key (1024 or 2048 bits)
+//   - privateKeyPEM: PEM-encoded RSA private key (1024 to 4096 bits)
 //   - selector: DKIM selector (corresponds to DNS TXT record at selector._domainkey.domain)
 //   - domain: Signing domain (must match From header domain)
 //
@@ -136,7 +136,7 @@ func parsePrivateKey(pemData string) (*rsa.PrivateKey, error) {
 // signing operation. This is useful for configuration validation at startup
 // to catch key format issues early.
 //
-// Returns the key size in bits (1024 or 2048) if valid, or an error if the
+// Returns the key size in bits (1024 to 4096) if valid, or an error if the
 // key cannot be parsed or has an unsupported size. Both PKCS#1 and PKCS#8
 // formats are supported.
 func ValidatePrivateKey(privateKeyPEM string) (int, error) {

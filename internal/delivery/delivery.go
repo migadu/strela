@@ -82,6 +82,7 @@ type Deliverer struct {
 	ipRotator         *IPRotator
 	reputationTracker *IPReputationTracker
 	arcPrivateKey     string
+	dkimKeyStore      *dkim.KeyStore
 	srs               *srs.SRS
 	domainLimiters    sync.Map // map[string]*domainRateLimiter
 	metrics           DeliveryMetrics
@@ -280,6 +281,13 @@ func (d *Deliverer) ReloadConfig(cfg *config.OutboundConfig) {
 	d.logger.Info("deliverer config reloaded")
 }
 
+// SetDKIMKeyStore sets the per-domain DKIM keystore. When set, messages
+// without explicit DKIM parameters are signed with the key found for their
+// From-header domain (if any).
+func (d *Deliverer) SetDKIMKeyStore(ks *dkim.KeyStore) {
+	d.dkimKeyStore = ks
+}
+
 // GetConnectionPool returns the connection pool (for testing/inspection)
 func (d *Deliverer) GetConnectionPool() *ConnectionPool {
 	return d.pool
@@ -354,14 +362,18 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		}
 	}
 
-	// 2. DKIM Signing (if provided)
+	// 2. DKIM Signing
+	// Explicit parameters (API request or config-wide key) take priority; the
+	// per-domain keystore is consulted only when no explicit key is provided.
 	signedMessage := message
-	if dkimPrivateKey != "" && dkimSelector != "" {
+	signKey := dkimPrivateKey
+	signSelector := dkimSelector
+	signDomain := dkimDomain
+	if signKey != "" && signSelector != "" {
 		// Use provided domain or extract from sender
-		signingDomain := dkimDomain
-		if signingDomain == "" {
-			signingDomain = dkim.ExtractDomainFromEmail(from)
-			if signingDomain == "" {
+		if signDomain == "" {
+			signDomain = dkim.ExtractDomainFromEmail(from)
+			if signDomain == "" {
 				logger.Debug("failed to extract domain from sender for DKIM", "from", from)
 				result := DeliveryResult{
 					TraceID: traceID,
@@ -372,24 +384,46 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				return result
 			}
 		}
+	} else if signKey == "" && d.dkimKeyStore != nil {
+		// Consulted only when no explicit key was provided at all — an
+		// explicit key with a missing selector delivers unsigned rather than
+		// being silently replaced by a keystore key.
+		// Key by the From-header domain (DMARC alignment); fall back to the
+		// envelope sender if the header is missing or unparseable.
+		lookupDomain := dkim.ExtractFromHeaderDomain(message)
+		if lookupDomain == "" {
+			lookupDomain = dkim.ExtractDomainFromEmail(from)
+		}
+		if lookupDomain != "" {
+			if keyPEM, selector, found := d.dkimKeyStore.Lookup(lookupDomain); found {
+				signKey = keyPEM
+				signSelector = selector
+				signDomain = lookupDomain
+				logger.Debug("DKIM key found in keystore", "selector", selector, "domain", lookupDomain)
+			} else {
+				logger.Debug("no DKIM key in keystore, delivering unsigned", "domain", lookupDomain)
+			}
+		}
+	}
 
+	if signKey != "" && signSelector != "" && signDomain != "" {
 		// Validate DKIM configuration (check DNS record and key match) unless skipped
 		dkimValid := true
 		if !skipDKIMValidation {
-			logger.Debug("validating DKIM configuration", "selector", dkimSelector, "domain", signingDomain)
-			if err := dkim.ValidateDKIMConfiguration(ctx, dkimSelector, signingDomain, dkimPrivateKey); err != nil {
-				logger.Warn("DKIM validation failed, will deliver without DKIM signature", "error", err, "selector", dkimSelector, "domain", signingDomain)
+			logger.Debug("validating DKIM configuration", "selector", signSelector, "domain", signDomain)
+			if err := dkim.ValidateDKIMConfiguration(ctx, signSelector, signDomain, signKey); err != nil {
+				logger.Warn("DKIM validation failed, will deliver without DKIM signature", "error", err, "selector", signSelector, "domain", signDomain)
 				dkimValid = false
 			}
 		} else {
-			logger.Debug("skipping DKIM validation (skip_dkim_validation=true)", "selector", dkimSelector, "domain", signingDomain)
+			logger.Debug("skipping DKIM validation (skip_dkim_validation=true)", "selector", signSelector, "domain", signDomain)
 		}
 
 		if dkimValid {
-			logger.Debug("signing message with DKIM", "selector", dkimSelector, "domain", signingDomain)
-			signed, err := dkim.SignMessage(message, dkimPrivateKey, dkimSelector, signingDomain)
+			logger.Debug("signing message with DKIM", "selector", signSelector, "domain", signDomain)
+			signed, err := dkim.SignMessage(message, signKey, signSelector, signDomain)
 			if err != nil {
-				logger.Warn("DKIM signing failed, will deliver without DKIM signature", "error", err, "selector", dkimSelector, "domain", signingDomain)
+				logger.Warn("DKIM signing failed, will deliver without DKIM signature", "error", err, "selector", signSelector, "domain", signDomain)
 			} else {
 				signedMessage = signed
 				logger.Debug("message signed with DKIM", "original_size", len(message), "signed_size", len(signedMessage))

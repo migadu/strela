@@ -13,6 +13,7 @@ import (
 	"strela/internal/cluster"
 	"strela/internal/config"
 	"strela/internal/delivery"
+	"strela/internal/dkim"
 	"strela/internal/handler"
 	"strela/internal/metrics"
 	"strela/internal/recovery"
@@ -132,6 +133,20 @@ func main() {
 	deliverer := delivery.NewDeliverer(&cfg.Outbound, expandedIPs, mxLookup, logger, &cfg.Reputation, &cfg.ARC, &cfg.SRS)
 	if m != nil {
 		deliverer.SetMetrics(m)
+	}
+
+	// Per-domain DKIM keystore (rspamd-style key directory + selector map)
+	if cfg.DKIM.Enabled && cfg.DKIM.KeyDirectory != "" {
+		keyStore, err := dkim.NewKeyStore(cfg.DKIM.KeyDirectory, cfg.DKIM.SelectorMapPath, cfg.DKIM.Selector, cfg.DKIM.KeyCacheSize, logger)
+		if err != nil {
+			logger.Error("failed to initialize DKIM keystore", "error", err)
+			os.Exit(1)
+		}
+		deliverer.SetDKIMKeyStore(keyStore)
+		logger.Info("DKIM keystore enabled",
+			"key_directory", cfg.DKIM.KeyDirectory,
+			"selector_map", cfg.DKIM.SelectorMapPath,
+			"fallback_selector", cfg.DKIM.Selector)
 	}
 
 	// Handler
