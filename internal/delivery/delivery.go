@@ -426,7 +426,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				logger.Warn("DKIM signing failed, will deliver without DKIM signature", "error", err, "selector", signSelector, "domain", signDomain)
 			} else {
 				signedMessage = signed
-				logger.Debug("message signed with DKIM", "original_size", len(message), "signed_size", len(signedMessage))
+				logger.Info("message signed with DKIM", "selector", signSelector, "domain", signDomain, "original_size", len(message), "signed_size", len(signedMessage))
 			}
 		} else {
 			logger.Debug("skipping DKIM signing due to validation failure")
