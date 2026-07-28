@@ -380,17 +380,29 @@ func main() {
 
 	logger.Info("shutting down gracefully...")
 
-	// 1. Stop accepting new HTTP requests
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 1. Stop accepting new HTTP requests and drain in-flight deliveries.
+	// The drain deadline must cover a full delivery (max_total_delivery_seconds):
+	// cutting a delivery short after the remote MX accepted the message loses
+	// the response, and the caller would deliver a duplicate on retry.
+	drainTimeout := time.Duration(cfg.Outbound.MaxTotalDeliverySeconds)*time.Second + 30*time.Second
+	logger.Info("waiting for in-flight deliveries to finish", "drain_timeout", drainTimeout.String())
+	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("HTTP server shutdown error", "error", err)
+		logger.Error("HTTP server shutdown error, in-flight deliveries may have been cut off", "error", err)
+	} else {
+		logger.Info("all in-flight deliveries finished")
 	}
 	logger.Info("HTTP server stopped")
 
+	// 1b–1d. Auxiliary servers only serve short requests — give them their own
+	// deadline so a fully consumed drain deadline doesn't abort them instantly.
+	auxCtx, auxCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer auxCancel()
+
 	// 1b. Stop health/metrics server
 	if metricsServer != nil {
-		if err := metricsServer.Shutdown(ctx); err != nil {
+		if err := metricsServer.Shutdown(auxCtx); err != nil {
 			logger.Error("health/metrics server shutdown error", "error", err)
 		}
 		logger.Info("health/metrics server stopped")
@@ -398,7 +410,7 @@ func main() {
 
 	// 1c. Stop admin server
 	if adminServer != nil {
-		if err := adminServer.Shutdown(ctx); err != nil {
+		if err := adminServer.Shutdown(auxCtx); err != nil {
 			logger.Error("admin server shutdown error", "error", err)
 		}
 		logger.Info("admin server stopped")
@@ -406,7 +418,7 @@ func main() {
 
 	// 1d. Stop ACME HTTP-01 challenge server
 	if challengeServer != nil {
-		if err := challengeServer.Shutdown(ctx); err != nil {
+		if err := challengeServer.Shutdown(auxCtx); err != nil {
 			logger.Error("ACME challenge server shutdown error", "error", err)
 		}
 		logger.Info("ACME challenge server stopped")
