@@ -50,10 +50,13 @@ func closedLoopbackPort(t *testing.T) int {
 	return port
 }
 
-// TestMXFallback_ConnectionRefusedIsTempFail verifies that a refused connection
-// is classified as "temp_fail". Refused is a definitive per-attempt outcome
-// (the host answered, it just isn't accepting), distinct from a timeout.
-func TestMXFallback_ConnectionRefusedIsTempFail(t *testing.T) {
+// TestMXFallback_ConnectionRefusedIsTimeout verifies that a refused connection
+// is classified as "timeout". All dial-level failures (refused, unreachable,
+// connect timeout) are reported as "timeout" on purpose: the delivery loop
+// treats "timeout" as retryable and continues to the next MX host, whereas
+// "temp_fail" is terminal for the domain and returns to the caller. A refused
+// primary MX must therefore fall back to the remaining MX hosts, not stop.
+func TestMXFallback_ConnectionRefusedIsTimeout(t *testing.T) {
 	port := closedLoopbackPort(t)
 	deliverer := newDialTestDeliverer(t, port)
 
@@ -72,8 +75,8 @@ func TestMXFallback_ConnectionRefusedIsTempFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error dialing a closed port, got nil")
 	}
-	if result.Status != "temp_fail" {
-		t.Errorf("expected status \"temp_fail\" for connection refused, got %q (error: %v)", result.Status, err)
+	if result.Status != "timeout" {
+		t.Errorf("expected status \"timeout\" for connection refused (retryable, allows MX fallback), got %q (error: %v)", result.Status, err)
 	}
 }
 
