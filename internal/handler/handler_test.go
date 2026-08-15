@@ -1003,6 +1003,58 @@ func TestTimeoutResponse(t *testing.T) {
 	}
 }
 
+// TestUnknownResponse verifies that an indeterminate outcome (message fully sent
+// but final acknowledgement not received):
+// - maps to HTTP 504 (same family as timeout, for back-compat with dumb callers)
+// - preserves JSON body status "unknown" so smart callers avoid a blind retry
+func TestUnknownResponse(t *testing.T) {
+	cfg := &config.Config{
+		Outbound: config.OutboundConfig{
+			MaxTotalDeliverySeconds: 30,
+		},
+	}
+
+	unknownResult := &delivery.DeliveryResult{
+		Status:            "unknown",
+		SMTPCode:          0,
+		SMTPMessage:       "",
+		MXHost:            "mx.example.com",
+		SourceIP:          "192.0.2.1",
+		AttemptDurationMs: 214296,
+		Error:             "Delivery outcome unknown (message fully sent, no acknowledgement): i/o timeout",
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockDel := &mockDeliverer{result: unknownResult}
+	h := NewHandler(cfg, mockDel, logger)
+
+	reqBody := MessageRequest{
+		From:    "sender@example.com",
+		To:      "recipient@example.com",
+		Subject: "Test",
+		Text:    "Body",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/deliver", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	h.HandleDeliver(rr, req)
+
+	if rr.Code != http.StatusGatewayTimeout {
+		t.Errorf("Expected HTTP 504, got %d", rr.Code)
+	}
+
+	var resp delivery.DeliveryResult
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("Failed to decode response body: %v", err)
+	}
+
+	if resp.Status != "unknown" {
+		t.Errorf("Expected status %q, got %q", "unknown", resp.Status)
+	}
+}
+
 func TestHandleDeliverSMTP_SetsTransport(t *testing.T) {
 	cfg := &config.Config{
 		Outbound: config.OutboundConfig{

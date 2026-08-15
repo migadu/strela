@@ -63,7 +63,7 @@ func TraceIDFromContext(ctx context.Context) string {
 // DeliveryResult contains the complete result of a delivery attempt.
 type DeliveryResult struct {
 	TraceID           string `json:"trace_id"`            // Unique trace ID for this delivery session
-	Status            string `json:"status"`              // "delivered", "temp_fail", "hard_bounce", "timeout", "error"
+	Status            string `json:"status"`              // "delivered", "temp_fail", "hard_bounce", "timeout", "unknown", "error"
 	SMTPCode          int    `json:"smtp_code"`           // SMTP response code or 0
 	SMTPMessage       string `json:"smtp_message"`        // SMTP response text
 	MXHost            string `json:"mx_host"`             // MX server hostname
@@ -1064,11 +1064,17 @@ func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, cli
 		return "", err
 	}
 
-	// Close and capture the SMTP response from the server
+	// Close and capture the SMTP response from the server.
+	// At this point the full message body plus the terminating dot have been
+	// transmitted; we are now awaiting the final SMTP acknowledgement. If this
+	// fails with a network/timeout error (as opposed to a definitive 4xx/5xx),
+	// the remote may have already accepted and delivered the message. Wrap the
+	// error as indeterminate so the outcome is not misreported as a clean
+	// failure that the caller would blindly retry (causing duplicate delivery).
 	resp, err := w.CloseWithResponse()
 	if err != nil {
-		logger.Debug("DATA close failed (message rejected)", "error", err)
-		return "", err
+		logger.Debug("DATA close failed (message rejected or ack not received)", "error", err)
+		return "", &indeterminateError{err: err}
 	}
 
 	// Normalize multi-line SMTP responses by replacing newlines with spaces
@@ -1531,18 +1537,43 @@ func (d *Deliverer) dialAndHello(ctx context.Context, logger *slog.Logger, trace
 	}
 }
 
+// indeterminateError wraps an error that occurred after the full message body
+// (including the terminating dot) was transmitted to the MX, while awaiting the
+// final SMTP acknowledgement. The remote may have already accepted and delivered
+// the message, so the delivery outcome is genuinely ambiguous. A caller must NOT
+// blindly retry such a result, or it risks delivering duplicate copies.
+type indeterminateError struct{ err error }
+
+func (e *indeterminateError) Error() string { return e.err.Error() }
+func (e *indeterminateError) Unwrap() error { return e.err }
+
 func (d *Deliverer) mapSMTPError(logger *slog.Logger, traceID string, err error, mxHost, sourceIP string) DeliveryResult {
 	res := DeliveryResult{TraceID: traceID, MXHost: mxHost, SourceIP: sourceIP}
 
-	// Extract SMTP code and message first if available
+	// Extract SMTP code and message first if available. errors.As sees through
+	// the indeterminateError wrapper so a definitive 4xx/5xx after DATA is still
+	// classified by its code below.
 	var smtpCode int
 	var smtpMessage string
-	if smtpErr, ok := err.(*smtp.SMTPError); ok {
+	var smtpErr *smtp.SMTPError
+	if errors.As(err, &smtpErr) {
 		smtpCode = smtpErr.Code
 		// Normalize multi-line SMTP messages by replacing newlines with spaces
 		smtpMessage = strings.ReplaceAll(smtpErr.Message, "\n", " ")
 		res.SMTPCode = smtpCode
 		res.SMTPMessage = smtpMessage
+	}
+
+	// A timeout/network error after the message body was fully transmitted is
+	// indeterminate: the remote may already have delivered it. Only applies when
+	// there is no definitive SMTP code (a 4xx/5xx is an unambiguous rejection).
+	var indet *indeterminateError
+	if smtpCode == 0 && errors.As(err, &indet) {
+		res.Status = "unknown"
+		res.Error = fmt.Sprintf("Delivery outcome unknown (message fully sent, no acknowledgement): %s", err.Error())
+		logger.Warn("delivery outcome indeterminate - message may have been delivered",
+			"mx", mxHost, "source_ip", sourceIP, "error", err)
+		return res
 	}
 
 	// Classify using our error classifier with actual SMTP code/message
