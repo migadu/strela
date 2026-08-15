@@ -65,7 +65,7 @@ Delivery Engine performs SMTP delivery (synchronously)
   ↓
 Return JSON response immediately:
 {
-  "status": "delivered|temp_fail|hard_bounce|timeout|error",
+  "status": "delivered|temp_fail|hard_bounce|timeout|unknown|error",
   "smtp_code": 250,
   "smtp_message": "2.0.0 OK",
   "mx_host": "mx1.example.com",
@@ -73,6 +73,20 @@ Return JSON response immediately:
   "attempt_duration_ms": 1234
 }
 ```
+
+**Status semantics for callers (retry contract):**
+- `delivered` (HTTP 200): accept — do not retry.
+- `temp_fail` (HTTP 429): retry with backoff.
+- `hard_bounce` (HTTP 554): permanent — do not retry, bounce to sender.
+- `timeout` (HTTP 504): failed *before* the message body was fully sent — safe to retry.
+- `unknown` (HTTP 504): the full message was transmitted but the final SMTP
+  acknowledgement was never received (e.g. a slow MX that timed out after DATA).
+  The remote **may already have delivered the message**. Callers MUST NOT blindly
+  retry — retrying risks a duplicate. Park for review or retry at most once. This
+  status shares HTTP 504 with `timeout` for back-compat; discriminate on the JSON
+  `status` field. (Set when a network/timeout error occurs at/after
+  `w.CloseWithResponse()` in `deliverPayload`; a definitive 4xx/5xx after DATA is
+  still classified by its SMTP code, not as `unknown`.)
 
 ### Core Design Principles
 
@@ -450,7 +464,7 @@ go test -race ./...  # Always run race detector!
 - Delivery engine returns `DeliveryResult` struct:
   ```go
   type DeliveryResult struct {
-      Status            string `json:"status"`              // "delivered", "temp_fail", "hard_bounce", "timeout", "error"
+      Status            string `json:"status"`              // "delivered", "temp_fail", "hard_bounce", "timeout", "unknown", "error"
       SMTPCode          int    `json:"smtp_code"`           // SMTP response code or 0
       SMTPMessage       string `json:"smtp_message"`        // SMTP response text
       MXHost            string `json:"mx_host"`             // MX server hostname

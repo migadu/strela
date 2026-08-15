@@ -252,6 +252,21 @@ func TestMapSMTPError(t *testing.T) {
 			err:        fmt.Errorf("EOF"),
 			wantStatus: "timeout",
 		},
+		{
+			name:       "indeterminate timeout after body sent classified as unknown",
+			err:        &indeterminateError{err: fmt.Errorf("read tcp: i/o timeout")},
+			wantStatus: "unknown",
+		},
+		{
+			name:       "definitive 5xx after body sent still classified by code (not unknown)",
+			err:        &indeterminateError{err: &smtp.SMTPError{Code: 550, Message: "content rejected"}},
+			wantStatus: "hard_bounce",
+		},
+		{
+			name:       "definitive 4xx after body sent still classified by code (not unknown)",
+			err:        &indeterminateError{err: &smtp.SMTPError{Code: 451, Message: "try later"}},
+			wantStatus: "temp_fail",
+		},
 	}
 
 	for _, tt := range tests {

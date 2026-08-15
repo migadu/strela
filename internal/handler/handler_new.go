@@ -393,7 +393,13 @@ func mapDeliveryStatusToHTTP(status string) int {
 	case "hard_bounce":
 		return 554 // 554 Transaction Failed - permanent failure, do not retry (SMTP 5xx)
 	case "timeout":
-		return http.StatusGatewayTimeout // 504 - delivery timeout exceeded
+		return http.StatusGatewayTimeout // 504 - delivery timeout exceeded (before message fully sent, safe to retry)
+	case "unknown":
+		// 504 - the message was fully transmitted but the final acknowledgement
+		// never arrived; the remote may already have delivered it. Kept in the
+		// timeout HTTP family for back-compat, but the JSON "status":"unknown"
+		// signals smart callers to NOT blindly retry (avoids duplicate delivery).
+		return http.StatusGatewayTimeout
 	case "error":
 		return http.StatusInternalServerError // 500 - internal error
 	default:
