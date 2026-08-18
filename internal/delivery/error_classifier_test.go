@@ -27,7 +27,12 @@ func TestClassifyError_TemporaryCodes(t *testing.T) {
 		{450, "Mailbox busy", "Mailbox busy or unavailable"},
 		{451, "Rate limit exceeded", "Rate limit exceeded"},
 		{452, "Insufficient storage", "Insufficient system storage"},
+		{452, "4.5.3 Error: too many recipients", "Too many recipients"},
+		{452, "4.7.0 Rate limit reached, try later", "Rate limit exceeded"},
 		{454, "TLS failed", "TLS negotiation failed"},
+		{454, "4.7.0 TLS not available due to local problem", "TLS negotiation failed"},
+		{454, "<user@example.com>: Relay access denied", "Relay access denied (deferred)"},
+		{454, "4.3.0 Try again later", "Temporary failure (SMTP 454)"},
 	}
 
 	for _, tt := range tests {
@@ -39,6 +44,10 @@ func TestClassifyError_TemporaryCodes(t *testing.T) {
 
 		if err.SMTPCode != tt.code {
 			t.Errorf("Code %d: expected SMTP code %d, got %d", tt.code, tt.code, err.SMTPCode)
+		}
+
+		if err.Message != tt.expected {
+			t.Errorf("Code %d (%q): expected message %q, got %q", tt.code, tt.response, tt.expected, err.Message)
 		}
 	}
 }
@@ -132,6 +141,23 @@ func TestClassifyPermanentError_MailboxUnavailable(t *testing.T) {
 	}
 }
 
+func TestClassifyPermanentError_553(t *testing.T) {
+	tests := []struct {
+		response string
+		expected string
+	}{
+		{"553 5.1.3 Invalid address syntax", "Invalid mailbox name"},
+		{"553 5.7.1 <user@example.com>... Relaying denied", "Relaying denied"},
+	}
+
+	for _, tt := range tests {
+		message := classifyPermanentError(553, tt.response)
+		if message != tt.expected {
+			t.Errorf("Response '%s': expected '%s', got '%s'", tt.response, tt.expected, message)
+		}
+	}
+}
+
 func TestClassifyPermanentError_Spam(t *testing.T) {
 	responses := []string{
 		"550 Message rejected as spam",
@@ -184,6 +210,7 @@ func TestShouldDeactivateEmail_UserNotFound(t *testing.T) {
 		{550, "Mailbox not found", true},
 		{550, "Mailbox does not exist", true},
 		{553, "Invalid mailbox name", true},
+		{553, "5.7.1 Relaying denied", false},
 		{550, "Rejected as spam", false},
 		{552, "Message too large", false},
 		{550, "Relaying denied", false},

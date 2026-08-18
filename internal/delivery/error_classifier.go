@@ -226,9 +226,25 @@ func classifyTemporaryError(code int, response string) string {
 		}
 		return "Local processing error"
 	case 452:
+		// RFC 5321 uses 452 for insufficient storage, but it is also commonly
+		// used for recipient-count limits (e.g. Postfix "too many recipients").
+		if strings.Contains(responseLower, "recipient") {
+			return "Too many recipients"
+		}
+		if strings.Contains(responseLower, "rate") || strings.Contains(responseLower, "limit") {
+			return "Rate limit exceeded"
+		}
 		return "Insufficient system storage"
 	case 454:
-		return "TLS negotiation failed"
+		// RFC 3207 uses 454 for "TLS not available", but Postfix also uses it
+		// for deferred relay denial (defer_unauth_destination).
+		if strings.Contains(responseLower, "tls") || strings.Contains(responseLower, "starttls") {
+			return "TLS negotiation failed"
+		}
+		if strings.Contains(responseLower, "relay") {
+			return "Relay access denied (deferred)"
+		}
+		return "Temporary failure (SMTP 454)"
 	default:
 		if strings.Contains(responseLower, "quota") {
 			return "Mailbox quota exceeded"
@@ -267,6 +283,10 @@ func classifyPermanentError(code int, response string) string {
 	case 552:
 		return "Message size exceeds limit"
 	case 553:
+		// Sendmail-style servers use 553 for relay denial, not just bad mailbox names.
+		if strings.Contains(responseLower, "relay") {
+			return "Relaying denied"
+		}
 		return "Invalid mailbox name"
 	case 554:
 		if strings.Contains(responseLower, "spam") {
@@ -305,8 +325,9 @@ func ShouldDeactivateEmail(category ErrorCategory, smtpCode int, response string
 		}
 	}
 
-	// Deactivate for invalid mailbox name
-	if smtpCode == 553 {
+	// Deactivate for invalid mailbox name — but not for relay denials,
+	// which are remote configuration issues, not bad addresses
+	if smtpCode == 553 && !strings.Contains(responseLower, "relay") {
 		return true
 	}
 
