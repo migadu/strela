@@ -6,15 +6,43 @@ import (
 	"testing"
 )
 
-func TestClassifyError_GreylistCode(t *testing.T) {
-	err := ClassifyError(421, "4.7.1 Greylisted, please try again later", nil)
-
-	if err.Category != ErrorGreylist {
-		t.Errorf("Expected category %s, got %s", ErrorGreylist, err.Category)
+func TestClassifyError_Greylist(t *testing.T) {
+	// Greylisting is detected from response text on any 4xx code, since real
+	// greylisters mostly answer 450/451 and say so.
+	tests := []struct {
+		code     int
+		response string
+	}{
+		{421, "4.7.1 Greylisted, please try again later"},
+		{450, "4.2.0 Greylisted, see http://postgrey.schweikert.ch/help"},
+		{451, "4.7.1 Graylisting in action, please come back later"},
+		{451, "4.2.0 You have been grey listed, retry in 300 seconds"},
 	}
 
-	if err.SMTPCode != 421 {
-		t.Errorf("Expected SMTP code 421, got %d", err.SMTPCode)
+	for _, tt := range tests {
+		err := ClassifyError(tt.code, tt.response, nil)
+
+		if err.Category != ErrorGreylist {
+			t.Errorf("Code %d (%q): expected category %s, got %s", tt.code, tt.response, ErrorGreylist, err.Category)
+		}
+
+		if err.SMTPCode != tt.code {
+			t.Errorf("Code %d: expected SMTP code %d, got %d", tt.code, tt.code, err.SMTPCode)
+		}
+	}
+}
+
+func TestClassifyError_Plain421IsNotGreylist(t *testing.T) {
+	// A 421 without greylist text is rate limiting or load shedding
+	// (e.g. Gmail's throttling), not greylisting.
+	err := ClassifyError(421, "4.7.0 Try again later, closing connection", nil)
+
+	if err.Category != ErrorTemporary {
+		t.Errorf("Expected category %s, got %s", ErrorTemporary, err.Category)
+	}
+
+	if err.Message != "Service not available (rate limiting or server shutdown)" {
+		t.Errorf("Unexpected message: %q", err.Message)
 	}
 }
 
@@ -114,6 +142,41 @@ func TestClassifyError_SuccessCodes(t *testing.T) {
 	err = ClassifyError(220, "Service ready", nil)
 	if err != nil {
 		t.Errorf("Expected nil for success code 220, got %v", err)
+	}
+
+	// A 2xx must return nil even if the text happens to contain a
+	// reputation keyword (success check runs before keyword scans).
+	err = ClassifyError(250, "2.0.0 OK: message no longer blocked", nil)
+	if err != nil {
+		t.Errorf("Expected nil for success code 250 with keyword text, got %v", err)
+	}
+}
+
+func TestClassifyError_Reputation(t *testing.T) {
+	tests := []struct {
+		code     int
+		response string
+		expected ErrorCategory
+	}{
+		// Strong keywords match at any code — blocklist operators deliver
+		// listings via 4xx as well as 5xx.
+		{451, "4.7.1 Service unavailable, client host listed on Spamhaus ZEN", ErrorReputation},
+		{554, "5.7.1 Rejected: IP found in DNSBL", ErrorReputation},
+		{450, "4.7.1 Client host blacklisted by barracuda", ErrorReputation},
+		// Weak keywords only count on a definitive 5xx rejection.
+		{550, "5.7.1 Message blocked due to sender reputation", ErrorReputation},
+		{554, "5.7.1 Rejected for policy reasons", ErrorReputation},
+		// The same weak phrasing on a 4xx is a routine deferral, not a
+		// reputation strike.
+		{451, "4.7.1 Temporarily blocked, try again later", ErrorTemporary},
+		{450, "4.7.0 Rejected for policy reasons, retry later", ErrorTemporary},
+	}
+
+	for _, tt := range tests {
+		err := ClassifyError(tt.code, tt.response, nil)
+		if err.Category != tt.expected {
+			t.Errorf("Code %d (%q): expected category %s, got %s", tt.code, tt.response, tt.expected, err.Category)
+		}
 	}
 }
 

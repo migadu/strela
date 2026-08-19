@@ -263,6 +263,7 @@ func main() {
 		} else {
 			adminMux.Handle("/health", handler.NewHealthHandler(deliverer, logger))
 		}
+		adminMux.Handle("/reputation", handler.NewReputationHandler(deliverer, logger))
 
 		var adminHandler http.Handler = adminMux
 		if cfg.Admin.Username != "" && cfg.Admin.Password != "" {

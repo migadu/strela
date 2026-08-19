@@ -300,6 +300,54 @@ func TestMapSMTPError_PreservesCodeAndMessage(t *testing.T) {
 	}
 }
 
+func TestMapSMTPError_CarriesClassifiedError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := &Deliverer{logger: logger}
+
+	err := &smtp.SMTPError{Code: 554, Message: "5.7.1 Client host listed on Spamhaus ZEN"}
+	result := d.mapSMTPError(logger, "t1", err, "mx.test.com", "1.2.3.4")
+
+	if result.classifiedErr == nil {
+		t.Fatal("classifiedErr not set on result")
+	}
+	if result.classifiedErr.Category != ErrorReputation {
+		t.Errorf("Category = %s, want %s", result.classifiedErr.Category, ErrorReputation)
+	}
+
+	// The indeterminate path returns before classification; the tracker must
+	// not receive a verdict for an outcome that is genuinely unknown.
+	indet := &indeterminateError{err: fmt.Errorf("read tcp: i/o timeout")}
+	result = d.mapSMTPError(logger, "t2", indet, "mx.test.com", "1.2.3.4")
+	if result.classifiedErr != nil {
+		t.Errorf("classifiedErr = %v for indeterminate result, want nil", result.classifiedErr)
+	}
+}
+
+func TestRecordDeliveryAttempt_ReputationErrorDegradesIP(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := &Deliverer{logger: logger}
+	tracker := NewIPReputationTracker(&config.ReputationConfig{EnableIPTracking: true}, logger)
+
+	err := &smtp.SMTPError{Code: 554, Message: "5.7.1 Client host listed on Spamhaus ZEN"}
+	result := d.mapSMTPError(logger, "t1", err, "mx.test.com", "1.2.3.4")
+
+	info := DeliveryInfo{From: "a@example.com", To: "b@example.org", MXHost: "mx.test.com"}
+	tracker.RecordDeliveryAttempt("1.2.3.4", result.Status == "delivered", result.classifiedErr, info)
+
+	if _, degraded := tracker.GetDegradedIPs()["1.2.3.4"]; !degraded {
+		t.Error("IP not marked degraded after reputation-classified delivery failure")
+	}
+
+	// A routine deferral must not degrade the IP.
+	err = &smtp.SMTPError{Code: 451, Message: "4.7.1 Temporarily blocked, try again later"}
+	result = d.mapSMTPError(logger, "t2", err, "mx.test.com", "5.6.7.8")
+	tracker.RecordDeliveryAttempt("5.6.7.8", result.Status == "delivered", result.classifiedErr, info)
+
+	if _, degraded := tracker.GetDegradedIPs()["5.6.7.8"]; degraded {
+		t.Error("IP marked degraded by a routine temp-fail deferral")
+	}
+}
+
 // --- waitForDomainRateLimit ---
 
 func TestWaitForDomainRateLimit(t *testing.T) {

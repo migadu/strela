@@ -70,6 +70,10 @@ type DeliveryResult struct {
 	SourceIP          string `json:"source_ip"`           // Source IP used
 	AttemptDurationMs int64  `json:"attempt_duration_ms"` // Delivery duration
 	Error             string `json:"error,omitempty"`     // Error details
+
+	// classifiedErr carries the classifier's verdict to the IP reputation
+	// tracker; not part of the JSON API response.
+	classifiedErr *DeliveryError
 }
 
 // Deliverer is the main delivery engine that handles direct SMTP delivery.
@@ -676,7 +680,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			logger.Debug("no source IPs configured, using system default", "mx", mx.Host, "prefer_ipv6", targetPreferIPv6)
 			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, "", targetPreferIPv6, protocol, inboundAuth, cfg)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
-			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", nil, deliveryInfo)
+			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", result.classifiedErr, deliveryInfo)
 			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result, domain)
@@ -770,7 +774,7 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, logger *slog.L
 
 		// Track reputation
 		deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mxHost}
-		d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Status == "delivered", nil, deliveryInfo)
+		d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Status == "delivered", result.classifiedErr, deliveryInfo)
 
 		// Return immediately for definitive results or server-side temp failures
 		if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
@@ -1578,7 +1582,16 @@ func (d *Deliverer) mapSMTPError(logger *slog.Logger, traceID string, err error,
 
 	// Classify using our error classifier with actual SMTP code/message
 	classified := ClassifyError(smtpCode, smtpMessage, err)
+	if classified == nil {
+		// Only possible if a 2xx code reaches this error path — an internal
+		// inconsistency, since we are here because err != nil.
+		res.Status = "error"
+		res.Error = fmt.Sprintf("Inconsistent state: error with success SMTP code %d: %s", smtpCode, err.Error())
+		logger.Error("error path reached with 2xx SMTP code", "mx", mxHost, "smtp_code", smtpCode, "error", err)
+		return res
+	}
 	res.Error = classified.Message
+	res.classifiedErr = classified
 
 	logger.Debug("classifying SMTP error",
 		"mx", mxHost,

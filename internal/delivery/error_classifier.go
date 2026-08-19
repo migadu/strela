@@ -17,8 +17,11 @@ const (
 	// Includes 5xx SMTP codes. Examples: user not found, invalid mailbox name, spam rejection.
 	ErrorPermanent ErrorCategory = "permanent"
 
-	// ErrorGreylist indicates greylisting (SMTP 421), which requires aggressive fast retry.
-	// Greylisting is a spam prevention technique where the first delivery is temporarily rejected.
+	// ErrorGreylist indicates greylisting, detected from the response text of a
+	// 4xx reply (e.g. "451 4.2.0 Greylisted, please try again later"). In v2.0
+	// it behaves exactly like ErrorTemporary (status "temp_fail", retryable);
+	// it remains a distinct category only for the caller-visible error message
+	// and debug logs.
 	ErrorGreylist ErrorCategory = "greylist"
 
 	// ErrorNetwork indicates connection or DNS failures that should be retried.
@@ -131,8 +134,14 @@ func classifyNetworkError(err error) *DeliveryError {
 
 // classifySMTPCode categorizes errors based on SMTP response code
 func classifySMTPCode(code int, response string) *DeliveryError {
-	// Check for reputation issues first
-	if isReputationError(response) {
+	// 2xx - Success (shouldn't be an error). Must be checked before the
+	// keyword scans below so a success response can never be misclassified.
+	if code >= 200 && code < 300 {
+		return nil
+	}
+
+	// Check for reputation issues
+	if isReputationError(code, response) {
 		return &DeliveryError{
 			Category:     ErrorReputation,
 			SMTPCode:     code,
@@ -141,20 +150,19 @@ func classifySMTPCode(code int, response string) *DeliveryError {
 		}
 	}
 
-	switch {
-	// 2xx - Success (shouldn't be an error)
-	case code >= 200 && code < 300:
-		return nil
-
-	// 421 - Greylisting (temporary, but needs aggressive retry)
-	case code == 421:
+	// Greylisting is identified by response text, not code: real greylisters
+	// mostly answer 450/451 and say so, while plain 421s are usually rate
+	// limiting or load shedding.
+	if code >= 400 && code < 500 && isGreylistResponse(response) {
 		return &DeliveryError{
 			Category:     ErrorGreylist,
 			SMTPCode:     code,
 			SMTPResponse: response,
 			Message:      "Greylisting detected",
 		}
+	}
 
+	switch {
 	// 4xx - Temporary failures
 	case code >= 400 && code < 500:
 		return &DeliveryError{
@@ -184,14 +192,17 @@ func classifySMTPCode(code int, response string) *DeliveryError {
 	}
 }
 
-// isReputationError checks for keywords indicating a reputation issue
-func isReputationError(response string) bool {
+// isReputationError checks for keywords indicating a reputation issue.
+// Strong keywords (explicit blocklist/reputation references) match at any code,
+// since blocklist operators deliver listings via 4xx as well as 5xx. Weak
+// keywords also appear in routine deferrals (e.g. "451 Temporarily blocked,
+// try again later"), so they only count on a definitive 5xx rejection.
+func isReputationError(code int, response string) bool {
 	responseLower := strings.ToLower(response)
-	reputationKeywords := []string{
-		"blocked",
+
+	strongKeywords := []string{
 		"blacklist",
 		"poor reputation",
-		"rejected for policy reasons",
 		"rbl",
 		"dnsbl",
 		"spamhaus",
@@ -199,8 +210,38 @@ func isReputationError(response string) bool {
 		"cloudmark",
 		"barracuda",
 	}
+	for _, keyword := range strongKeywords {
+		if strings.Contains(responseLower, keyword) {
+			return true
+		}
+	}
 
-	for _, keyword := range reputationKeywords {
+	if code >= 500 && code < 600 {
+		weakKeywords := []string{
+			"blocked",
+			"rejected for policy reasons",
+		}
+		for _, keyword := range weakKeywords {
+			if strings.Contains(responseLower, keyword) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isGreylistResponse checks whether a response text indicates greylisting.
+func isGreylistResponse(response string) bool {
+	responseLower := strings.ToLower(response)
+	greylistKeywords := []string{
+		"greylist",
+		"graylist",
+		"grey-list",
+		"gray-list",
+		"grey listed",
+		"gray listed",
+	}
+	for _, keyword := range greylistKeywords {
 		if strings.Contains(responseLower, keyword) {
 			return true
 		}
@@ -214,7 +255,9 @@ func classifyTemporaryError(code int, response string) string {
 
 	switch code {
 	case 421:
-		return "Service not available (greylisting or rate limiting)"
+		// Greylist-texted responses are caught earlier in classifySMTPCode;
+		// a plain 421 is almost always rate limiting or load shedding.
+		return "Service not available (rate limiting or server shutdown)"
 	case 450:
 		if strings.Contains(responseLower, "rate") || strings.Contains(responseLower, "limit") || strings.Contains(responseLower, "too many") {
 			return "Rate limit exceeded"

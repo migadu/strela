@@ -101,6 +101,11 @@ func NewIPReputationTracker(cfg *config.ReputationConfig, logger *slog.Logger) *
 	}
 }
 
+// Enabled reports whether IP reputation tracking is active.
+func (rt *IPReputationTracker) Enabled() bool {
+	return rt.enabled
+}
+
 // IsIPHealthy checks if an IP is in healthy state and can be used for delivery.
 // An IP is considered healthy if it's not degraded or if the retry time has elapsed.
 // If reputation tracking is disabled, all IPs are considered healthy.
