@@ -468,3 +468,59 @@ func TestDeliverMessage_ExplicitTransportOverridesConfig(t *testing.T) {
 		t.Logf("Got temp_fail: %s", result.Error)
 	}
 }
+
+func TestIsAutoReply(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{
+			name: "auto-submitted auto-replied",
+			msg:  "From: a@x.com\r\nAuto-Submitted: auto-replied\r\n\r\nbody",
+			want: true,
+		},
+		{
+			name: "auto-submitted with parameters",
+			msg:  "From: a@x.com\r\nAuto-Submitted: auto-replied; owner-email=b@y.com\r\n\r\nbody",
+			want: true,
+		},
+		{
+			name: "x-auto-response-suppress all",
+			msg:  "From: a@x.com\r\nX-Auto-Response-Suppress: All\r\n\r\nbody",
+			want: true,
+		},
+		{
+			name: "case-insensitive header value",
+			msg:  "From: a@x.com\r\nX-Auto-Response-Suppress: ALL\r\n\r\nbody",
+			want: true,
+		},
+		{
+			name: "auto-submitted no (not a reply)",
+			msg:  "From: a@x.com\r\nAuto-Submitted: no\r\n\r\nbody",
+			want: false,
+		},
+		{
+			name: "suppress partial value",
+			msg:  "From: a@x.com\r\nX-Auto-Response-Suppress: OOF, AutoReply\r\n\r\nbody",
+			want: false,
+		},
+		{
+			name: "ordinary message",
+			msg:  "From: a@x.com\r\nSubject: hi\r\n\r\nbody",
+			want: false,
+		},
+		{
+			name: "missing terminating blank line still parses headers",
+			msg:  "From: a@x.com\r\nAuto-Submitted: auto-replied\r\n",
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isAutoReply([]byte(tt.msg)); got != tt.want {
+				t.Errorf("isAutoReply() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

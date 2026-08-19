@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"net/textproto"
 	"os"
 	"strconv"
 	"strings"
@@ -987,7 +988,9 @@ func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, cli
 	// MAIL FROM — SRS rewrite for SMTP (LMTP uses performLMTPTransaction instead)
 	mailFrom := from
 	if d.srs != nil {
-		if skip, reason := d.shouldSkipSRS(from, to, inboundAuth); skip {
+		if isAutoReply(msg) {
+			logger.Debug("SRS skipped", "reason", "auto_reply", "from", from, "to", to)
+		} else if skip, reason := d.shouldSkipSRS(from, to, inboundAuth); skip {
 			logger.Debug("SRS skipped", "reason", reason, "from", from, "to", to)
 		} else if rewritten, err := d.srs.Forward(from); err == nil {
 			mailFrom = rewritten
@@ -1788,6 +1791,30 @@ func needsUTF8Address(email string) bool {
 
 // extractHeaders returns the RFC 822 headers from a message (up to the first blank line),
 // truncated to 2KB for logging. Used for debug diagnostics.
+// isAutoReply reports whether the message is an automatic reply, in which case
+// its envelope sender must not be rewritten by SRS (an SRS-rewritten bounce
+// address on an auto-reply invites mail loops and pointless bounce churn).
+// Detection follows the auto-responder conventions the sender stamps on such
+// messages: "Auto-Submitted: auto-replied" (RFC 3834) or, from Microsoft-style
+// vacation responders, "X-Auto-Response-Suppress: All". Either header is
+// sufficient.
+func isAutoReply(msg []byte) bool {
+	hdr, err := textproto.NewReader(bufio.NewReader(bytes.NewReader(msg))).ReadMIMEHeader()
+	// ReadMIMEHeader returns whatever it parsed even on a malformed/truncated
+	// body (e.g. missing terminating blank line); only bail if nothing parsed.
+	if err != nil && len(hdr) == 0 {
+		return false
+	}
+	// Auto-Submitted values may carry parameters, e.g. "auto-replied; ...".
+	if v := strings.ToLower(strings.TrimSpace(hdr.Get("Auto-Submitted"))); strings.HasPrefix(v, "auto-replied") {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(hdr.Get("X-Auto-Response-Suppress")), "all") {
+		return true
+	}
+	return false
+}
+
 func extractHeaders(msg []byte) string {
 	const maxLen = 2048
 	// Find the header/body separator: \r\n\r\n or \n\n
