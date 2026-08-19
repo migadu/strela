@@ -344,6 +344,10 @@ func createS3Cache(ctx context.Context, cfg config.LetsEncryptConfig, logger *sl
 		s3Client = s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.S3.Endpoint)
 			o.UsePathStyle = true // Required for non-AWS S3-compatible services like MinIO/B2
+			// S3-compatible endpoints (B2, MinIO) often omit x-amz-checksum-* response
+			// headers, which makes the SDK log "Response has no supported checksum".
+			// TLS already guarantees transport integrity, so only validate when required.
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 		})
 		logger.Info("using custom S3 endpoint", "endpoint", cfg.S3.Endpoint)
 	} else {
