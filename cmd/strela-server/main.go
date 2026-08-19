@@ -233,6 +233,10 @@ func main() {
 		if m != nil && cfg.Metrics.Path != "" {
 			metricsMux.Handle(cfg.Metrics.Path, promhttp.Handler())
 		}
+		// Reputation is also exposed on the unauthenticated metrics listener so
+		// fernrohr (which targets the metrics port) can read outbound source IP
+		// reputation state. Same handler as the admin listener; read-only.
+		metricsMux.Handle("/reputation", handler.NewReputationHandler(deliverer, logger))
 
 		metricsHandler := handler.PanicRecoveryMiddleware(metricsMux, logger)
 
