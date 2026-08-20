@@ -157,6 +157,13 @@ enable_ip_tracking = false                  # Track and rotate out degraded sour
 # alert_webhook_url = "https://hooks.slack.com/..."  # Webhook for IP degradation alerts
 degraded_retry_hours = 48                   # Hours before retrying degraded IP
 degraded_ip_cleanup_hours = 168             # Hours before removing from degraded list (7 days)
+# Corroboration threshold for AMBIGUOUS (weak-signal) reputation rejections.
+# A source IP must collect this many weak reputation strikes within
+# degrade_window_minutes before it is degraded. Strong listings (Spamhaus/DNSBL
+# and similar) bypass this and degrade on the first hit. Set to 1 to restore the
+# old one-shot behavior. RESTART-ONLY (not hot-reloadable).
+degrade_failure_threshold = 3               # Weak reputation strikes before degrading
+degrade_window_minutes = 30                 # Rolling window for counting strikes
 
 [cluster]
 # Optional - only needed for Let's Encrypt with S3 storage

@@ -46,6 +46,12 @@ type DeliveryError struct {
 	SMTPResponse string
 	Message      string
 	OriginalErr  error
+	// ImmediateDegrade is set only for ErrorReputation. When true, the match came
+	// from a strong, unambiguous listing keyword (e.g. Spamhaus/DNSBL) and the
+	// source IP should be degraded on the first hit. When false, the match came
+	// from a tightened weak keyword and degradation is threshold-gated by the
+	// reputation tracker (corroboration required).
+	ImmediateDegrade bool
 }
 
 // Error implements error interface
@@ -65,14 +71,17 @@ func (e *DeliveryError) Unwrap() error {
 // It first checks for network-level errors (DNS, connection failures), then examines SMTP
 // response codes and messages to classify the error. Reputation errors are detected by
 // scanning for blacklist-related keywords in the SMTP response.
-func ClassifyError(smtpCode int, smtpResponse string, err error) *DeliveryError {
+// sourceIP is the local source IP used for the attempt (may be ""); some
+// providers quote it in IP-reputation rejections, which is a strong IP-scoped
+// signal (see hasIPScopedSignal).
+func ClassifyError(smtpCode int, smtpResponse string, sourceIP string, err error) *DeliveryError {
 	// Network/connection errors
 	if err != nil && smtpCode == 0 {
 		return classifyNetworkError(err)
 	}
 
 	// SMTP response code classification
-	return classifySMTPCode(smtpCode, smtpResponse)
+	return classifySMTPCode(smtpCode, smtpResponse, sourceIP)
 }
 
 // classifyNetworkError categorizes network-level errors
@@ -133,7 +142,7 @@ func classifyNetworkError(err error) *DeliveryError {
 }
 
 // classifySMTPCode categorizes errors based on SMTP response code
-func classifySMTPCode(code int, response string) *DeliveryError {
+func classifySMTPCode(code int, response string, sourceIP string) *DeliveryError {
 	// 2xx - Success (shouldn't be an error). Must be checked before the
 	// keyword scans below so a success response can never be misclassified.
 	if code >= 200 && code < 300 {
@@ -141,12 +150,13 @@ func classifySMTPCode(code int, response string) *DeliveryError {
 	}
 
 	// Check for reputation issues
-	if isReputationError(code, response) {
+	if isRep, strong := isReputationError(code, response, sourceIP); isRep {
 		return &DeliveryError{
-			Category:     ErrorReputation,
-			SMTPCode:     code,
-			SMTPResponse: response,
-			Message:      "IP reputation/blacklist error",
+			Category:         ErrorReputation,
+			SMTPCode:         code,
+			SMTPResponse:     response,
+			Message:          "IP reputation/blacklist error",
+			ImmediateDegrade: strong,
 		}
 	}
 
@@ -193,11 +203,17 @@ func classifySMTPCode(code int, response string) *DeliveryError {
 }
 
 // isReputationError checks for keywords indicating a reputation issue.
-// Strong keywords (explicit blocklist/reputation references) match at any code,
-// since blocklist operators deliver listings via 4xx as well as 5xx. Weak
-// keywords also appear in routine deferrals (e.g. "451 Temporarily blocked,
-// try again later"), so they only count on a definitive 5xx rejection.
-func isReputationError(code int, response string) bool {
+//
+// It returns (isRep, strong):
+//   - strong == true  → an explicit blocklist/reputation reference. These match
+//     at any code (blocklist operators deliver listings via 4xx as well as 5xx)
+//     and should degrade the IP immediately.
+//   - strong == false → a tightened weak keyword. Weak keywords also appear in
+//     per-message content rejections (e.g. Gmail "this message has been
+//     blocked"), so they count as reputation only on a definitive 5xx AND when
+//     the response carries an IP-scoped signal (hasIPScopedSignal). Degradation
+//     for these is threshold-gated by the reputation tracker.
+func isReputationError(code int, response string, sourceIP string) (isRep bool, strong bool) {
 	responseLower := strings.ToLower(response)
 
 	strongKeywords := []string{
@@ -212,7 +228,7 @@ func isReputationError(code int, response string) bool {
 	}
 	for _, keyword := range strongKeywords {
 		if strings.Contains(responseLower, keyword) {
-			return true
+			return true, true
 		}
 	}
 
@@ -222,9 +238,52 @@ func isReputationError(code int, response string) bool {
 			"rejected for policy reasons",
 		}
 		for _, keyword := range weakKeywords {
-			if strings.Contains(responseLower, keyword) {
-				return true
+			if strings.Contains(responseLower, keyword) && hasIPScopedSignal(responseLower, sourceIP) {
+				return true, false
 			}
+		}
+	}
+	return false, false
+}
+
+// hasIPScopedSignal reports whether the (already lower-cased) response text
+// points at the sending IP rather than at the individual message. Weak
+// reputation keywords only count as an IP-reputation event when accompanied by
+// such a signal; otherwise a per-message content block (Gmail's "this message
+// has been blocked") would wrongly degrade the whole source IP for every
+// destination.
+//
+// There is deliberately NO message-scoped veto: Gmail's genuine IP-reputation
+// block (S3140) contains both "your ip address" and "unsolicited", so vetoing on
+// message words would suppress the one Gmail response that IS an IP event. The
+// per-message content block has no IP language and simply fails this check.
+func hasIPScopedSignal(responseLower, sourceIP string) bool {
+	// Some providers quote the exact sending IP, e.g. Outlook S3150:
+	// "banned sending IP [192.0.2.1]". That is an unambiguous IP-scoped signal.
+	if sourceIP != "" && strings.Contains(responseLower, strings.ToLower(sourceIP)) {
+		return true
+	}
+
+	ipSignals := []string{
+		"your ip",
+		"ip address", // also covers "the ip address"
+		"sending ip",
+		// Listing phrasing, kept specific so it does not match "whitelisted",
+		// "allowlisted", "greylisted", or "delisted" (all contain "listed").
+		"is listed",
+		"listed on",
+		"listed in",
+		"listed by",
+		"reputation",
+		"ptr",
+		"rdns",
+		"reverse dns",
+		"blocklist",
+		"blacklist",
+	}
+	for _, sig := range ipSignals {
+		if strings.Contains(responseLower, sig) {
+			return true
 		}
 	}
 	return false

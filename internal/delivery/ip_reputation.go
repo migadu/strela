@@ -70,11 +70,19 @@ type ReputationMetrics interface {
 type IPReputationTracker struct {
 	mu          sync.RWMutex
 	degradedIPs map[string]*DegradedIPInfo
-	config      *config.ReputationConfig
-	logger      *slog.Logger
-	httpClient  *http.Client
-	enabled     bool
-	metrics     ReputationMetrics
+	// repStrikes tracks pre-degrade reputation strikes from weak (ambiguous)
+	// signals, per source IP, as a rolling list of timestamps. A weak reputation
+	// error only degrades the IP once the count within DegradeWindowMinutes
+	// reaches DegradeFailureThreshold. Guarded by mu. Entries are cleared when an
+	// IP degrades (either path) or delivers successfully, and no new strikes are
+	// accumulated while an IP is actively degraded, so entries track only the
+	// pre-degrade accumulation of IPs still in rotation.
+	repStrikes map[string][]time.Time
+	config     *config.ReputationConfig
+	logger     *slog.Logger
+	httpClient *http.Client
+	enabled    bool
+	metrics    ReputationMetrics
 }
 
 // NewIPReputationTracker creates a new IP reputation tracker with the specified configuration.
@@ -92,6 +100,7 @@ func NewIPReputationTracker(cfg *config.ReputationConfig, logger *slog.Logger) *
 
 	return &IPReputationTracker{
 		degradedIPs: make(map[string]*DegradedIPInfo),
+		repStrikes:  make(map[string][]time.Time),
 		config:      cfg,
 		logger:      logger,
 		httpClient: &http.Client{
@@ -254,20 +263,118 @@ func (rt *IPReputationTracker) RecordDeliveryAttempt(ip string, success bool, er
 		return
 	}
 
-	// Check if IP was degraded
-	rt.mu.RLock()
-	_, wasDegraded := rt.degradedIPs[ip]
-	rt.mu.RUnlock()
+	if success {
+		// A success clears any accumulated pre-degrade strikes (the IP is
+		// behaving) in addition to recovering it if it was fully degraded.
+		rt.clearStrikes(ip)
 
-	if success && wasDegraded {
-		rt.logger.Debug("successful delivery with degraded IP, marking as recovered", "ip", ip)
-		// IP was degraded but now succeeded - mark as recovered
-		rt.MarkIPRecovered(ip)
-	} else if !success && err != nil && err.Category == ErrorReputation {
-		rt.logger.Debug("delivery failed with reputation error, marking IP as degraded", "ip", ip, "error", err)
-		// Reputation error - mark IP as degraded
+		rt.mu.RLock()
+		_, wasDegraded := rt.degradedIPs[ip]
+		rt.mu.RUnlock()
+		if wasDegraded {
+			rt.logger.Debug("successful delivery with degraded IP, marking as recovered", "ip", ip)
+			rt.MarkIPRecovered(ip)
+		}
+		return
+	}
+
+	if err == nil || err.Category != ErrorReputation {
+		return
+	}
+
+	if err.ImmediateDegrade {
+		// Strong, unambiguous listing (e.g. Spamhaus/DNSBL): degrade on first hit,
+		// preserving the pre-change behavior for high-confidence reputation events.
+		// Drop any pre-degrade strikes so they do not linger for a now-degraded IP.
+		rt.logger.Debug("delivery failed with strong reputation error, degrading IP immediately", "ip", ip, "error", err)
+		rt.clearStrikes(ip)
+		rt.MarkIPDegraded(ip, err.SMTPCode, err.SMTPResponse, deliveryInfo)
+		return
+	}
+
+	// If the IP is already degraded and still within its retry window it is out of
+	// rotation, so further weak signals are noise: skip them rather than
+	// accumulate strikes and re-fire the degrade webhook/metric for an IP that is
+	// already degraded. Once the retry window elapses IsIPHealthy returns true
+	// again and fresh strikes can re-degrade it.
+	if !rt.IsIPHealthy(ip) {
+		return
+	}
+
+	// Weak (ambiguous) reputation signal: require corroboration across attempts
+	// before degrading. recordStrike returns true for exactly one caller — the one
+	// that crosses the threshold — so the degrade webhook/metric fires only once.
+	if rt.recordStrike(ip) {
+		rt.logger.Debug("reputation strike threshold crossed, degrading IP", "ip", ip, "error", err)
 		rt.MarkIPDegraded(ip, err.SMTPCode, err.SMTPResponse, deliveryInfo)
 	}
+}
+
+// recordStrike appends a weak-reputation strike for ip within the rolling window
+// and reports whether the strike count has reached DegradeFailureThreshold. When
+// it returns true it has already cleared ip's strikes inside the same critical
+// section, guaranteeing exactly one caller observes the crossing even under
+// concurrent weak failures (avoids a TOCTOU double-degrade). MarkIPDegraded must
+// be called by the caller AFTER this returns, since it acquires rt.mu itself.
+// strikeWindow returns the rolling window over which weak reputation strikes are
+// counted, falling back to the documented 30-minute default if the configured
+// value is non-positive. Guarding here prevents a misconfigured (or
+// directly-constructed) tracker from silently setting cutoff == now, which would
+// prune every prior strike and make weak-signal degradation unreachable.
+func (rt *IPReputationTracker) strikeWindow() time.Duration {
+	if rt.config.DegradeWindowMinutes <= 0 {
+		return 30 * time.Minute
+	}
+	return time.Duration(rt.config.DegradeWindowMinutes) * time.Minute
+}
+
+func (rt *IPReputationTracker) recordStrike(ip string) bool {
+	threshold := rt.config.DegradeFailureThreshold
+	if threshold <= 1 {
+		// One-shot behavior (degrade_failure_threshold = 1): any weak reputation
+		// strike degrades immediately, matching the pre-change semantics.
+		return true
+	}
+
+	now := time.Now()
+	cutoff := now.Add(-rt.strikeWindow())
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	// Prune strikes older than the window in place, then record this one.
+	strikes := rt.repStrikes[ip]
+	kept := strikes[:0]
+	for _, t := range strikes {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	kept = append(kept, now)
+
+	if len(kept) >= threshold {
+		// Threshold reached: clear so no other goroutine also crosses.
+		delete(rt.repStrikes, ip)
+		return true
+	}
+	rt.repStrikes[ip] = kept
+	return false
+}
+
+// clearStrikes drops any accumulated strikes for ip. It takes the write lock only
+// when a strike entry actually exists, so the common (strike-free) success path
+// stays on the read lock.
+func (rt *IPReputationTracker) clearStrikes(ip string) {
+	rt.mu.RLock()
+	_, has := rt.repStrikes[ip]
+	rt.mu.RUnlock()
+	if !has {
+		return
+	}
+
+	rt.mu.Lock()
+	delete(rt.repStrikes, ip)
+	rt.mu.Unlock()
 }
 
 // GetDegradedIPs returns a copy of all currently degraded IPs with their information.
@@ -314,6 +421,24 @@ func (rt *IPReputationTracker) Cleanup() {
 		rt.logger.Info("degraded IP cleanup completed",
 			"removed", removed,
 			"remaining", len(rt.degradedIPs))
+	}
+
+	// Sweep pre-degrade strike entries too. These exist for IPs that were never
+	// degraded (e.g. 1-2 strikes, then the IP rotated out of use), so they are not
+	// covered by the degradedIPs loop above and would otherwise leak. Drop any
+	// entry whose newest strike is older than the rolling window.
+	strikeCutoff := time.Now().Add(-rt.strikeWindow())
+	strikesRemoved := 0
+	for ip, strikes := range rt.repStrikes {
+		if len(strikes) == 0 || strikes[len(strikes)-1].Before(strikeCutoff) {
+			delete(rt.repStrikes, ip)
+			strikesRemoved++
+		}
+	}
+	if strikesRemoved > 0 {
+		rt.logger.Debug("stale reputation strike cleanup completed",
+			"removed", strikesRemoved,
+			"remaining", len(rt.repStrikes))
 	}
 }
 

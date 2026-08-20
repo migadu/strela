@@ -284,6 +284,7 @@ Return JSON response immediately:
 - `[metrics]` → `MetricsConfig`
 - `[health]` → `HealthConfig`
 - `[reputation]` → `ReputationConfig`
+  - **New:** `degrade_failure_threshold` (default 3), `degrade_window_minutes` (default 30) - corroboration threshold for weak-signal reputation rejections. **Restart-only** (see reputation degradation notes below).
 - `[cluster]` → `ClusterConfig` (optional, for Let's Encrypt S3 coordination)
 - `[arc]` → `ARCConfig`
 - `[srs]` → `SRSConfig`
@@ -308,6 +309,7 @@ Trigger with: `kill -HUP <pid>` or `systemctl reload strela`
 
 **Non-Reloadable** (require restart):
 - HTTP listen address (`inbound.listen`)
+- Reputation thresholds (`reputation.degrade_failure_threshold`, `reputation.degrade_window_minutes`) — `reload.go` has no handling for the `[reputation]` section and the tracker holds a pointer to the startup config, so these take effect only on restart.
 
 **Removed in v2.0:**
 - ~~database_path~~ (no database)

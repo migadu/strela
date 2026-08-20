@@ -1584,7 +1584,7 @@ func (d *Deliverer) mapSMTPError(logger *slog.Logger, traceID string, err error,
 	}
 
 	// Classify using our error classifier with actual SMTP code/message
-	classified := ClassifyError(smtpCode, smtpMessage, err)
+	classified := ClassifyError(smtpCode, smtpMessage, sourceIP, err)
 	if classified == nil {
 		// Only possible if a 2xx code reaches this error path — an internal
 		// inconsistency, since we are here because err != nil.

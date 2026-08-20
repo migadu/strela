@@ -20,7 +20,7 @@ func TestClassifyError_Greylist(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		err := ClassifyError(tt.code, tt.response, nil)
+		err := ClassifyError(tt.code, tt.response, "", nil)
 
 		if err.Category != ErrorGreylist {
 			t.Errorf("Code %d (%q): expected category %s, got %s", tt.code, tt.response, ErrorGreylist, err.Category)
@@ -35,7 +35,7 @@ func TestClassifyError_Greylist(t *testing.T) {
 func TestClassifyError_Plain421IsNotGreylist(t *testing.T) {
 	// A 421 without greylist text is rate limiting or load shedding
 	// (e.g. Gmail's throttling), not greylisting.
-	err := ClassifyError(421, "4.7.0 Try again later, closing connection", nil)
+	err := ClassifyError(421, "4.7.0 Try again later, closing connection", "", nil)
 
 	if err.Category != ErrorTemporary {
 		t.Errorf("Expected category %s, got %s", ErrorTemporary, err.Category)
@@ -64,7 +64,7 @@ func TestClassifyError_TemporaryCodes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		err := ClassifyError(tt.code, tt.response, nil)
+		err := ClassifyError(tt.code, tt.response, "", nil)
 
 		if err.Category != ErrorTemporary {
 			t.Errorf("Code %d: expected category %s, got %s", tt.code, ErrorTemporary, err.Category)
@@ -94,7 +94,7 @@ func TestClassifyError_PermanentCodes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		err := ClassifyError(tt.code, tt.response, nil)
+		err := ClassifyError(tt.code, tt.response, "", nil)
 
 		if err.Category != tt.expected {
 			t.Errorf("Code %d: expected category %s, got %s", tt.code, tt.expected, err.Category)
@@ -120,7 +120,7 @@ func TestClassifyError_NetworkErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		err := ClassifyError(0, "", tt.err)
+		err := ClassifyError(0, "", "", tt.err)
 
 		if err.Category != tt.expected {
 			t.Errorf("Error '%s': expected category %s, got %s", tt.err, tt.expected, err.Category)
@@ -134,19 +134,19 @@ func TestClassifyError_NetworkErrors(t *testing.T) {
 
 func TestClassifyError_SuccessCodes(t *testing.T) {
 	// 2xx codes should return nil (not an error)
-	err := ClassifyError(250, "OK", nil)
+	err := ClassifyError(250, "OK", "", nil)
 	if err != nil {
 		t.Errorf("Expected nil for success code 250, got %v", err)
 	}
 
-	err = ClassifyError(220, "Service ready", nil)
+	err = ClassifyError(220, "Service ready", "", nil)
 	if err != nil {
 		t.Errorf("Expected nil for success code 220, got %v", err)
 	}
 
 	// A 2xx must return nil even if the text happens to contain a
 	// reputation keyword (success check runs before keyword scans).
-	err = ClassifyError(250, "2.0.0 OK: message no longer blocked", nil)
+	err = ClassifyError(250, "2.0.0 OK: message no longer blocked", "", nil)
 	if err != nil {
 		t.Errorf("Expected nil for success code 250 with keyword text, got %v", err)
 	}
@@ -154,28 +154,47 @@ func TestClassifyError_SuccessCodes(t *testing.T) {
 
 func TestClassifyError_Reputation(t *testing.T) {
 	tests := []struct {
-		code     int
-		response string
-		expected ErrorCategory
+		code      int
+		response  string
+		sourceIP  string
+		expected  ErrorCategory
+		immediate bool // only meaningful when expected == ErrorReputation
 	}{
 		// Strong keywords match at any code — blocklist operators deliver
-		// listings via 4xx as well as 5xx.
-		{451, "4.7.1 Service unavailable, client host listed on Spamhaus ZEN", ErrorReputation},
-		{554, "5.7.1 Rejected: IP found in DNSBL", ErrorReputation},
-		{450, "4.7.1 Client host blacklisted by barracuda", ErrorReputation},
-		// Weak keywords only count on a definitive 5xx rejection.
-		{550, "5.7.1 Message blocked due to sender reputation", ErrorReputation},
-		{554, "5.7.1 Rejected for policy reasons", ErrorReputation},
+		// listings via 4xx as well as 5xx — and degrade immediately.
+		{451, "4.7.1 Service unavailable, client host listed on Spamhaus ZEN", "", ErrorReputation, true},
+		{554, "5.7.1 Rejected: IP found in DNSBL", "", ErrorReputation, true},
+		{450, "4.7.1 Client host blacklisted by barracuda", "", ErrorReputation, true},
+		// Weak keywords count only on a definitive 5xx AND with an IP-scoped
+		// signal — and then degrade only after the Part B threshold.
+		{550, "5.7.1 Message blocked due to sender reputation", "", ErrorReputation, false},
+		{550, "5.7.1 Our system has detected that this message has been blocked; your IP is the cause", "", ErrorReputation, false},
+		// Gmail S3140: a genuine IP-reputation block that also mentions the
+		// message content ("unsolicited"). No message-scoped veto, so it must
+		// still classify as reputation.
+		{550, "5.7.1 Our system has detected an unusual rate of unsolicited mail originating from your IP address. Mail sent from your IP address has been blocked.", "", ErrorReputation, false},
+		// Outlook S3150: quotes the exact sending IP literal. No generic IP
+		// wording here, so this exercises the source-IP-literal match path.
+		{550, "5.7.1 Unfortunately, messages from [192.0.2.1] have been blocked. Please contact your provider.", "192.0.2.1", ErrorReputation, false},
+		// Gmail per-message content block: weak keyword but NO IP-scoped
+		// signal → NOT reputation, just a permanent (spam) rejection.
+		{550, "5.7.1 [2001:db8::1] Our system has detected that this message is likely unsolicited mail. To reduce the amount of spam, this message has been blocked.", "", ErrorPermanent, false},
+		// Weak keyword on 5xx with no IP language at all → not reputation.
+		{554, "5.7.1 Rejected for policy reasons", "", ErrorPermanent, false},
 		// The same weak phrasing on a 4xx is a routine deferral, not a
 		// reputation strike.
-		{451, "4.7.1 Temporarily blocked, try again later", ErrorTemporary},
-		{450, "4.7.0 Rejected for policy reasons, retry later", ErrorTemporary},
+		{451, "4.7.1 Temporarily blocked, try again later", "", ErrorTemporary, false},
+		{450, "4.7.0 Rejected for policy reasons, retry later", "", ErrorTemporary, false},
 	}
 
 	for _, tt := range tests {
-		err := ClassifyError(tt.code, tt.response, nil)
+		err := ClassifyError(tt.code, tt.response, tt.sourceIP, nil)
 		if err.Category != tt.expected {
 			t.Errorf("Code %d (%q): expected category %s, got %s", tt.code, tt.response, tt.expected, err.Category)
+			continue
+		}
+		if tt.expected == ErrorReputation && err.ImmediateDegrade != tt.immediate {
+			t.Errorf("Code %d (%q): expected ImmediateDegrade=%v, got %v", tt.code, tt.response, tt.immediate, err.ImmediateDegrade)
 		}
 	}
 }
@@ -228,7 +247,7 @@ func TestClassifyPermanentError_Spam(t *testing.T) {
 	}
 
 	for _, response := range responses {
-		err := ClassifyError(550, response, nil)
+		err := ClassifyError(550, response, "", nil)
 		if !contains(err.Message, "spam") {
 			t.Errorf("Response '%s': expected spam-related message, got '%s'", response, err.Message)
 		}

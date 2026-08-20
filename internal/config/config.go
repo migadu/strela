@@ -168,6 +168,15 @@ type ReputationConfig struct {
 	DegradedRetryHours     int    `toml:"degraded_retry_hours"`      // Hours before retrying degraded IP (default: 48h)
 	EnableIPTracking       bool   `toml:"enable_ip_tracking"`        // Enable IP reputation tracking (default: false)
 	DegradedIPCleanupHours int    `toml:"degraded_ip_cleanup_hours"` // Hours before cleaning up old degraded IPs (default: 168h/7d)
+	// DegradeFailureThreshold is the number of weak (ambiguous) reputation strikes
+	// a source IP must accumulate within DegradeWindowMinutes before it is degraded.
+	// Strong-keyword listings (e.g. Spamhaus/DNSBL) bypass this and degrade on the
+	// first hit. Set to 1 to restore the pre-change one-shot behavior. Restart-only
+	// (not hot-reloadable). Default: 3.
+	DegradeFailureThreshold int `toml:"degrade_failure_threshold"`
+	// DegradeWindowMinutes is the rolling window over which weak reputation strikes
+	// are counted toward DegradeFailureThreshold. Restart-only. Default: 30.
+	DegradeWindowMinutes int `toml:"degrade_window_minutes"`
 }
 
 // ClusterConfig configures the gossip protocol for multi-node clustering.
@@ -395,6 +404,12 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Reputation.DegradedIPCleanupHours == 0 {
 		c.Reputation.DegradedIPCleanupHours = 168
+	}
+	if c.Reputation.DegradeFailureThreshold == 0 {
+		c.Reputation.DegradeFailureThreshold = 3
+	}
+	if c.Reputation.DegradeWindowMinutes == 0 {
+		c.Reputation.DegradeWindowMinutes = 30
 	}
 	// Cluster defaults are handled by GetBindAddr()/GetBindPort() methods
 	if c.ARC.HeaderCanon == "" {
