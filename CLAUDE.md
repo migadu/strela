@@ -177,7 +177,7 @@ Return JSON response immediately:
     - TLS 1.2+ required, certificate verification enabled by default
     - Gracefully falls back to plaintext if STARTTLS not supported
     - **IPv6/IPv4 Logic**: Tries preferred IP version first, falls back to other if available
-  - `dns_resolver.go`: Custom DNS resolver with round-robin, UDP→TCP fallback
+  - `dns_resolver.go`: Custom DNS resolver (MX, A/AAAA, TXT) with round-robin, UDP→TCP fallback
   - `mx_lookup.go`: In-memory MX record caching with TTL
   - `ip_rotator.go`: IPv4/IPv6 source IP pools with selection strategies (round-robin, random, hash-domain)
   - `ip_reputation.go`: In-memory IP reputation tracking (per-IP version)
@@ -213,6 +213,8 @@ Return JSON response immediately:
 #### `dkim/`
 - DKIM email signing support
 - **Key files**: `dkim.go` (signing, key parsing, DNS validation), `keystore.go` (per-domain keystore)
+- **DNS validation resolver**: `ValidateDKIMConfiguration` takes a `dkim.TXTResolver`; the delivery engine passes
+  its `DNSResolver`, so the DKIM TXT lookup honors `[dns] resolvers` (same as MX lookups), not the system resolver.
 - **Keystore mode**: rspamd-style per-domain keys (`$key_directory/$selector/$domain.key` + selector map file).
   Enabled via `[dkim] key_directory` / `selector_map`; keys loaded lazily with TTL cache, selector map
   auto-reloads on mtime change. Signing domain is the From-header domain (DMARC alignment), falling back

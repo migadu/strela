@@ -1,12 +1,16 @@
 package dkim
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Test helper: generate RSA key pair
@@ -395,6 +399,136 @@ func TestExtractPublicKeyFromDKIM(t *testing.T) {
 				t.Errorf("Expected '%s', got '%s'", tt.expected, result)
 			}
 		})
+	}
+}
+
+// Test helper: TXTResolver returning canned records and recording queried names
+type fakeTXTResolver struct {
+	records []string
+	err     error
+	queried []string
+}
+
+func (f *fakeTXTResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	f.queried = append(f.queried, name)
+	return f.records, f.err
+}
+
+// Test helper: build the DKIM TXT record value for a private key
+func dkimRecordForKey(t *testing.T, privateKeyPEM string) string {
+	t.Helper()
+
+	privateKey, err := parsePrivateKey(privateKeyPEM)
+	if err != nil {
+		t.Fatalf("Failed to parse test key: %v", err)
+	}
+	publicKeyDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatalf("Failed to marshal public key: %v", err)
+	}
+	return "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(publicKeyDER)
+}
+
+func TestValidateDKIMConfiguration_UsesProvidedResolver(t *testing.T) {
+	keyPEM, err := generateRSAKey(2048)
+	if err != nil {
+		t.Fatalf("Failed to generate test key: %v", err)
+	}
+
+	resolver := &fakeTXTResolver{records: []string{dkimRecordForKey(t, keyPEM)}}
+
+	if err := ValidateDKIMConfiguration(context.Background(), resolver, "key1", "example.com", keyPEM); err != nil {
+		t.Fatalf("Expected validation to succeed, got error: %v", err)
+	}
+
+	if len(resolver.queried) != 1 || resolver.queried[0] != "key1._domainkey.example.com" {
+		t.Errorf("Expected one lookup of key1._domainkey.example.com, got %v", resolver.queried)
+	}
+}
+
+func TestValidateDKIMConfiguration_SplitRecord(t *testing.T) {
+	keyPEM, err := generateRSAKey(2048)
+	if err != nil {
+		t.Fatalf("Failed to generate test key: %v", err)
+	}
+
+	// Record returned in two parts must be joined before parsing
+	record := dkimRecordForKey(t, keyPEM)
+	resolver := &fakeTXTResolver{records: []string{record[:100], record[100:]}}
+
+	if err := ValidateDKIMConfiguration(context.Background(), resolver, "key1", "example.com", keyPEM); err != nil {
+		t.Fatalf("Expected validation to succeed for split record, got error: %v", err)
+	}
+}
+
+func TestValidateDKIMConfiguration_Failures(t *testing.T) {
+	keyPEM, err := generateRSAKey(2048)
+	if err != nil {
+		t.Fatalf("Failed to generate test key: %v", err)
+	}
+	otherKeyPEM, err := generateRSAKey(2048)
+	if err != nil {
+		t.Fatalf("Failed to generate other test key: %v", err)
+	}
+	lookupErr := errors.New("no such host")
+
+	tests := []struct {
+		name        string
+		resolver    *fakeTXTResolver
+		errContains string
+	}{
+		{
+			name:        "DNS lookup error",
+			resolver:    &fakeTXTResolver{err: lookupErr},
+			errContains: "DKIM DNS lookup failed",
+		},
+		{
+			name:        "no TXT records",
+			resolver:    &fakeTXTResolver{},
+			errContains: "no DKIM TXT record found",
+		},
+		{
+			name:        "TXT record is not DKIM",
+			resolver:    &fakeTXTResolver{records: []string{"v=spf1 -all"}},
+			errContains: "no valid DKIM record",
+		},
+		{
+			name:        "DKIM record without public key",
+			resolver:    &fakeTXTResolver{records: []string{"v=DKIM1; k=rsa"}},
+			errContains: "no public key",
+		},
+		{
+			name:        "public key does not match private key",
+			resolver:    &fakeTXTResolver{records: []string{dkimRecordForKey(t, otherKeyPEM)}},
+			errContains: "does not match",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDKIMConfiguration(context.Background(), tt.resolver, "key1", "example.com", keyPEM)
+			if err == nil {
+				t.Fatal("Expected validation error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("Expected error containing %q, got: %v", tt.errContains, err)
+			}
+			if tt.resolver.err != nil && !errors.Is(err, tt.resolver.err) {
+				t.Errorf("Expected lookup error to be wrapped, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDKIMConfiguration_NilResolver(t *testing.T) {
+	// A nil resolver falls back to the system resolver; .invalid never resolves,
+	// so this must return an error rather than panic.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := ValidateDKIMConfiguration(ctx, nil, "key1", "strela-test.invalid", "")
+	if err == nil {
+		t.Fatal("Expected error for nonexistent domain, got nil")
 	}
 }
 

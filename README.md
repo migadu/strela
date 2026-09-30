@@ -150,6 +150,8 @@ curl -X POST http://localhost:8025/deliver \
 
 This ensures proper DKIM configuration before signing. Set `skip_dkim_validation: true` to disable validation (faster but less safe).
 
+The DKIM DNS lookup uses the resolvers configured in `[dns] resolvers` (system default if none are set), the same as MX lookups.
+
 ## Configuration
 
 Configuration is handled via `config.toml`. See `config.toml.example` for all options.

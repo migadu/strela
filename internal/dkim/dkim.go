@@ -166,8 +166,15 @@ func ExtractDomainFromEmail(email string) string {
 	return strings.ToLower(parts[1])
 }
 
+// TXTResolver looks up DNS TXT records. It is satisfied by *net.Resolver and by
+// the delivery package's DNSResolver, which honors the configured [dns] resolvers.
+type TXTResolver interface {
+	LookupTXT(ctx context.Context, name string) ([]string, error)
+}
+
 // ValidateDKIMConfiguration checks if a DKIM public key exists in DNS for the given
 // selector and domain, and optionally verifies it matches the provided private key.
+// The DNS lookup goes through resolver; a nil resolver uses the system's default.
 //
 // Returns:
 //   - nil if validation succeeds
@@ -177,13 +184,15 @@ func ExtractDomainFromEmail(email string) string {
 //  1. DNS lookup of selector._domainkey.domain to ensure DKIM record exists
 //  2. (Optional) Verify the public key in DNS matches the provided private key
 //
-// Example: ValidateDKIMConfiguration(ctx, "default", "example.com", privateKeyPEM)
-func ValidateDKIMConfiguration(ctx context.Context, selector, domain, privateKeyPEM string) error {
+// Example: ValidateDKIMConfiguration(ctx, resolver, "default", "example.com", privateKeyPEM)
+func ValidateDKIMConfiguration(ctx context.Context, resolver TXTResolver, selector, domain, privateKeyPEM string) error {
 	// 1. Construct DKIM DNS record name
 	dnsName := fmt.Sprintf("%s._domainkey.%s", selector, domain)
 
 	// 2. Lookup TXT records
-	resolver := &net.Resolver{}
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
 	txtRecords, err := resolver.LookupTXT(ctx, dnsName)
 	if err != nil {
 		return fmt.Errorf("DKIM DNS lookup failed for %s: %w", dnsName, err)
