@@ -63,6 +63,7 @@ enabled = false
 
 [dns]
 # Custom DNS resolvers (optional - uses system default if not specified)
+# Used for MX, A/AAAA and DKIM validation (TXT) lookups.
 # resolvers = ["8.8.8.8:53", "1.1.1.1:53"]  # Supports IPv6: ["2001:4860:4860::8888:53"]
 timeout_seconds = 5                         # DNS query timeout
 cache_ttl_seconds = 3600                    # Cache successful MX lookups (1 hour)

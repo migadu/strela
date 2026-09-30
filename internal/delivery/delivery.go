@@ -416,7 +416,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		dkimValid := true
 		if !skipDKIMValidation {
 			logger.Debug("validating DKIM configuration", "selector", signSelector, "domain", signDomain)
-			if err := dkim.ValidateDKIMConfiguration(ctx, signSelector, signDomain, signKey); err != nil {
+			if err := dkim.ValidateDKIMConfiguration(ctx, d.dkimTXTResolver(), signSelector, signDomain, signKey); err != nil {
 				logger.Warn("DKIM validation failed, will deliver without DKIM signature", "error", err, "selector", signSelector, "domain", signDomain)
 				dkimValid = false
 			}
@@ -699,6 +699,16 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 	d.recordMetrics(lastResult, domain)
 	d.logDeliveryResult(logger, from, to, lastResult)
 	return lastResult
+}
+
+// dkimTXTResolver returns the resolver for DKIM record validation: the same DNS
+// resolver used for MX lookups (honoring [dns] resolvers), read at call time so
+// hot reloads are picked up. Falls back to the system's default resolver.
+func (d *Deliverer) dkimTXTResolver() dkim.TXTResolver {
+	if d.mxLookup != nil && d.mxLookup.dnsResolver != nil {
+		return d.mxLookup.dnsResolver
+	}
+	return net.DefaultResolver
 }
 
 // resolveMXHost resolves the MX host to IP addresses and classifies them by version.
