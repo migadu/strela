@@ -145,6 +145,11 @@ type OutboundConfig struct {
 	MaxIPsPerMX              int    `toml:"max_ips_per_mx"`              // Maximum number of IPs to try per MX host (default: 5)
 	HelloHostname            string `toml:"hello_hostname"`              // Hostname for EHLO greeting (default: system hostname)
 
+	// Wait for the server's reply after the end-of-message "." (RFC 5321 §4.5.3.2.6
+	// recommends 10 minutes). Not scaled like the phase timeouts; capped only by the
+	// remaining max_total_delivery_seconds budget (default: 600s).
+	DataTerminationTimeoutSeconds int `toml:"data_termination_timeout_seconds"`
+
 	// Delivery ports
 	SMTPPort        int  `toml:"smtp_port"`         // Port to connect to on MX servers (default: 25)
 	LMTPPort        int  `toml:"lmtp_port"`         // Port for LMTP connections (default: 24)
@@ -348,6 +353,9 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Outbound.SMTPTimeoutSeconds == 0 {
 		c.Outbound.SMTPTimeoutSeconds = 60
+	}
+	if c.Outbound.DataTerminationTimeoutSeconds == 0 {
+		c.Outbound.DataTerminationTimeoutSeconds = 600
 	}
 	if c.Outbound.MaxTotalDeliverySeconds == 0 {
 		c.Outbound.MaxTotalDeliverySeconds = 200
