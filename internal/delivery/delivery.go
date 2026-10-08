@@ -613,7 +613,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 				logger.Debug("trying IPv6 first", "mx", mx.Host)
 				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, true, start, protocol, inboundAuth, cfg)
 				// Return immediately for definitive results (don't try other MX servers)
-				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
+				if isFinalResult(result.Status) {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
 					d.logDeliveryResult(logger, from, to, result)
@@ -628,7 +628,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if tryIPv4 && mxHasIPv4 {
 				logger.Debug("falling back to IPv4", "mx", mx.Host)
 				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, false, start, protocol, inboundAuth, cfg)
-				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
+				if isFinalResult(result.Status) {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
 					d.logDeliveryResult(logger, from, to, result)
@@ -643,7 +643,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if mxHasIPv4 {
 				logger.Debug("trying IPv4", "mx", mx.Host)
 				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, false, start, protocol, inboundAuth, cfg)
-				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
+				if isFinalResult(result.Status) {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
 					d.logDeliveryResult(logger, from, to, result)
@@ -658,7 +658,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			if tryIPv6 && mxHasIPv6 {
 				logger.Debug("falling back to IPv6", "mx", mx.Host)
 				result := d.tryDeliveryWithIPVersion(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, true, start, protocol, inboundAuth, cfg)
-				if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
+				if isFinalResult(result.Status) {
 					result.AttemptDurationMs = time.Since(start).Milliseconds()
 					d.recordMetrics(result, domain)
 					d.logDeliveryResult(logger, from, to, result)
@@ -682,7 +682,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 			result := d.attemptDelivery(ctx, logger, traceID, from, to, signedMessage, mx.Host, mxIPs, "", targetPreferIPv6, protocol, inboundAuth, cfg)
 			deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mx.Host}
 			d.reputationTracker.RecordDeliveryAttempt("", result.Status == "delivered", result.classifiedErr, deliveryInfo)
-			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "temp_fail" {
+			if isFinalResult(result.Status) {
 				result.AttemptDurationMs = time.Since(start).Milliseconds()
 				d.recordMetrics(result, domain)
 				d.logDeliveryResult(logger, from, to, result)
@@ -692,7 +692,7 @@ func (d *Deliverer) DeliverMessage(ctx context.Context, from, to string, message
 		}
 
 		// For timeout/error results, continue to next MX server
-		// (delivered/hard_bounce/temp_fail already returned above)
+		// (delivered/hard_bounce/temp_fail/unknown already returned above)
 	}
 
 	lastResult.AttemptDurationMs = time.Since(start).Milliseconds()
@@ -787,8 +787,9 @@ func (d *Deliverer) tryDeliveryWithIPVersion(ctx context.Context, logger *slog.L
 		deliveryInfo := DeliveryInfo{From: from, To: to, MXHost: mxHost}
 		d.reputationTracker.RecordDeliveryAttempt(sourceIP, result.Status == "delivered", result.classifiedErr, deliveryInfo)
 
-		// Return immediately for definitive results or server-side temp failures
-		if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "temp_fail" {
+		// Return immediately for definitive results, server-side temp failures, and
+		// "unknown" (message fully sent - another source IP would send a duplicate)
+		if isFinalResult(result.Status) || result.Status == "timeout" {
 			return result
 		}
 
@@ -897,8 +898,10 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, tr
 		if client != nil {
 			logger.Debug("using pooled connection", "mx", mxHost)
 
-			result := d.performDeliveryTransaction(ctx, logger, traceID, client, from, to, msg, mxHost, sourceIP, true, inboundAuth)
-			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" {
+			result := d.performDeliveryTransaction(ctx, logger, traceID, client, from, to, msg, mxHost, sourceIP, true, inboundAuth, cfg)
+			// Only retry on a fresh connection when the message cannot have been
+			// delivered: after "unknown" the body was fully sent on this connection.
+			if result.Status == "delivered" || result.Status == "hard_bounce" || result.Status == "timeout" || result.Status == "unknown" {
 				return result
 			}
 
@@ -917,10 +920,10 @@ func (d *Deliverer) attemptDelivery(ctx context.Context, logger *slog.Logger, tr
 		client = dr.Client
 	}
 
-	return d.performDeliveryTransaction(ctx, logger, traceID, client, from, to, msg, mxHost, sourceIP, false, inboundAuth)
+	return d.performDeliveryTransaction(ctx, logger, traceID, client, from, to, msg, mxHost, sourceIP, false, inboundAuth, cfg)
 }
 
-func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog.Logger, traceID string, client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool, inboundAuth *InboundAuthResults) DeliveryResult {
+func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog.Logger, traceID string, client *smtp.Client, from, to string, msg []byte, mxHost, sourceIP string, reused bool, inboundAuth *InboundAuthResults, cfg *config.OutboundConfig) DeliveryResult {
 	// Check context before starting transaction
 	if ctx.Err() != nil {
 		client.Close()
@@ -928,16 +931,13 @@ func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog
 	}
 
 	// Tighten client timeouts to remaining context deadline so SMTP commands
-	// do not outlive the caller's deadline.
+	// do not outlive the caller's deadline. SubmissionTimeout (the wait after
+	// the final ".") is set separately in deliverPayload.
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
-		const minSMTPTimeout = 5 * time.Second
 		if remaining > minSMTPTimeout {
 			if remaining < client.CommandTimeout {
 				client.CommandTimeout = remaining
-			}
-			if remaining < client.SubmissionTimeout {
-				client.SubmissionTimeout = remaining
 			}
 		}
 		// If remaining <= minSMTPTimeout, don't tighten further — let the
@@ -950,7 +950,7 @@ func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog
 		"source_ip", sourceIP,
 		"reused", reused)
 
-	smtpMsg, err := d.deliverPayload(ctx, logger, client, from, to, msg, inboundAuth)
+	smtpMsg, err := d.deliverPayload(ctx, logger, client, from, to, msg, inboundAuth, cfg)
 	if err != nil {
 		// If error occurred on a reused connection, it might be stale.
 		// We could retry? For now, we fail and let client retry.
@@ -988,7 +988,7 @@ func (d *Deliverer) shouldSkipSRS(from, to string, inboundAuth *InboundAuthResul
 	return d.srs.ShouldSkip(from, to, dkimResult)
 }
 
-func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, client *smtp.Client, from, to string, msg []byte, inboundAuth *InboundAuthResults) (string, error) {
+func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, client *smtp.Client, from, to string, msg []byte, inboundAuth *InboundAuthResults, cfg *config.OutboundConfig) (string, error) {
 	// Accept callers that pass envelope addresses with or without angle brackets.
 	// Null sender ("" or "<>") both result in MAIL FROM:<>, since go-smtp wraps
 	// the address in <> itself.
@@ -1088,6 +1088,9 @@ func (d *Deliverer) deliverPayload(ctx context.Context, logger *slog.Logger, cli
 	// the remote may have already accepted and delivered the message. Wrap the
 	// error as indeterminate so the outcome is not misreported as a clean
 	// failure that the caller would blindly retry (causing duplicate delivery).
+	// go-smtp starts the SubmissionTimeout clock after flushing the final ".",
+	// so set it here, from the time actually left at this point.
+	client.SubmissionTimeout = dataTerminationTimeout(ctx, cfg, client.SubmissionTimeout)
 	resp, err := w.CloseWithResponse()
 	if err != nil {
 		logger.Debug("DATA close failed (message rejected or ack not received)", "error", err)
@@ -1564,6 +1567,38 @@ type indeterminateError struct{ err error }
 func (e *indeterminateError) Error() string { return e.err.Error() }
 func (e *indeterminateError) Unwrap() error { return e.err }
 
+// minSMTPTimeout is the floor below which SMTP timeouts are not tightened to the
+// context deadline: the deadline itself then bounds the attempt.
+const minSMTPTimeout = 5 * time.Second
+
+// dataTerminationTimeout returns how long to wait for the reply to the
+// end-of-message ".": data_termination_timeout_seconds (fallback when unset),
+// capped by the time left in ctx. Unlike the phase timeouts it is not scaled
+// down: slow MX servers scan large messages before replying, and giving up
+// early turns a message they accept into an "unknown" result.
+func dataTerminationTimeout(ctx context.Context, cfg *config.OutboundConfig, fallback time.Duration) time.Duration {
+	timeout := fallback
+	if cfg != nil && cfg.DataTerminationTimeoutSeconds > 0 {
+		timeout = time.Duration(cfg.DataTerminationTimeoutSeconds) * time.Second
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, max(time.Until(deadline), minSMTPTimeout))
+	}
+	return timeout
+}
+
+// isFinalResult reports whether a delivery result must be returned to the caller
+// as-is, without trying another IP version or MX host. "unknown" is final: the
+// message was fully transmitted and may already have been delivered, so sending
+// it again elsewhere risks a duplicate.
+func isFinalResult(status string) bool {
+	switch status {
+	case "delivered", "hard_bounce", "temp_fail", "unknown":
+		return true
+	}
+	return false
+}
+
 func (d *Deliverer) mapSMTPError(logger *slog.Logger, traceID string, err error, mxHost, sourceIP string) DeliveryResult {
 	res := DeliveryResult{TraceID: traceID, MXHost: mxHost, SourceIP: sourceIP}
 
@@ -1947,7 +1982,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 	// LMTP: read one status per RCPT TO (we send exactly one recipient)
 	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA final response: %v", err)}
+		// The full message was sent; without the reply the outcome is unknown
+		// (same contract as SMTP after DATA) - the LDA may have delivered it.
+		logger.Warn("delivery outcome indeterminate - message may have been delivered",
+			"mx", mxHost, "source_ip", sourceIP, "error", err)
+		return DeliveryResult{TraceID: traceID, Status: "unknown", MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("Delivery outcome unknown (message fully sent, no acknowledgement): DATA final response: %v", err)}
 	}
 
 	result := classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)

@@ -85,8 +85,12 @@ Return JSON response immediately:
   retry — retrying risks a duplicate. Park for review or retry at most once. This
   status shares HTTP 504 with `timeout` for back-compat; discriminate on the JSON
   `status` field. (Set when a network/timeout error occurs at/after
-  `w.CloseWithResponse()` in `deliverPayload`; a definitive 4xx/5xx after DATA is
-  still classified by its SMTP code, not as `unknown`.)
+  `w.CloseWithResponse()` in `deliverPayload`, or when the LMTP final reply is lost;
+  a definitive 4xx/5xx after DATA is still classified by its SMTP code, not as `unknown`.)
+  `unknown` is **final inside Strela too** (`isFinalResult`): it is never retried on a
+  fresh connection, another source IP, the other IP version or another MX — doing so
+  sent the same message 5-6x to slow MX servers. It must also never be overwritten by
+  a later `timeout`, which would tell the caller a retry is safe.
 
 ### Core Design Principles
 
@@ -113,6 +117,10 @@ Return JSON response immediately:
      - `banner_timeout_seconds`: SMTP 220 greeting banner (default: 30s) - some MX servers are very slow
      - `handshake_timeout_seconds`: EHLO/HELO + STARTTLS negotiation (default: 30s)
      - `smtp_timeout_seconds`: MAIL/RCPT/DATA delivery commands (default: 60s)
+     - `data_termination_timeout_seconds`: wait for the reply after the message body (default: 600s,
+       RFC 5321 §4.5.3.2.6). **Not scaled**; capped only by the remaining context budget. Set on
+       `client.SubmissionTimeout` right before `CloseWithResponse()` (go-smtp starts that clock
+       after flushing the final ".")
    - Phases are **combined** (banner + handshake) due to go-smtp library limitations
    - If remaining context time < total desired, timeouts are **scaled proportionally**
    - Timeout cascade: Client → Load Balancer → Strela → SMTP phases
@@ -304,7 +312,7 @@ Trigger with: `kill -HUP <pid>` or `systemctl reload strela`
 - DNS settings (resolvers, cache TTL)
 - TLS certificates (file-based auto-reload)
 - HTTP timeouts
-- Delivery timeouts (`max_total_delivery_seconds`, `banner_timeout_seconds`, `handshake_timeout_seconds`, `smtp_timeout_seconds`)
+- Delivery timeouts (`max_total_delivery_seconds`, `banner_timeout_seconds`, `handshake_timeout_seconds`, `smtp_timeout_seconds`, `data_termination_timeout_seconds`)
 - Concurrency limit (`max_concurrent_requests`)
 
 **Note**: CIDR subnet expansion happens on startup, not during hot reload
@@ -362,6 +370,7 @@ connection_timeout_seconds = 15    # TCP connection timeout
 banner_timeout_seconds = 30        # SMTP banner (220 greeting) timeout - for slow MX servers
 handshake_timeout_seconds = 30     # EHLO/HELO + STARTTLS timeout
 smtp_timeout_seconds = 60          # MAIL/RCPT/DATA command timeout
+data_termination_timeout_seconds = 600  # Reply after message body (not scaled; capped by remaining total)
 max_total_delivery_seconds = 200     # Total maximum time (hard cap across all phases)
 ```
 
