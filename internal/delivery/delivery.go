@@ -930,6 +930,13 @@ func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog
 		return DeliveryResult{TraceID: traceID, Status: "timeout", MXHost: mxHost, SourceIP: sourceIP, Error: "context cancelled before delivery transaction"}
 	}
 
+	// A pooled client still carries the CommandTimeout an earlier request
+	// tightened to its own deadline (possibly just above minSMTPTimeout).
+	// Start again from the configured value so this request gets the full one.
+	if reused && cfg != nil && cfg.SMTPTimeoutSeconds > 0 {
+		client.CommandTimeout = time.Duration(cfg.SMTPTimeoutSeconds) * time.Second
+	}
+
 	// Tighten client timeouts to remaining context deadline so SMTP commands
 	// do not outlive the caller's deadline. SubmissionTimeout (the wait after
 	// the final ".") is set separately in deliverPayload.
