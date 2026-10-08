@@ -169,3 +169,38 @@ func TestLMTPStalledBodyWriteReturnsAtDeadline(t *testing.T) {
 		t.Errorf("status = %q, want \"timeout\" (error: %s)", result.Status, result.Error)
 	}
 }
+
+// TestPooledConnectionTimeoutNotInherited verifies that a pooled client does
+// not keep the CommandTimeout an earlier request tightened to its own short
+// deadline: the next request must start from smtp_timeout_seconds again.
+func TestPooledConnectionTimeoutNotInherited(t *testing.T) {
+	srv := startStallServer(t, false)
+	d := newDialTestDeliverer(t, srv.port) // smtp_timeout_seconds = 10
+	t.Cleanup(d.Stop)
+
+	deliver := func(ctx context.Context) {
+		t.Helper()
+		r := d.attemptDelivery(ctx, testLogger(), "trace", "a@example.com", "b@example.net", slowAckMsg,
+			"127.0.0.1", []string{"127.0.0.1"}, "", false, config.ProtocolSMTP, nil, d.config)
+		if r.Status != "delivered" {
+			t.Fatalf("status = %q, want delivered (error: %s)", r.Status, r.Error)
+		}
+	}
+
+	// First request: 7s left, so CommandTimeout is tightened below 10s.
+	short, cancel := context.WithTimeout(t.Context(), 7*time.Second)
+	deliver(short)
+	cancel()
+
+	// Second request reuses the pooled client and has no deadline.
+	deliver(t.Context())
+
+	client := d.pool.Get("127.0.0.1", "")
+	if client == nil {
+		t.Fatal("expected a pooled connection")
+	}
+	defer client.Close()
+	if want := 10 * time.Second; client.CommandTimeout != want {
+		t.Errorf("pooled CommandTimeout = %v, want %v (inherited from an earlier request)", client.CommandTimeout, want)
+	}
+}
