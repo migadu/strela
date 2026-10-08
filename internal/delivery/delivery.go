@@ -950,8 +950,21 @@ func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog
 		"source_ip", sourceIP,
 		"reused", reused)
 
+	// Close the connection as soon as ctx ends. go-smtp clears the connection
+	// deadline after DATA, so an MX that stops reading the body would otherwise
+	// block this request indefinitely, holding its concurrency slot; it also
+	// keeps an attempt from overrunning the delivery budget. Every path must
+	// call stop: the handler always cancels ctx when done, and a hook left
+	// registered would later close a pooled connection.
+	stop := context.AfterFunc(ctx, func() { client.Close() })
+
 	smtpMsg, err := d.deliverPayload(ctx, logger, client, from, to, msg, inboundAuth, cfg)
 	if err != nil {
+		if !stop() {
+			// Keep the cause visible; an indeterminateError inside err still
+			// classifies as "unknown", anything else as "timeout".
+			err = fmt.Errorf("%w (connection closed: %w)", ctx.Err(), err)
+		}
 		// If error occurred on a reused connection, it might be stale.
 		// We could retry? For now, we fail and let client retry.
 		client.Close()
@@ -961,8 +974,9 @@ func (d *Deliverer) performDeliveryTransaction(ctx context.Context, logger *slog
 	}
 
 	// Success!
-	// Reset and put back in pool
-	if err := client.Reset(); err == nil && d.pool != nil {
+	// Reset and put back in pool - unless ctx ended meanwhile and closed it.
+	resetErr := client.Reset()
+	if stop() && resetErr == nil && d.pool != nil {
 		d.pool.Put(client, mxHost, sourceIP)
 	} else {
 		// If Reset failed, connection is dirty/dead.
@@ -1896,9 +1910,10 @@ func isTimeoutError(err error) bool {
 	return false
 }
 
-// lmtpStatus returns "timeout" if err is a network timeout, otherwise "error".
-func lmtpStatus(err error) string {
-	if isTimeoutError(err) {
+// lmtpStatus returns "timeout" if err is a network timeout or ctx ended (which
+// closes the connection mid-transaction), otherwise "error".
+func lmtpStatus(ctx context.Context, err error) string {
+	if isTimeoutError(err) || ctx.Err() != nil {
 		return "timeout"
 	}
 	return "error"
@@ -1918,6 +1933,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 		fmt.Fprintf(conn, "QUIT\r\n")
 		conn.Close()
 	}()
+
+	// Close the connection as soon as ctx ends so the per-command deadlines
+	// cannot stretch the attempt past the delivery budget.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 
 	cfg := d.getConfig()
 	cmdTimeout := time.Duration(cfg.LMTPTimeoutSeconds) * time.Second
@@ -1940,11 +1960,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// MAIL FROM
 	if err := writeLMTPCommand(conn, cmdTimeout, "MAIL FROM:<%s>", from); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(ctx, err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM write: %v", err)}
 	}
 	code, msg2, err := readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM response: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(ctx, err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("MAIL FROM response: %v", err)}
 	}
 	if code != 250 {
 		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
@@ -1952,11 +1972,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// RCPT TO
 	if err := writeLMTPCommand(conn, cmdTimeout, "RCPT TO:<%s>", to); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(ctx, err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO write: %v", err)}
 	}
 	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO response: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(ctx, err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("RCPT TO response: %v", err)}
 	}
 	if code != 250 {
 		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
@@ -1964,11 +1984,11 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// DATA
 	if err := writeLMTPCommand(conn, cmdTimeout, "DATA"); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(ctx, err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA write: %v", err)}
 	}
 	code, msg2, err = readLMTPResponse(reader, conn, cmdTimeout)
 	if err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA response: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(ctx, err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA response: %v", err)}
 	}
 	if code != 354 {
 		return classifyLMTPResult(traceID, mxHost, sourceIP, code, msg2)
@@ -1976,7 +1996,7 @@ func (d *Deliverer) performLMTPTransaction(ctx context.Context, logger *slog.Log
 
 	// Send message body with dot-stuffing
 	if err := writeLMTPData(conn, cmdTimeout, msg); err != nil {
-		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA body write: %v", err)}
+		return DeliveryResult{TraceID: traceID, Status: lmtpStatus(ctx, err), MXHost: mxHost, SourceIP: sourceIP, Error: fmt.Sprintf("DATA body write: %v", err)}
 	}
 
 	// LMTP: read one status per RCPT TO (we send exactly one recipient)
