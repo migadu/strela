@@ -124,6 +124,10 @@ Return JSON response immediately:
    - Phases are **combined** (banner + handshake) due to go-smtp library limitations
    - If remaining context time < total desired, timeouts are **scaled proportionally**
    - Timeout cascade: Client → Load Balancer → Strela → SMTP phases
+   - **Context closes the connection**: `performDeliveryTransaction` and `performLMTPTransaction`
+     register `context.AfterFunc(ctx, close)`. go-smtp sets no deadline while the DATA body is
+     written, so this is the only bound on an MX that stops reading. The hook must be released
+     (`stop()`) on every path before a connection is pooled — the handler always cancels ctx.
 
 5. **IPv6/IPv4 Dual-Stack with Preference**:
    - Separate IPv4 and IPv6 source IP pools
