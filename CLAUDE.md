@@ -188,6 +188,8 @@ Return JSON response immediately:
     - Manual STARTTLS implementation (sends command, reads 220, wraps in TLS)
     - TLS 1.2+ required, certificate verification enabled by default
     - Gracefully falls back to plaintext if STARTTLS not supported
+    - `go.mod` sets `godebug x509negativeserial=1`: Go 1.23+ otherwise refuses to parse MX
+      certificates with a negative serial (even with skip-verify), failing STARTTLS on every MX
     - **IPv6/IPv4 Logic**: Tries preferred IP version first, falls back to other if available
   - `dns_resolver.go`: Custom DNS resolver (MX, A/AAAA, TXT) with round-robin, UDP→TCP fallback
   - `mx_lookup.go`: In-memory MX record caching with TTL
