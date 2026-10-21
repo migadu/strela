@@ -4,6 +4,12 @@ go 1.24.0
 
 toolchain go1.24.1
 
+// Since Go 1.23, crypto/x509 refuses to parse certificates with a negative
+// serial number, and crypto/tls parses the MX certificate even with
+// InsecureSkipVerify, so STARTTLS to such a server fails on every attempt.
+// Opportunistic TLS never verifies MX certificates; accept them as before.
+godebug x509negativeserial=1
+
 require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/aws/aws-sdk-go-v2 v1.39.2
